@@ -35,6 +35,10 @@ GAP_UNITS = 2.0
 MIN_TAIL_UNITS, MIN_STRIPE_UNITS = 8.0, 3.0
 # Rows a few px apart are averaged into one measurement (label noise).
 ROW_BAND_PX = 2
+# Stripe shares at the top and bottom edges are fitted only from at least MIN_FIT_ROWS
+# rows spanning FIT_SPAN of the tails' span; a fit leaving a stripe below
+# MIN_EDGE_SHARE of the edge falls back to the mean shares.
+MIN_FIT_ROWS, FIT_SPAN, MIN_EDGE_SHARE = 4, 0.3, 0.01
 # The tails' top corners are kept this far inside the head circle (share of the way).
 TOP_INSET = 0.9
 
@@ -110,6 +114,34 @@ def _head_top_y(p: Prepared, fr: Frame, w_at) -> float:
     return top_y
 
 
+def _edge_fracs(rows, fr: Frame, top_y: float, bottom_y: float, w_at):
+    """Stripe shares across the tail's top and bottom edges: each boundary's offset
+    from the run's middle (canvas units) is fitted as a straight line over the rows
+    and read at top_y and bottom_y. A ribbon of constant width on a widening tail
+    keeps its width instead of its share. (None, None) when fewer than
+    MIN_FIT_ROWS rows over FIT_SPAN of the tail span measure the boundaries, or the
+    fit leaves a stripe narrower than MIN_EDGE_SHARE at either edge."""
+    ys = np.array([y for y, _ in rows])
+    if len(rows) < MIN_FIT_ROWS or np.ptp(ys) < FIT_SPAN * (bottom_y - top_y):
+        return None, None
+    offs = np.array([[(np.cumsum([ln for _, ln in cut[2]])[j] - (cut[1] - cut[0]) / 2) / fr.scale
+                      for j in range(len(cut[2]) - 1)] for _, cut in rows])  # (rows, m-1)
+    out = []
+    for y in (top_y, bottom_y):
+        w = w_at(y)
+        b = [(_at(ys, offs[:, j], y) + w / 2) / w for j in range(offs.shape[1])]
+        f = np.diff(np.concatenate([[0.0], b, [1.0]]))
+        if (f < MIN_EDGE_SHARE).any():
+            return None, None
+        out.append(f)
+    return out[0], out[1]
+
+
+def _at(xs: np.ndarray, ys: np.ndarray, x: float) -> float:
+    b, a = _line(xs, ys)
+    return a + b * x
+
+
 def detect_tails(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
     top, bot = p.tails_top_y, p.bottom_y
     cuts = []
@@ -164,37 +196,44 @@ def detect_tails(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
     head_top = fr.y(p.head[1] - p.head[2])
     if top_y is None or not (head_top <= top_y < fr.y(top)):
         top_y = _head_top_y(p, fr, w_at)
-    bottom_y = fr.y(bot)
     dy = ys - top_y
     angles = [math.atan2(float((dx[:, k] * dy).sum()), float((dy * dy).sum())) for k in range(n)]
     spread = math.degrees(angles[-1] - angles[0]) if n > 1 else 0.0
 
-    # stripes per tail: rows agreeing on the most common stripe count
-    fracs, groups, confs = [], [], []
+    bottom_y = fr.y(bot)
+    # stripes per tail: rows agreeing on the most common stripe count; shares at the
+    # top and at the bottom edge from straight fits of the stripe boundaries
+    fracs, fracs_b, groups, confs = [], [], [], []
     for k in range(n):
         seqs = [c[k][2] for _, c in ok]
         lens = [len(s) for s in seqs]
         m = max(set(lens), key=lens.count)
-        use = [s for s in seqs if len(s) == m]
+        rows = [(y, c[k]) for y, c in ok if len(c[k][2]) == m]
+        use = [cut[2] for _, cut in rows]
         fr_k = np.mean([[ln / sum(x[1] for x in s) for _, ln in s] for s in use], axis=0)
         lab_k = [majority(np.array([s[i][0] for s in use]))[0] for i in range(m)]
-        fracs.append(fr_k)
+        top_k, bot_k = _edge_fracs(rows, fr, top_y, bottom_y, w_at)
+        fracs.append(top_k if top_k is not None else fr_k)
+        fracs_b.append(bot_k if bot_k is not None else fr_k)
         groups.append(lab_k)
         confs.append(count_conf * len(use) / len(seqs))
     for k in range(n):  # mirror-symmetric stripes where the colors mirror
         j = n - 1 - k
         if k <= j and groups[k] == groups[j][::-1]:
-            f = (fracs[k] + fracs[j][::-1]) / 2
-            fracs[k], fracs[j] = f, f[::-1]
+            for f_list in (fracs, fracs_b):
+                f = (f_list[k] + f_list[j][::-1]) / 2
+                f_list[k], f_list[j] = f, f[::-1]
 
     parts = []
     for k in range(n):
         z = 9 - min(9, int(round(abs(k - (n - 1) / 2) * 2)))  # middle tail on top
         f = fracs[k] / fracs[k].sum()
+        fb = fracs_b[k] / fracs_b[k].sum()
         stripes = ",".join(f"{v:.4f}" for v in f)
         params_common = {"tails_count": n, "top_y": r3(top_y), "bottom_y": r3(bottom_y),
                          "top_width": r3(w_at(top_y)), "bottom_width": r3(w_at(bottom_y)),
-                         "spread_deg": r3(spread), "stripes": stripes}
+                         "spread_deg": r3(spread), "stripes": stripes,
+                         "stripes_bottom": ",".join(f"{v:.4f}" for v in fb)}
         for i, g in enumerate(groups[k]):
             if g < 0:  # no color group along this stripe: keep it, as a flagged placeholder
                 y_mid = float(ys.mean())

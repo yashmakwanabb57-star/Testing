@@ -132,3 +132,14 @@ def test_place_rose_scaled():
     assert abs((max(ys) + min(ys)) / 2 - 167.372) < 0.5
     r = math.hypot(max(xs) - min(xs), max(ys) - min(ys)) / 2
     assert abs(r - 40) / 40 < 0.05
+
+
+def test_tails_stripes_bottom_fractions():
+    # a centre ribbon of constant width on a widening tail: its share of the tail
+    # differs at the top and at the bottom (S26-15, S46-15)
+    (left, mid, right), = tails(200, 820, 1, 60, 120, 0, [1, 1, 1], stripes_bottom=[1, 1, 4])
+    top = sorted(x for x, y in pts_of(mid) if abs(y - 200) < 1e-6)
+    bottom = sorted(x for x, y in pts_of(mid) if abs(y - 820) < 1e-6)
+    assert top == [290, 310]
+    assert bottom[0] == 300 - 60 + 20 and bottom[-1] == 300 - 60 + 40
+    assert validate(write_svg([Shape(s.tag, s.attrs, 1) for s in (left, mid, right)])) == []

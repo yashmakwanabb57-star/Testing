@@ -108,13 +108,21 @@ def tail_positions(dxs: list[float]) -> list[str]:
     return out
 
 
-def _fracs(params: dict) -> list[float]:
-    s = str(params.get("stripes", "") or "")
+def _parse(s) -> list[float]:
     try:
-        f = [float(x) for x in s.split(",") if x.strip()]
+        return [float(x) for x in str(s or "").split(",") if x.strip()]
     except ValueError:
-        f = []
-    return f or [1.0]
+        return []
+
+
+def _fracs(params: dict) -> list[float]:
+    """Stripe shares of a tail, averaged over its top and bottom edges."""
+    top = _parse(params.get("stripes")) or [1.0]
+    bottom = _parse(params.get("stripes_bottom"))
+    if len(bottom) != len(top):
+        return top
+    st, sb = sum(top), sum(bottom)
+    return [(a / st + b / sb) / 2 for a, b in zip(top, bottom)]
 
 
 def stripe_dx(params: dict) -> float:

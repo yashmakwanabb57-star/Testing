@@ -7,7 +7,7 @@ from .model import Part, RosetteModel
 from .shapes import Shape
 
 _TAIL_KEYS = ("tails_count", "top_y", "bottom_y", "top_width", "bottom_width",
-              "spread_deg", "stripes")
+              "spread_deg", "stripes", "stripes_bottom")
 
 
 def _parse_stripes(s) -> list[float]:
@@ -48,7 +48,7 @@ def build(model: RosetteModel) -> list[Shape]:
             center = center or p
             finish(p, [disc(q["cx"], q["cy"], q["r"])])
         elif p.role == "tail_stripe":
-            tail_groups.setdefault(tuple(q[k] for k in _TAIL_KEYS), []).append(p)
+            tail_groups.setdefault(tuple(q.get(k, "") for k in _TAIL_KEYS), []).append(p)
         else:
             msg = f"part {p.id}: unrecognised shape, drawn as a plain disc"
             if msg not in model.warnings:
@@ -57,7 +57,8 @@ def build(model: RosetteModel) -> list[Shape]:
 
     for key, parts in tail_groups.items():
         top_y, bottom_y, tw, bw, spread = key[1], key[2], key[3], key[4], key[5]
-        polys = tails(top_y, bottom_y, int(key[0]), tw, bw, spread, _parse_stripes(key[6]))
+        polys = tails(top_y, bottom_y, int(key[0]), tw, bw, spread, _parse_stripes(key[6]),
+                      stripes_bottom=_parse_stripes(key[7]) or None)
         for p in parts:
             ti, si = int(p.params["tail_index"]), int(p.params["stripe_index"])
             try:

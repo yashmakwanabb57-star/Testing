@@ -9,14 +9,25 @@ CX = 300.0
 
 
 def tails(top_y: float, bottom_y: float, count: int, top_width: float, bottom_width: float,
-          spread_deg: float, stripes: list[float], tooth: float = TOOTH) -> list[list[Shape]]:
+          spread_deg: float, stripes: list[float], tooth: float = TOOTH,
+          stripes_bottom: list[float] | None = None) -> list[list[Shape]]:
     """Tail axes fan out from (300, top_y); tail 0 is leftmost. Tails are not rotated: all bottoms lie on y=bottom_y. Each stripe is a
     closed polygon whose bottom edge is pinked (tips on the trapezoid bottom, valleys
-    `tooth` above it); neighbouring stripes share their straight side edges."""
-    total = sum(stripes)
-    cum = [0.0]
-    for f in stripes:
-        cum.append(cum[-1] + f / total)
+    `tooth` above it); neighbouring stripes share their straight side edges.
+    `stripes` are the stripe shares across the top edge, `stripes_bottom` (same
+    count; default `stripes`) across the bottom edge: a ribbon of constant width on
+    a widening tail takes a smaller share at the bottom."""
+    def cumulative(fr: list[float]) -> list[float]:
+        total = sum(fr)
+        out = [0.0]
+        for f in fr:
+            out.append(out[-1] + f / total)
+        return out
+
+    cum = cumulative(stripes)
+    cum_b = cumulative(stripes_bottom) if stripes_bottom else cum
+    if len(cum_b) != len(cum):
+        raise ValueError("stripes and stripes_bottom differ in length")
     out: list[list[Shape]] = []
     for k in range(count):
         ang = 0.0 if count == 1 else -spread_deg / 2 + k * spread_deg / (count - 1)
@@ -29,9 +40,9 @@ def tails(top_y: float, bottom_y: float, count: int, top_width: float, bottom_wi
 
         row: list[Shape] = []
         for i in range(len(stripes)):
-            t0, t1 = cum[i], cum[i + 1]
-            tl, tr = lerp(t0, ax_top, top_width, top_y), lerp(t1, ax_top, top_width, top_y)
-            bl, br = lerp(t0, ax_bot, bottom_width, bottom_y), lerp(t1, ax_bot, bottom_width, bottom_y)
+            tl, tr = lerp(cum[i], ax_top, top_width, top_y), lerp(cum[i + 1], ax_top, top_width, top_y)
+            bl = lerp(cum_b[i], ax_bot, bottom_width, bottom_y)
+            br = lerp(cum_b[i + 1], ax_bot, bottom_width, bottom_y)
             pts = [tl, tr] + pinked_edge(br, bl, tooth, (0.0, -1.0))
             row.append(Shape("polygon", {"points": points_attr(pts)}, None))
         out.append(row)

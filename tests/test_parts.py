@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -10,6 +12,7 @@ from rosette.vision.prepare import Prepared, prepare
 from rosette.writer import write_svg
 from tests.helpers import fan_rosette_png, synthetic_photo, truth_from_svg
 
+PHOTOS = Path(__file__).resolve().parent.parent / "reference" / "photos"
 IDS = ["S35-19", "S46-15", "S13-15", "S28-15", "S41-15"]
 Z = {"head": (10, 10), "points": (20, 29), "ring": (30, 49), "center": (50, 50),
      "tail_stripe": (0, 9), "unknown": (0, 99)}
@@ -19,7 +22,7 @@ KEYS = {
     "points": {"cx", "cy", "kind", "count", "r_inner", "r_outer", "rotation_deg", "width_ratio"},
     "center": {"cx", "cy", "r"},
     "tail_stripe": {"tail_index", "stripe_index", "tails_count", "top_y", "bottom_y", "top_width",
-                    "bottom_width", "spread_deg", "stripes"},
+                    "bottom_width", "spread_deg", "stripes", "stripes_bottom"},
     "unknown": {"cx", "cy", "r"},
 }
 
@@ -163,3 +166,29 @@ def test_three_fanned_tails_constructed(spread):
         cg = [x.color_group for x in sorted(stripes, key=lambda x: int(x.params["stripe_index"]))]
         assert len(set(cg)) == 3
     assert not [x for x in parts if x.role == "unknown"]
+
+
+def _stripe_width_at(q, y):
+    """Canvas width of tail stripe q at canvas row y (top and bottom fractions)."""
+    p = q.params
+    i = int(p["stripe_index"])
+    top = [float(x) for x in str(p["stripes"]).split(",")]
+    bottom = [float(x) for x in str(p.get("stripes_bottom", p["stripes"])).split(",")]
+    t = (y - p["top_y"]) / (p["bottom_y"] - p["top_y"])
+    return (1 - t) * top[i] / sum(top) * p["top_width"] + t * bottom[i] / sum(bottom) * p["bottom_width"]
+
+
+def test_constant_width_centre_ribbon_on_widening_tail():
+    # S26-15 photo: the pink centre ribbon stays 88 px wide down the tail while the
+    # tail widens (326 -> 428 px between 50 % and 95 % of the tails' height); one
+    # set of stripe fractions for top and bottom made it 30 % too wide at the bottom
+    p = prepare((PHOTOS / "S26-15.png").read_bytes())
+    labels, _ = pixel_groups(p)
+    parts = detect_parts(p, labels)
+    t = [q for q in parts if q.role == "tail_stripe"]
+    centre = next(q for q in t if int(q.params["stripe_index"]) == 3)
+    y_of = lambda f: 25 + (p.tails_top_y + f * (p.bottom_y - p.tails_top_y)  # noqa: E731
+                           - np.flatnonzero(p.mask.any(axis=1))[0]) / p.scale
+    w50, w95 = _stripe_width_at(centre, y_of(0.5)), _stripe_width_at(centre, y_of(0.95))
+    assert w95 == pytest.approx(88 / p.scale, rel=0.08)
+    assert w95 / w50 == pytest.approx(1.0, abs=0.08)
