@@ -1,0 +1,50 @@
+"""Photo -> RosetteModel -> SVG, end to end.
+
+analyze(data): prepare -> pixel_groups -> detect_parts -> RosetteModel -> assign.
+Color groups no part uses are dropped before assignment (ids kept as they are);
+the rose is on iff a center part was found.
+
+render(model): build -> write_svg -> validate. build may add warnings to the model
+(unrecognised shapes drawn as placeholders).
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from .assign import FLAG_BELOW, assign
+from .build import build
+from .model import RosetteModel
+from .validate import Issue, validate
+from .vision.colors import pixel_groups
+from .vision.parts import detect_parts
+from .vision.prepare import prepare
+from .writer import write_svg
+
+
+@dataclass
+class RenderResult:
+    svg: str
+    issues: list[Issue] = field(default_factory=list)
+
+
+def analyze(data: bytes) -> RosetteModel:
+    p = prepare(data)
+    labels, groups = pixel_groups(p)
+    parts = detect_parts(p, labels)
+    used = {q.color_group for q in parts}
+    model = RosetteModel(parts=parts, groups=[g for g in groups if g.id in used],
+                         rose=any(q.role == "center" for q in parts))
+    return assign(model)
+
+
+def render(model: RosetteModel) -> RenderResult:
+    svg = write_svg(build(model))
+    return RenderResult(svg=svg, issues=validate(svg))
+
+
+def is_flagged(model: RosetteModel, issues: list[Issue]) -> bool:
+    """True when the user is asked to check something: a low-confidence color, a
+    warning asking for a check, or a validation issue."""
+    return (any(g.confidence < FLAG_BELOW for g in model.groups)
+            or any("check" in w.lower() for w in model.warnings)
+            or bool(issues))
