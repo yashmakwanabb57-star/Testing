@@ -5,6 +5,7 @@ import pytest
 from lxml import etree
 
 from rosette.roles import element_masks
+from tools import score
 from tools.score import DEFAULT_COLORS, HEIGHT, align_agreement, compare, score_all
 from tools.truth import svg_text
 
@@ -61,11 +62,39 @@ def test_compare_swapped_element_drops_by_its_area_share():
     assert r["color_agreement"] < 0.99
 
 
+def _discs(under: int, over: int) -> str:
+    return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 850"><g id="Layer_1">'
+            f'<circle class="st0_{under}" cx="300" cy="425" r="200"/>'
+            f'<circle class="st1_{over}" cx="300" cy="425" r="180"/></g></svg>')
+
+
+def test_compare_judges_covered_element_on_its_visible_part():
+    # the disc is mostly covered by an overlay of its own category; only its visible
+    # rim is miscolored in the generated file, and that must count as wrong
+    r = compare(_discs(1, 1), _discs(3, 1))
+    rim = 1 - (180 / 200) ** 2
+    assert r["color_agreement"] == pytest.approx(1 - rim, abs=0.03)
+    disc = r["elements"][0]
+    assert (disc["category"], disc["winner"]) == (1, 3)
+
+
+def test_crash_is_an_error_row_with_all_keys(monkeypatch):
+    def boom(sid):
+        raise ValueError("no head")
+    monkeypatch.setattr(score, "score_one", boom)
+    row, = score_all(["X"])
+    assert set(row) == set(score.ROW_KEYS)
+    assert row["error"] == "ValueError: no head" and not row["success"] and not row["flagged"]
+    assert score.summary([row])["errors"] == 1
+
+
 @pytest.mark.slow
 def test_bar():
     rows = score_all()
     n = len(rows)
     ok = [r for r in rows if r["success"]]
     failing = [r for r in rows if not r["success"]]
-    assert len(ok) / n >= 0.8 or all(r["flagged"] for r in failing), \
-        [r["id"] for r in failing if not r["flagged"]]
+    # spec s6: at least 8 of 10 succeed AND every remaining case is flagged
+    silent = [r["id"] for r in failing if not r["flagged"]]
+    assert len(ok) / n >= 0.8, f"{len(ok)}/{n} succeed"
+    assert not silent, silent

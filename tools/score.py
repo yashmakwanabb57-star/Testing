@@ -1,6 +1,6 @@
 """Photo vs designer scoreboard: the regression gate for pipeline changes.
 
-Usage: .venv/Scripts/python.exe tools/score.py [IDs...] [--sheet DIR]
+Usage: .venv/Scripts/python.exe tools/score.py [IDs...] [--sheet DIR] [--debug]
 
 For each canonical ID (reference/canonical.txt) with a photo: run the pipeline on
 the photo, rasterize the generated SVG and the designer SVG with category colors
@@ -9,10 +9,11 @@ to its non-white bounding box, resize the generated crop onto the designer crop
 (nearest neighbor) and compare:
 
   color_agreement  per part region: each designer color element of the solid
-                   configuration (Layer_1, Layer_2_1_2/3/4; elements under
-                   MIN_ELEMENT_SHARE of the rosette area skipped) is rendered alone
-                   in the same frame; the generated category holding the most pixels
-                   of that region decides correct / wrong; area-weighted share correct
+                   configuration (Layer_1, Layer_2_1_2/3/4) is rendered alone in the
+                   same frame, minus the elements painted after it (its visible
+                   region; under MIN_ELEMENT_SHARE of the rosette area skipped); the
+                   generated category holding the most pixels of that region decides
+                   correct / wrong; area-weighted share correct
   pixel_agreement  share of designer-mask pixels whose category matches
   iou              mask IoU of the aligned crops
   points_ok        detected points count == designer points count
@@ -21,7 +22,8 @@ to its non-white bounding box, resize the generated crop onto the designer crop
   success          color_agreement >= SUCCESS_AGREEMENT and no validation issues
 
 A stage that crashes on a photo is recorded as an error (not success, not flagged)
-and listed separately. --sheet DIR saves photo | generated | designer PNGs.
+and listed separately. --sheet DIR saves photo | generated | designer PNGs;
+--debug prints each scored element's category, generated winner and winning share.
 """
 from __future__ import annotations
 
@@ -115,16 +117,29 @@ def compare(designer_svg: str, generated_svg: str) -> dict:
     d, g, box = _align(dcat, gcat)
     pixel, iou = _pixel(d, g)
     min_px = MIN_ELEMENT_SHARE * (d > 0).sum()
+    masks = [(el, mask[box]) for el, mask in element_masks(designer_svg, HEIGHT)]
+    # visible region: an element's own mask minus everything painted after it
+    # (document order is paint order: Layer_1, then the Layer_2_1 groups)
+    later = np.zeros(d.shape, bool)
+    visible = [None] * len(masks)
+    for i in range(len(masks) - 1, -1, -1):
+        visible[i] = masks[i][1] & ~later
+        later |= masks[i][1]
     right = total = 0.0
-    for el, mask in element_masks(designer_svg, HEIGHT):
-        region = mask[box]
+    elements = []
+    for (el, _), region in zip(masks, visible):
         area = float(region.sum())
         if not _in_region_layers(el) or area < min_px:
             continue
+        counts = np.bincount(g[region], minlength=5)
+        winner = int(counts.argmax())
+        ok = winner == category(el)
         total += area
-        if np.bincount(g[region], minlength=5).argmax() == category(el):
-            right += area
-    return dict(color_agreement=right / total if total else 0.0, pixel_agreement=pixel, iou=iou)
+        right += area if ok else 0.0
+        elements.append(dict(category=category(el), winner=winner, share=float(counts[winner] / area),
+                             area=area, ok=ok))
+    return dict(color_agreement=right / total if total else 0.0, pixel_agreement=pixel, iou=iou,
+                elements=elements)
 
 
 def _detected_counts(model) -> tuple[int, int]:
@@ -141,6 +156,12 @@ def _generate(sid: str):
 
 def _designer(sid: str) -> np.ndarray:
     return rasterize((REF / "svg" / f"{sid}.svg").read_text(encoding="utf-8"), HEIGHT, DEFAULT_COLORS)
+
+
+# Keys of every scoreboard row (error rows carry None for what was not measured).
+ROW_KEYS = ("id", "color_agreement", "pixel_agreement", "iou", "elements", "points_ok", "tails_ok",
+            "points", "points_truth", "tails", "tails_truth", "flagged", "issues", "success",
+            "seconds", "error")
 
 
 def score_one(sid: str) -> dict:
@@ -164,10 +185,9 @@ def score_all(ids: list[str] | None = None) -> list[dict]:
         try:
             rows.append(score_one(sid))
         except Exception as e:  # a crashing stage is recorded, not fatal
-            rows.append(dict(id=sid, color_agreement=0.0, pixel_agreement=0.0, iou=0.0,
-                             points_ok=False, tails_ok=False,
-                             flagged=False, issues=0, success=False, seconds=0.0,
-                             error=f"{type(e).__name__}: {e}"))
+            row = dict.fromkeys(ROW_KEYS)
+            row.update(id=sid, flagged=False, success=False, error=f"{type(e).__name__}: {e}")
+            rows.append(row)
     return rows
 
 
@@ -196,6 +216,8 @@ def _yn(v: bool) -> str:
 
 def main(argv: list[str]) -> int:
     sheet = None
+    debug = "--debug" in argv
+    argv = [a for a in argv if a != "--debug"]
     if "--sheet" in argv:
         i = argv.index("--sheet")
         sheet = Path(argv[i + 1])
@@ -212,6 +234,10 @@ def main(argv: list[str]) -> int:
         print(f"{r['id']:10} {r['color_agreement']:6.3f} {r['pixel_agreement']:6.3f} {r['iou']:5.2f} "
               f"{_yn(r['flagged']):>4} "
               f"{_yn(r['success']):>4} {pts:>7} {tl:>6} {r['issues']:3d} {r['seconds']:5.1f}")
+        if debug:  # per element: designer category, generated winner, winning share, area
+            for e in r["elements"]:
+                print(f"    cat {e['category']} -> {e['winner']}  share {e['share']:.2f}  "
+                      f"area {e['area']:.0f}  {'ok' if e['ok'] else 'WRONG'}")
     s = summary(rows)
     print(f"success {s['success']}  flagged-not-success {s['flagged']}  "
           f"silently-wrong {s['silent']}  errors {s['errors']}")
