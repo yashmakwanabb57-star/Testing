@@ -92,6 +92,15 @@ TEXTURE_MIN_TAIL_UNITS2 = 1500.0
 # and S35-19 (hearts 11.4, satin <= 1.2); over all 76 reference photos plain ribbon
 # groups measure <= 2.83 and patterned ones >= 8.47 (table: tools/color_report.py).
 PATTERN_T = 5.0
+# A plain group whose tail interior has local texture above PATTERN_T on at least
+# MIXED_PATTERN_SHARE of its pixels (std measured over the group's own pixels only, so
+# its borders add none) may hide a patterned ribbon merged with a plain one. Over the
+# 76 reference photos: S2-15B (snowflake print merged with white satin) 0.45, S58-17
+# (black tail with white text) 0.56; every other plain group <= 0.39 (S70-19).
+# Set from the single merged case: the margin is thin.
+MIXED_PATTERN_SHARE = 0.42
+# Tail-interior pixels (canvas units^2) a group needs before it is checked.
+MIXED_MIN_UNITS2 = 2000.0
 
 
 def _lab(rgb: np.ndarray) -> np.ndarray:
@@ -387,6 +396,33 @@ def pixel_groups(p: Prepared, max_groups: int = 6) -> tuple[np.ndarray, list[Col
         groups.append(ColorGroup(id=g, rgb=rgb, pattern=bool(tex > PATTERN_T), texture=round(tex, 3),
                                  area=float(region.sum() / total), category=None, confidence=1.0))
     return labels, groups
+
+
+def mixed_texture_groups(p: Prepared, labels: np.ndarray, groups: list[ColorGroup]) -> list[int]:
+    """Ids of plain groups that look partly patterned on the tails (see
+    MIXED_PATTERN_SHARE): a pattern ribbon may have been merged into them."""
+    L = _lab(p.rgb)[..., 0]
+    win = max(3, int(round(TEXTURE_WIN_UNITS * p.scale)) | 1)
+    edge = max(1, int(round(TEXTURE_EDGE_UNITS * p.scale)))
+    tails = np.zeros(p.mask.shape, bool)
+    tails[int(np.ceil(p.tails_top_y)):] = True
+    out = []
+    for g in groups:
+        if g.pattern:
+            continue
+        region = labels == g.id
+        inner = cv2.erode(region.astype(np.uint8), np.ones((2 * edge + 1, 2 * edge + 1), np.uint8)) > 0
+        use = inner & tails
+        if use.sum() < MIXED_MIN_UNITS2 * p.scale * p.scale:
+            continue
+        m = region.astype(np.float32)
+        den = np.maximum(cv2.blur(m, (win, win)), 1e-6)
+        mean = cv2.blur(L * m, (win, win)) / den
+        sq = cv2.blur(L * L * m, (win, win)) / den
+        std = np.sqrt(np.maximum(sq - mean * mean, 0.0))
+        if (std[use] > PATTERN_T).mean() >= MIXED_PATTERN_SHARE:
+            out.append(g.id)
+    return out
 
 
 def _nearest_chunked(x: np.ndarray, c: np.ndarray, chunk: int = 200000) -> np.ndarray:

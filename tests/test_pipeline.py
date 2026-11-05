@@ -61,3 +61,10 @@ def test_low_confidence_points_ring_is_flagged():
     assert not is_flagged(m, [])
     pts.confidence = 0.55
     assert is_flagged(m, [])
+
+
+def test_merged_print_and_satin_is_flagged():
+    # S2-15B: two colors found for a three-color ribbon (print merged with satin)
+    model = analyze(_photo("S2-15B"))
+    assert any("partly patterned" in w for w in model.warnings)
+    assert is_flagged(model, render(model).issues)

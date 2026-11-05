@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from rosette.model import ColorGroup
-from rosette.vision.colors import pixel_groups
+from rosette.vision.colors import mixed_texture_groups, pixel_groups
 from rosette.vision.prepare import Prepared, canvas_to_px, prepare
 
 PHOTOS = Path(__file__).resolve().parent.parent / "reference" / "photos"
@@ -221,3 +221,18 @@ def test_similar_hue_stripes_stay_apart(sid):
     # prefers the coarse split and merged the two similar hues into one group.
     outer, second, middle = _row_labels(sid, (0.06, 0.24, 0.5))
     assert len({outer, second, middle}) == 3
+
+
+def test_partly_patterned_plain_group_reported():
+    # S2-15B: white satin and a white-on-blue snowflake print merged into one plain
+    # group; on the tails almost half of it has patterned texture
+    p = prepare((PHOTOS / "S2-15B.png").read_bytes())
+    labels, groups = pixel_groups(p)
+    mixed = mixed_texture_groups(p, labels, groups)
+    assert len(mixed) == 1 and not groups[mixed[0]].pattern
+    assert min(groups[mixed[0]].rgb) > 150  # the light (white + snowflake) group
+
+
+def test_clean_groups_not_reported_as_partly_patterned(s35):
+    p, labels, groups = s35
+    assert mixed_texture_groups(p, labels, groups) == []
