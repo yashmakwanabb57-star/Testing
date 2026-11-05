@@ -245,3 +245,18 @@ def test_similar_stripes_apart_across_a_third_stripe(sid):
     # comparing only neighbouring pixels saw no stripe edges and kept them merged.
     outer, middle = _row_labels(sid, (0.04, 0.5))
     assert outer != middle
+
+
+def test_star_tips_in_a_ring_are_not_absorbed_as_motifs():
+    # S40-15: six black glitter star tips (740-1250 units^2 each) between the gold
+    # points; about half are smaller than a motif blob and were absorbed into the
+    # orange pleats, so the points layer could not be found.
+    p = prepare((PHOTOS / "S40-15.png").read_bytes())
+    labels, groups = pixel_groups(p)
+    dark = min(groups, key=lambda g: sum(g.rgb)).id
+    cx, cy, r = p.head
+    n, cc, stats, cen = cv2.connectedComponentsWithStats((labels == dark).astype(np.uint8), connectivity=8)
+    d = np.hypot(cen[1:, 0] - cx, cen[1:, 1] - cy)
+    a = stats[1:, cv2.CC_STAT_AREA] / p.scale ** 2
+    tips = ((d > 0.4 * r) & (d < r) & (a > 500)).sum()
+    assert tips >= 6

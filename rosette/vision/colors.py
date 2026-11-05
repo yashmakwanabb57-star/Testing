@@ -17,7 +17,8 @@ Pipeline:
    the ribbon (stripe edges) rather than across it (folds and shading). A group
    mixing plain satin with same-hue glitter is split by grain.
 4. Small same-label blobs (motifs such as hearts, glitter sparkle) are absorbed into
-   the group around them; larger print blobs (text, logos) lying wholly on the
+   the group around them, except blobs forming an even ring around the head center
+   (star tips); larger print blobs (text, logos) lying wholly on the
    tails and enclosed by one group are absorbed too.
 5. texture = median local L* standard deviation inside the group, measured on the
    tails (flat ribbon, unlike the pleated head) and away from absorbed print;
@@ -58,6 +59,20 @@ SEED = 0
 # A same-label connected blob smaller than this (canvas units^2) is a motif/text/sparkle
 # blob and is absorbed into the group surrounding it.
 MOTIF_MAX_UNITS2 = 900.0
+# Star tips are as small as motif blobs (S40-15 black tips 740-1250 units^2, S35-19
+# white tips ~840, A15-17 ~350) but are not absorbed when they form a ring: at least
+# RING_MIN_BLOBS same-label blobs of RING_MIN_UNITS2 .. RING_MAX_UNITS2 inside the head
+# circle, within RING_RADIUS_TOL head radii of each other's distance from the head
+# center, areas within RING_AREA_RATIO of their median, evenly spread around it
+# (|mean exp(i N theta)| >= RING_EVEN for N = their count or up to two more, hidden
+# behind the tails). Measured over the 76 photos (constants as here): rings found on
+# 32 photos, motif-sized blobs kept on 11 (A15-17, S17-15, S31-15, S33-15, S35-19,
+# S40-15, S45-15, S52-19, S53-19, S70-19, s44-15), all of them star tips, loop ends or
+# pleat teeth placed around the head, none a tail motif (motifs lie on the tails or
+# scatter at many radii). The evenness margin is thin on S40-15 (0.85; its head center
+# is off by a few units): RING_EVEN sits below it at 0.8.
+RING_MIN_UNITS2, RING_MAX_UNITS2 = 250.0, 3600.0
+RING_MIN_BLOBS, RING_RADIUS_TOL, RING_AREA_RATIO, RING_EVEN = 4, 0.15, 2.5, 0.8
 # Glitter split: a cluster is split in two when at least SPLIT_MIN_FRAC of its pixels
 # have grain below SATIN_GRAIN (satin) and as many above GLITTER_GRAIN (sparkle).
 # The grain feature alone leaves same-hue satin + glitter in one cluster on two
@@ -203,9 +218,41 @@ def _cluster(feat: np.ndarray, max_groups: int) -> np.ndarray:
     return best_c if best_c is not None else x.mean(0, keepdims=True)  # one color only
 
 
-def _absorb(labels: np.ndarray, mask: np.ndarray, max_area: float) -> np.ndarray:
+def _ring_blobs(labels: np.ndarray, mask: np.ndarray, head: tuple[float, float, float],
+                scale: float) -> np.ndarray:
+    """Pixels of same-label blobs that form an evenly spread ring around the head
+    center (star tips, loop ends; see RING_MIN_BLOBS): parts, not motifs."""
+    cx, cy, r = head
+    keep = np.zeros(labels.shape, bool)
+    for j in np.unique(labels[mask]):
+        n, cc, stats, cen = cv2.connectedComponentsWithStats((labels == j).astype(np.uint8), connectivity=8)
+        a = stats[1:, cv2.CC_STAT_AREA] / scale ** 2
+        d = np.hypot(cen[1:, 0] - cx, cen[1:, 1] - cy)
+        th = np.arctan2(cen[1:, 1] - cy, cen[1:, 0] - cx)
+        idx = np.flatnonzero((a >= RING_MIN_UNITS2) & (a < RING_MAX_UNITS2) & (d < r))
+        idx = idx[np.argsort(d[idx], kind="stable")]
+        used: set[int] = set()
+        for i in idx:
+            if i in used:
+                continue
+            grp = [k for k in idx if k not in used and abs(d[k] - d[i]) <= RING_RADIUS_TOL * r]
+            med = float(np.median(a[grp]))
+            grp = [k for k in grp if med / RING_AREA_RATIO <= a[k] <= med * RING_AREA_RATIO]
+            if len(grp) < RING_MIN_BLOBS:
+                continue
+            even = max(abs(np.exp(1j * m * th[grp]).mean()) for m in range(len(grp), len(grp) + 3))
+            if even >= RING_EVEN:
+                used.update(int(k) for k in grp)
+        if used:
+            keep |= np.isin(cc, np.array(sorted(used)) + 1)
+    return keep
+
+
+def _absorb(labels: np.ndarray, mask: np.ndarray, max_area: float,
+            keep: np.ndarray | None = None) -> np.ndarray:
     """Relabel small same-label blobs with the label most of their pixels are nearest to
-    among large blobs. Returns the boolean map of absorbed (motif) pixels."""
+    among large blobs; blobs in `keep` stay. Returns the boolean map of absorbed (motif)
+    pixels."""
     small = np.zeros(labels.shape, bool)
     comp = np.zeros(labels.shape, np.int32)
     next_id = 0
@@ -213,6 +260,8 @@ def _absorb(labels: np.ndarray, mask: np.ndarray, max_area: float) -> np.ndarray
         n, cc, stats, _ = cv2.connectedComponentsWithStats((labels == j).astype(np.uint8), connectivity=8)
         tiny = np.flatnonzero(stats[1:, cv2.CC_STAT_AREA] < max_area) + 1
         is_tiny = np.isin(cc, tiny)
+        if keep is not None:
+            is_tiny &= ~keep
         small |= is_tiny
         comp[is_tiny] = cc[is_tiny] + next_id
         next_id += n
@@ -375,7 +424,8 @@ def pixel_groups(p: Prepared, max_groups: int = 6) -> tuple[np.ndarray, list[Col
     labels = np.full(mask.shape, -1, np.int32)
     labels[mask] = _nearest_chunked(feat, centers)
     _split_glitter(labels, mask, feat_img[..., 3] / GRAIN_WEIGHT, max_groups)
-    absorbed = _absorb(labels, mask, MOTIF_MAX_UNITS2 * p.scale * p.scale)
+    absorbed = _absorb(labels, mask, MOTIF_MAX_UNITS2 * p.scale * p.scale,
+                       keep=_ring_blobs(labels, mask, p.head, p.scale))
     printed = _absorb_prints(labels, mask, p.tails_top_y, PRINT_MAX_FRAC * mask.sum(),
                              max(1, int(round(PRINT_RING_UNITS * p.scale))))
     absorbed |= printed
