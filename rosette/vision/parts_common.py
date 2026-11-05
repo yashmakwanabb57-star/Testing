@@ -17,10 +17,10 @@ CANVAS_AXIS_X, CANVAS_TOP_Y = 300.0, 25.0
 # center, areas within RING_AREA_RATIO of their median, evenly spread around it
 # (|mean exp(i N theta)| >= RING_EVEN for N = their count or up to two more, hidden
 # behind the tails). Measured over the 76 photos (constants as here): rings found on
-# 32 photos, motif-sized blobs kept on 11 (A15-17, S17-15, S31-15, S33-15, S35-19,
-# S40-15, S45-15, S52-19, S53-19, S70-19, s44-15), all of them star tips, loop ends or
-# pleat teeth placed around the head, none a tail motif (motifs lie on the tails or
-# scatter at many radii). The evenness margin is thin on S40-15 (0.85; its head center
+# 33 photos, motif-sized blobs kept on 10 (A15-17, S17-15, S33-15, S35-19,
+# S40-15, S45-15, S52-19, S53-19, S70-19, s44-15), all in even rings inside the head
+# circle (not checked one by one against the photos; tail motifs lie below the head,
+# head motifs scatter at many radii). The evenness margin is thin on S40-15 (0.85; its head center
 # is off by a few units): RING_EVEN sits below it at 0.8.
 RING_MIN_UNITS2, RING_MAX_UNITS2 = 250.0, 3600.0
 RING_MIN_BLOBS, RING_RADIUS_TOL, RING_AREA_RATIO, RING_EVEN = 4, 0.15, 2.5, 0.8
