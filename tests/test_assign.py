@@ -243,3 +243,27 @@ def test_part_area_estimates():
     t = tails([0, 1], fracs=[0.25, 0.75])
     assert A.part_area(t[1]) == pytest.approx(0.75 * 220 * 525)
     assert A.part_area(Part("x", "head", {"area": 123.0}, 0, 1, 1.0)) == 123.0
+
+
+def _rules(p1, p2):
+    """Rules where Color 1 has P=p1 and Color 2 has P=p2 for every role."""
+    rest = (1.0 - p1 - p2) / 2
+    dist = {"1": p1, "2": p2, "3": rest, "4": rest}
+    return {"roles": {k: dict(dist) for k in ROLE_KEYS}, "pattern_role_prob": {k: 0.5 for k in ROLE_KEYS}}
+
+
+def test_coloring_below_chance_is_warned():
+    # S2-15B: the best coloring is less plausible under the mined rules than
+    # coloring at random (area-weighted mean log P below log 1/k): a guess
+    groups = [group(0, (200, 30, 30)), group(1, (30, 30, 200))]
+    parts = [head(0), *tails([0, 1, 0])]
+    out = A.assign(RosetteModel(parts=parts, groups=groups), rules=_rules(0.7, 0.3))
+    assert not any("plausible" in w for w in out.warnings)
+    out = A.assign(RosetteModel(parts=parts, groups=groups), rules=_rules(0.3, 0.3))
+    assert any("plausible" in w for w in out.warnings)
+
+
+def test_usual_layout_is_not_warned_below_chance():
+    groups = [group(0, (200, 30, 30)), group(1, (30, 30, 200), pattern=True), group(2, (240, 200, 40))]
+    out = A.assign(RosetteModel(parts=[head(0), *tails([0, 1, 2, 1, 0])], groups=groups))
+    assert not any("plausible" in w for w in out.warnings)
