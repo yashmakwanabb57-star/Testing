@@ -30,6 +30,7 @@ const CHECKS = [
   ['dup_id', 'Unique IDs'],
   ['missing_group', 'Required layer groups present'],
   ['bad_parent', 'Layer groups nested correctly'],
+  ['group_order', 'Layer groups in shop paint order'],
   ['bad_element', 'Only allowed elements'],
   ['class_layer', 'Classes in the right layers'],
   ['class_number', 'Class numbers 0, 1, 2, 3, 5'],

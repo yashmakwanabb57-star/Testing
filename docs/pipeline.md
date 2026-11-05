@@ -245,7 +245,7 @@ Constants are module-level names; read their comments in the source before chang
 
 ### Shop contract
 
-Every generated file must satisfy section 3 of the [design spec](superpowers/specs/2026-11-05-rosette-svg-generator-design.md): fixed layer order (`Layer_1`, `Layer_2_1_2/3/4`, `Layer_3`), category classes for Color 1-4, Color 2 usable in solid and pattern mode, and Color 3 correct in both. `rosette/validate.py` checks it and `render` returns the issues; the UI does not offer a download while an issue is open. The shop's own coloring logic is in `reference/shop-configurator.js` (verbatim); `rosette/simulate.py` mirrors it for the UI previews.
+Every generated file must satisfy section 3 of the [design spec](superpowers/specs/2026-11-05-rosette-svg-generator-design.md): fixed top-level layer order (`Layer_1`, `Layer_3`, `Layer_2_1`, `Layer_6`, `Layer_rose`; issue `group_order` when it is not kept), category classes for Color 1-4, Color 2 usable in solid and pattern mode, and Color 3 correct in both. `rosette/validate.py` checks it and `render` returns the issues; the UI does not offer a download while an issue is open. The shop's own coloring logic is in `reference/shop-configurator.js` (verbatim); `rosette/simulate.py` mirrors it for the UI previews.
 
 ### UI modes
 

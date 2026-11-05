@@ -19,6 +19,8 @@ PARENTS = {
     "Layer_3_2": "Layer_3", "Layer_3_3": "Layer_3", "Layer_3_4": "Layer_3",
     "Layer_2_1_2": "Layer_2_1", "Layer_2_1_3": "Layer_2_1", "Layer_2_1_4": "Layer_2_1",
 }
+# spec 3.2: the top-level layer groups, in paint order
+TOP_ORDER = ["Layer_1", "Layer_3", "Layer_2_1", "Layer_6", "Layer_rose"]
 REQUIRED = ["Layer_1", "Layer_3", "Layer_3_2", "Layer_3_3", "Layer_2_1",
             "Layer_2_1_2", "Layer_2_1_3", "Layer_6", "Layer_rose"]
 # color class suffix -> allowed layer groups
@@ -128,6 +130,11 @@ def validate(svg: str, simulate_check: bool = True) -> list[Issue]:
             ok = (p is root) if want is None else (p is not None and p.get("id") == want)
             if not ok:
                 add("bad_parent", f"{gid} must be a child of {want or 'the root svg'}", g)
+    top = [c.get("id") for c in root if isinstance(c.tag, str) and _local(c) == "g"
+           and c.get("id") in TOP_ORDER]
+    if top != sorted(top, key=TOP_ORDER.index):
+        add("group_order", f"top-level groups are in the order {', '.join(top)}; "
+            f"the shop expects {', '.join(TOP_ORDER)}", "svg")
     known = set(PARENTS)
 
     # only the five shape tags are drawable; <image> is allowed only inside <pattern>

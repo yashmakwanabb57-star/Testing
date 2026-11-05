@@ -295,3 +295,26 @@ def test_line_allowed_in_stroke_layers_only():
     etree.SubElement(gid(r, "Layer_1"), "{http://www.w3.org/2000/svg}line",
                      {"class": "st0_1", "x1": "0"})
     assert "bad_element" in codes(r)
+
+
+def test_group_order():
+    # spec 3.2: top-level order is paint order
+    r = root_of()
+    six = gid(r, "Layer_6")
+    r.remove(six)
+    gid(r, "Layer_1").addprevious(six)
+    issues = [i for i in validate(etree.tostring(r, encoding="unicode")) if i.code == "group_order"]
+    assert len(issues) == 1
+    assert "Layer_1, Layer_3, Layer_2_1, Layer_6, Layer_rose" in issues[0].message
+
+
+def test_group_order_toggle_layers_swapped():
+    r = root_of()
+    three = gid(r, "Layer_3")
+    r.remove(three)
+    gid(r, "Layer_2_1").addnext(three)
+    assert "group_order" in codes(r)
+
+
+def test_group_order_ok_for_writer_output():
+    assert "group_order" not in {i.code for i in validate(good_svg())}
