@@ -35,7 +35,7 @@ Upload a photo, then work in either mode (switch at the top; both share the same
 - **Workbench** - everything on one screen: the photo, the detected model (parts, color groups, Color 1-4 assignment, rose on/off), a live preview of the SVG in the shop's solid and pattern configurations, and edit controls for every part and color. Best for fixing a result.
 - **Guided** - the same controls one step at a time, asking about each color and each part. Best for a quick check.
 
-A result is **flagged** when the tool is unsure (a low-confidence color or points ring, a part drawn as a placeholder disc, a warning, or a validation issue). Confirm every flagged item before downloading the SVG.
+A result is **flagged** when the tool is unsure (a low-confidence color, any part read with low confidence - head, ring, points, center or tail stripes - a part drawn as a placeholder disc, a warning, or a validation issue). Confirm every flagged item before downloading the SVG.
 
 ## Output
 
@@ -57,6 +57,8 @@ Tests marked `slow` run the scoreboard bar; `pytest -m slow` runs only those. Th
 ```
 
 Runs the pipeline on every photo in `reference/photos` that has a designer SVG listed in `reference/canonical.txt` (34) and compares the result against the designer's file, region by region. It takes a few minutes. `--sheet DIR` saves photo | generated | designer images; `--debug` prints each scored element.
+
+Current scoreboard: success 23 of 34 (the bar is 28), flagged-not-success 10, silently wrong 1 (S46-15), errors 0; 20 of the 23 successes are flagged although correct.
 
 ## How to test on the shop
 

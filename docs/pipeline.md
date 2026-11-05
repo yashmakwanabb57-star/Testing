@@ -9,7 +9,7 @@ Photo in, configurator SVG out (`rosette/pipeline.py`):
 5. `assign` (rosette/assign.py) - Color 1-4 per group from mined designer rules, confidence, warnings (including a coloring no more plausible than a random guess).
 6. `build` -> `write_svg` -> `validate` - shapes, SVG string, contract issues (`render` returns `RenderResult(svg, issues)`). `build` cuts every color shape where a part meant to lie above it would be hidden by the fixed layer order (Color 1 is always painted first; `rosette/geometry/clip.py`, shapely).
 
-A result is **flagged** (`pipeline.is_flagged`) when a color group has confidence below `FLAG_BELOW` (0.6), a points ring has detector confidence (rotational symmetry) below `FLAG_BELOW`, a part is `unknown` (drawn as a placeholder), the model has any warning, or validation reports an issue.
+A result is **flagged** (`pipeline.is_flagged`, mirrored by `flagItems` in `app/static/logic.js`) when a color group has confidence below `FLAG_BELOW` (0.6), any part (head, ring, points, center, tail stripe) has detector confidence below `FLAG_BELOW`, a part is `unknown` (drawn as a placeholder), the model has any warning, or validation reports an issue.
 
 ## Scoreboard
 
@@ -292,6 +292,15 @@ Every generated file must satisfy section 3 of the [design spec](superpowers/spe
 
 Official (per-axis): **success 23, flagged-not-success 10, silently wrong 1 (S46-15), errors 0 - `PASS 23/34`** against the bar of 28 (80 %). Reported only (uniform-scale alignment): 25/34. The per-axis column is the metric and the bar; the uniform column only explains misses.
 
+Flagged although correct: **20 of the 23 successes** (was 19 before the final fixes). The final fixes flag a part of any role below `FLAG_BELOW`, not only points rings; the one ID that changed is S31-15, whose six tail stripes are read at 0.545 and were not flagged before. Only S28-15, S43-15 and S56-17B succeed unflagged. Success, flagged-not-success and silent counts are unchanged (S46-15 has no part below 0.6, so it stays silent).
+
+| set | n | success | flagged-not-success | silently-wrong | flagged although correct |
+|---|---|---|---|---|---|
+| all | 34 | 23 | 10 | 1 (S46-15) | 20 (was 19) |
+| tune | 24 | 17 | 7 | 0 | 15 (was 14) |
+| holdout-remaining (not clean) | 8 | 5 | 3 | 0 | 4 |
+| inspected (S46-15, S80-22) | 2 | 1 | 0 | 1 | 1 |
+
 ### Sample outputs
 
 `output/s35-19.svg` and `output/s46-15.svg` were made from `S35-19.webp` and `S46-15.webp` (read from the Downloads folder, never written there) with `rosette.pipeline.analyze` + `render`, the same code path the UI uses, and checked with `rosette.validate.validate` (both return `[]`). They are the tool's unedited output, not confirmed by a person.
@@ -308,7 +317,7 @@ S46-15 is not flagged, yet it is the one ID that scores as silently wrong under 
 - **The success bar is not met: 23/34 succeed against 28 needed (80 %).** `pytest -m slow` fails accordingly. Tuning stopped; it is not finished.
 - **S46-15 counts as silently wrong under per-axis scoring** (0.741, not flagged). It is a scorer alignment effect (the designer drew a larger head and narrower tails; uniform scale gives 0.926), but the tool gives no signal on it, so a user cannot tell it from a real silent error.
 - The holdout is no longer clean (see Task 12 phase B), so the numbers on the tuned IDs overstate how the tool will do on new photos.
-- Most successes are still flagged (placeholder `unknown` discs, or a low-confidence points ring). The flag is warranted but means most results need a human look.
+- Most successes are still flagged (20 of 23: placeholder `unknown` discs, or a part read below 0.6, mostly points rings). The flag is warranted but means most results need a human look.
 - Remaining failure clusters:
   - Head structure not modeled: S17-15 (three layered stars, no head disc), S29-15 (glitter loops over a star, badge), S68-19 (stacked chevron points), A16-17 (irregular 8-point star in the head's own black), S13-15 (loops drawn as a star because the navy ruffle merged into the blue group).
   - Mask: S53-19 (pure white stripes on a pure white background are cut out; one tail reads as three).
