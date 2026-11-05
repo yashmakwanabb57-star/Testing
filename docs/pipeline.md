@@ -205,3 +205,21 @@ Flagged although correct (18): unknown placeholder parts (A10-15B, A15-17, S10-1
 - Mask: S53-19 - its white stripes are pure white on a pure white background (distance 0), so the mask cuts them and the single tail reads as three.
 - Color grouping: A13-15B (glitter navy merged with royal blue), S2-15B (snowflake print merged with white satin; flagged by the mixed-texture warning).
 - Designer differs from the photo: S8-15 (centre stripe the same red as the outer, designer Color 3), S26-15 (glitter stripe widths; 0.985 with uniform alignment), S46-15 (proportions, above).
+
+### Phase B review fixes
+
+- `blob_rings` also requires the blobs to go round the head: the largest angular gap between neighbours is at most 3.3 steps of 360/N (4 blobs within 24 degrees scored 0.82 on evenness alone).
+- A points layer read from its blobs gets confidence 0.5 (flagged) unless the layer's zone pixels are rotationally symmetric at the blob count (>= LOW_SYM) and no blob is assumed hidden; since the blob reading is only tried when that symmetry is weak, every blob-read layer is flagged. Over the 76 photos `_blob_layer` returns a layer on 15 (in either detection pass).
+- Ring growth is capped at 8 units beyond the band and stops at any points layer whose label covers >= 0.4 of the circle there (it grew on 36 photos by up to 23 units).
+- Stripe-edge changes are not counted across background between tails (the same 15 photos split as before).
+- `part_area` estimates a bow as its block; points parts carry `inner_ratio` only when they are bows.
+- `tools/score.py` prints a reported-only uniform-alignment column (`uni`, `uok`): the generated crop scaled by the height ratio and centered, not stretched per axis. The per-axis agreement stays the metric and the bar.
+
+| set | n | success | flagged-not-success | silently-wrong | flagged although correct |
+|---|---|---|---|---|---|
+| all | 34 | 23 | 10 | 1 (S46-15) | 19 |
+| tune | 24 | 17 | 7 | 0 | 14 |
+| holdout-remaining (not clean) | 8 | 5 | 3 | 0 | 4 |
+| inspected (S46-15, S80-22) | 2 | 1 | 0 | 1 | 1 |
+
+Uniform-alignment column (reported only): 25/34 (adds S26-15 0.985, S46-15 0.926). A15-17 0.949 -> 0.954; S33-15 is now flagged (blob-read layer).
