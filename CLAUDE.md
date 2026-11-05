@@ -18,7 +18,7 @@ Local tool that converts a rosette product photo into a configurator SVG for brr
 ## Commands
 - Tests: `.venv/Scripts/python.exe -m pytest -q` (slow tests are marked `slow`; skip with `-m "not slow"`)
 - Score photo vs designer SVGs: `.venv/Scripts/python.exe tools/score.py` (added in a later task)
-- Run app: `.venv/Scripts/python.exe -m uvicorn app.main:app` (added in a later task)
+- Run app: `run.bat` (or `.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8765`), then open http://127.0.0.1:8765
 
 ## Layout
 See the File Structure in the plan: `rosette/` (model, geometry, vision, writer, validate, simulate,
