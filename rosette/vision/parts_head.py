@@ -49,6 +49,14 @@ BRIDGE_COV, BRIDGE_REACH_UNITS = 0.4, 3.0
 # the layer still covers >= BODY_COV of the circles within BODY_UNITS outside it;
 # a ring merely touched by its own color's trims falls far below that.
 BODY_UNITS, BODY_COV = 5.0, 0.5
+# A ring band is drawn out to where its label stops being the dominant one with at
+# least RING_EXTEND_COV of the circle (a pleated ring's teeth and a center a few units
+# off keep its outer part between 0.5 and FULL_COV), but not into another band nor
+# past the inner radius of a points layer of the same label. Chosen from 0.5 / 0.6 / 0.7
+# over the 34 scored IDs: S30-15 needs <= 0.6 (0.878 -> 0.972); at 0.5 S40-15's head ring
+# grows to the rim and it drops 0.903 -> 0.900; at 0.6 A15-17 0.976 -> 0.949 and S43-15
+# 1.00 -> 0.96 (rings now overlap the loops' inner ends, still correct).
+RING_EXTEND_COV = 0.6
 # Zones thinner than this (canvas units) are band edges (teeth, polygon corners).
 MIN_ZONE_UNITS = 10.0
 # Mean zone coverage a label needs to be a candidate points layer.
@@ -255,6 +263,19 @@ def _kind(w: np.ndarray) -> str:
     return "petal" if w.mean() / wmax >= PETAL_FULLNESS else "diamond"
 
 
+def _ring_outer(bd: _Band, bands: list[_Band], dom: np.ndarray, cov: np.ndarray, radii: np.ndarray,
+                fr: Frame, same_points_r_in: list[float]) -> int:
+    """Outer radius index of a ring band grown while its label is dominant with
+    >= RING_EXTEND_COV, stopping at other bands and at same-label points layers."""
+    stop = min(same_points_r_in, default=np.inf)
+    taken = {i for b in bands if b is not bd for i in range(b.i0, b.i1)}
+    i1 = bd.i1
+    while (i1 < len(radii) and i1 not in taken and dom[i1] == bd.label
+           and cov[i1, bd.label] >= RING_EXTEND_COV and fr.d(radii[i1]) < stop):
+        i1 += 1
+    return i1
+
+
 def _blob_layer(p: Prepared, labels: np.ndarray, fr: Frame, g: int, r0: float, r1: float,
                 step: float) -> tuple[dict, float, int] | None:
     """Points layer of label g read from its blobs between radii r0..r1 (px) when they
@@ -383,7 +404,9 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
                           center_band.label, 50, r3(center_band.cov)))
     rings = [bd for bd in bands if bd is not head_band and bd is not center_band and id(bd) not in eaten]
     for depth, bd in enumerate(reversed(rings)):  # outermost first, inner rings on top
+        i1 = _ring_outer(bd, bands, dom, cov, radii, fr, [
+            float(q.params["r_inner"]) for q in parts if q.role == "points" and q.color_group == bd.label])
         parts.append(Part(f"ring-{depth}", "ring", {"cx": r3(ccx), "cy": r3(ccy),
-                                                    "r_outer": r3(unit(bd.i1)), "r_inner": r3(unit(bd.i0))},
+                                                    "r_outer": r3(unit(i1)), "r_inner": r3(unit(bd.i0))},
                           bd.label, min(49, 30 + depth), r3(bd.cov)))
     return parts

@@ -207,3 +207,13 @@ def test_star_tips_found_from_their_blobs_when_pixel_symmetry_is_weak():
     assert len(pts) == 1 and pts[0].params["count"] == 6
     assert 50 < pts[0].params["r_inner"] < pts[0].params["r_outer"] < 110
 
+
+
+def test_pleated_ring_drawn_past_its_full_coverage_radii():
+    # S30-15: the light purple pleated ring around the badge reaches ~82 units, but
+    # its pleats keep its coverage between 0.6 and 0.8 beyond 70 units, so the ring
+    # was drawn only from 58 to 70 and white showed between it and the loops.
+    p = prepare((PHOTOS / "S30-15.png").read_bytes())
+    labels, groups = pixel_groups(p)
+    rings = [q for q in detect_parts(p, labels) if q.role == "ring"]
+    assert len(rings) == 1 and rings[0].params["r_outer"] >= 76
