@@ -223,3 +223,96 @@ Flagged although correct (18): unknown placeholder parts (A10-15B, A15-17, S10-1
 | inspected (S46-15, S80-22) | 2 | 1 | 0 | 1 | 1 |
 
 Uniform-alignment column (reported only): 25/34 (adds S26-15 0.985, S46-15 0.926). A15-17 0.949 -> 0.954; S33-15 is now flagged (blob-read layer).
+
+## Final state (Task 16)
+
+### Stages, modules and tuning constants
+
+Constants are module-level names; read their comments in the source before changing one.
+
+| Stage | Module | Tuning constants |
+|---|---|---|
+| prepare: decode, 1200 px, mask, axis, head circle | `rosette/vision/prepare.py` | `WORK_HEIGHT`, `CANVAS_SPAN`, `ALPHA_CUTOFF`, `MIN_DELTA_E`, `NOISE_FACTOR`, `MAX_BG_NOISE`, `OPEN_PX`, `CLOSE_PX`, `MIN_AREA_FRAC`, `MAX_AREA_FRAC`, `AXIS_SEARCH_FRAC`, `HEAD_PROFILE_FRAC`, `HEAD_RING_MARGIN` |
+| color groups, stripe split, motif absorption, mixed-texture warning | `rosette/vision/colors.py` | `L_WEIGHT`, `SMOOTH_UNITS`, `FLAT_PCT`, `GRAIN_WEIGHT`, `SAMPLE_N`, `MIN_CENTER_SEP`, `PRINT_MAX_FRAC`, `TEXTURE_WIN_UNITS`, `PATTERN_T`, `MIXED_PATTERN_SHARE`, `SEED` |
+| part detection driver, leftovers as `unknown` | `rosette/vision/parts.py` | `LEFTOVER_OPEN_UNITS`, `TAIL_TOUCH_PX`, `HEAD_MARGIN`, `UNKNOWN_CONFIDENCE` |
+| head: rings, points, bows, center, blob rings | `rosette/vision/parts_head.py`, `parts_common.py` | `RING_EXTEND_COV`, `FULL_COV`, `MIN_BAND_UNITS`, `MIN_LAYER_COV`, `MAX_COUNT`, `BOW_ENDS`, `PETAL_FULLNESS`, `BLOB_UNCONFIRMED_CONF`, `MIN_INNER_RATIO`, `HEAD_ROUND`, `PINKED_DEPTH`, `RING_MAX_GAP` |
+| tail stripes | `rosette/vision/parts_tails.py` | `ROW_FRACS`, `COUNT_ROWS`, `DENSE_SPAN`, `GAP_UNITS`, `ROW_BAND_PX`, `TOP_INSET` |
+| Color 1-4 assignment, confidence, warnings | `rosette/assign.py`, `rosette/roles.py`, rules in `rosette/data/assign_rules.json` (mined by `tools/mine_rules.py`) | `FLAG_BELOW`, `MAX_COLORS`, `PATTERN_MIN_RIBBON_SHARE`, `TAIL_POS_TOL`, `FLAGGED_CONF`, `PATTERN_MERGE_PENALTY` |
+| geometry, shapes, occlusion cuts | `rosette/geometry/`, `rosette/shapes.py`, `rosette/build.py`, `rosette/geometry/clip.py` | `QUAD_SEGS`, `SIMPLIFY`, `MIN_PIECE` |
+| SVG writer and contract validator | `rosette/writer.py`, `rosette/validate.py` | none (the contract is fixed) |
+| orchestration, flagging | `rosette/pipeline.py` | `FLAG_BELOW` (imported from assign) |
+| shop simulation (solid and pattern previews) | `rosette/simulate.py` | none |
+
+### Shop contract
+
+Every generated file must satisfy section 3 of the [design spec](superpowers/specs/2026-11-05-rosette-svg-generator-design.md): fixed layer order (`Layer_1`, `Layer_2_1_2/3/4`, `Layer_3`), category classes for Color 1-4, Color 2 usable in solid and pattern mode, and Color 3 correct in both. `rosette/validate.py` checks it and `render` returns the issues; the UI does not offer a download while an issue is open. The shop's own coloring logic is in `reference/shop-configurator.js` (verbatim); `rosette/simulate.py` mirrors it for the UI previews.
+
+### UI modes
+
+`app/main.py` (FastAPI, started with `run.bat` or uvicorn on 127.0.0.1:8765) serves `app/static`. **Workbench** shows the photo, the detected model, the solid and pattern previews, edit controls and the flagged items on one screen. **Guided** walks through the same state one question at a time (`guided.js`); switching modes keeps the state. Edits go back through `render`, so the validator runs after every change.
+
+### Current scoreboard (`tools/score.py`, 34 IDs, run for Task 16)
+
+| ID | agree (per-axis, official) | uni (uniform scale, reported only) | success | uni success |
+|---|---|---|---|---|
+| A10-15B | 0.906 | 0.906 | yes | yes |
+| A13-15B | 0.000 | 0.000 | no | no |
+| A14-17 | 0.968 | 0.968 | yes | yes |
+| A15-17 | 0.954 | 0.959 | yes | yes |
+| A16-17 | 0.837 | 0.837 | no | no |
+| A9-15B | 1.000 | 1.000 | yes | yes |
+| S10-19 | 0.904 | 0.904 | yes | yes |
+| S13-15 | 0.840 | 0.840 | no | no |
+| S17-15 | 0.633 | 0.743 | no | no |
+| S2-15B | 0.000 | 0.000 | no | no |
+| S26-15 | 0.800 | 0.985 | no | yes |
+| S28-15 | 0.967 | 0.967 | yes | yes |
+| S29-15 | 0.247 | 0.229 | no | no |
+| S30-15 | 0.972 | 0.972 | yes | yes |
+| S31-15 | 0.929 | 0.966 | yes | yes |
+| S33-15 | 0.905 | 0.905 | yes | yes |
+| S35-19 | 0.958 | 0.960 | yes | yes |
+| S37-15 | 1.000 | 1.000 | yes | yes |
+| S40-15 | 0.903 | 0.903 | yes | yes |
+| S41-15 | 0.925 | 0.939 | yes | yes |
+| S43-15 | 0.957 | 0.971 | yes | yes |
+| S45-15 | 0.933 | 0.935 | yes | yes |
+| S46-15 | 0.741 | 0.926 | no (silent) | yes |
+| S5-15 | 0.910 | 0.988 | yes | yes |
+| S53-19 | 0.513 | 0.513 | no | no |
+| S56-17B | 0.972 | 0.975 | yes | yes |
+| S58-17 | 1.000 | 1.000 | yes | yes |
+| S67-19 | 0.964 | 0.964 | yes | yes |
+| S68-19 | 0.600 | 0.433 | no | no |
+| S69-19 | 0.980 | 0.988 | yes | yes |
+| S70-19 | 0.956 | 0.956 | yes | yes |
+| S8-15 | 0.636 | 0.636 | no | no |
+| S80-22 | 0.979 | 0.989 | yes | yes |
+| s34-15 | 0.951 | 0.941 | yes | yes |
+
+Official (per-axis): **success 23, flagged-not-success 10, silently wrong 1 (S46-15), errors 0 - `PASS 23/34`** against the bar of 28 (80 %). Reported only (uniform-scale alignment): 25/34. The per-axis column is the metric and the bar; the uniform column only explains misses.
+
+### Sample outputs
+
+`output/s35-19.svg` and `output/s46-15.svg` were made from `S35-19.webp` and `S46-15.webp` (read from the Downloads folder, never written there) with `rosette.pipeline.analyze` + `render`, the same code path the UI uses, and checked with `rosette.validate.validate` (both return `[]`). They are the tool's unedited output, not confirmed by a person.
+
+| Output | Flagged | Flagged items | Warnings |
+|---|---|---|---|
+| `output/s35-19.svg` | yes | two points layers with detector confidence 0.46 and 0.47 (below 0.6); three `unknown` parts (unknown-1, unknown-3, unknown-4) drawn as plain discs in the head. No color group below 0.6. | unknown-1, unknown-3 and unknown-4: unrecognised shape, drawn as a plain disc |
+| `output/s46-15.svg` | no | none (all color groups and both points layers at 0.64 or above) | none |
+
+S46-15 is not flagged, yet it is the one ID that scores as silently wrong under per-axis scoring (see below); its colors are in the right layers. Before uploading either file to the shop, the user should open each photo in the UI, confirm the flags (S35-19) and compare the drawing with the photo (both). That confirmation has not been done; it is the user's step.
+
+### Known limitations
+
+- **The success bar is not met: 23/34 succeed against 28 needed (80 %).** `pytest -m slow` fails accordingly. Tuning stopped; it is not finished.
+- **S46-15 counts as silently wrong under per-axis scoring** (0.741, not flagged). It is a scorer alignment effect (the designer drew a larger head and narrower tails; uniform scale gives 0.926), but the tool gives no signal on it, so a user cannot tell it from a real silent error.
+- The holdout is no longer clean (see Task 12 phase B), so the numbers on the tuned IDs overstate how the tool will do on new photos.
+- Most successes are still flagged (placeholder `unknown` discs, or a low-confidence points ring). The flag is warranted but means most results need a human look.
+- Remaining failure clusters:
+  - Head structure not modeled: S17-15 (three layered stars, no head disc), S29-15 (glitter loops over a star, badge), S68-19 (stacked chevron points), A16-17 (irregular 8-point star in the head's own black), S13-15 (loops drawn as a star because the navy ruffle merged into the blue group).
+  - Mask: S53-19 (pure white stripes on a pure white background are cut out; one tail reads as three).
+  - Color grouping: A13-15B (glitter navy merged with royal blue), S2-15B (snowflake print merged with white satin).
+  - Designer differs from the photo: S8-15 (centre stripe the same red as the outer), S26-15 (glitter stripe widths), S46-15 (proportions).
+- Photos need a single rosette on a plain background; a rosette whose colors match the background can fail the mask. The messages for no rosette and unreadable files come from `prepare`.
+- Classical CV only: unusual head constructions fall back to `unknown` placeholder discs that the user must fix in the UI.
