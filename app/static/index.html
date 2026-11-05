@@ -16,7 +16,8 @@
   </div>
   <span id="file-name" class="muted">No photo loaded</span>
   <span id="status" class="status" aria-live="polite"></span>
-  <label class="btn primary" for="file-input">Upload photo</label>
+  <label class="btn" for="file-input">Upload photo</label>
+  <button type="button" id="convert" class="btn primary" disabled>Convert to SVG</button>
   <input id="file-input" type="file" accept=".png,.webp,.jpg,.jpeg,image/png,image/webp,image/jpeg" hidden>
 </header>
 
@@ -31,7 +32,7 @@
     <h2>Photo</h2>
     <div id="drop-zone" class="drop-zone">
       <img id="photo" alt="Uploaded rosette photo" hidden>
-      <p id="drop-hint" class="muted">Drop a PNG, WEBP or JPG photo here, or use Upload photo.</p>
+      <p id="drop-hint" class="muted">Drop a PNG, WEBP or JPG photo here, or use Upload photo. Then press Convert to SVG.</p>
     </div>
   </section>
 

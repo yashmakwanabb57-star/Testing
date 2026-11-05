@@ -6,6 +6,7 @@ import { applyConfig, glitterPattern, COLOR_INDICES } from './simulator.js';
 import {
   MAX_COUNT, POINT_KINDS, errorText, hex, flagItems,
   downloadBlockers as blockersFor, groupColor, tailGroups, parseValue, tailCheckKey, sourceNotice,
+  convertBlocker, resetForFile,
 } from './logic.js';
 
 export { errorText, flagItems, parseValue, tailGroups, hex };
@@ -67,6 +68,7 @@ const PARAMS = {
 export const state = {
   photoUrl: null,
   uploadName: '',
+  pendingFile: null, // chosen photo; Convert to SVG sends it to /api/analyze
   filename: null, // download name from /api/analyze
   model: null, // RosetteModel JSON, edited in place
   svg: null, // clean SVG text from the last successful render
@@ -75,7 +77,7 @@ export const state = {
   confirmed: new Set(), // flag keys the user confirmed
   invalid: new Set(), // input field keys holding an invalid value
   analyzing: false,
-  analyzeSeq: 0, // latest upload; older analyze responses are dropped
+  analyzeSeq: 0, // latest conversion; older analyze responses are dropped
   render: { seq: 0, timer: null, dirty: false, inFlight: false, error: null },
   sim: {
     colors: { ...DEFAULT_COLORS },
@@ -130,22 +132,26 @@ export const api = {
 // ---------------------------------------------------------------- actions
 
 export const actions = {
-  async loadFile(file) {
+  // Choosing or dropping a file only shows the photo; Convert to SVG analyzes it. The
+  // old model is cleared right away so it cannot be downloaded under the new name.
+  chooseFile(file) {
     if (!file) return;
-    const token = ++state.analyzeSeq;
-    let scrollTop = false;
     clearTimeout(state.render.timer);
-    state.render.seq++; // drop any render still in flight
-    Object.assign(state.render, { dirty: false, inFlight: false, error: null });
+    resetForFile(state);
     if (state.photoUrl) URL.revokeObjectURL(state.photoUrl);
-    Object.assign(state, {
-      photoUrl: URL.createObjectURL(file), uploadName: file.name, filename: null, model: null,
-      svg: null, issues: [], flagged: false, analyzing: true, photoFrame: null,
-    });
-    state.confirmed.clear();
-    state.invalid.clear();
-    state.sim.tried.clear();
-    Object.assign(state.guided, { step: 1, reached: 1 });
+    Object.assign(state, { photoUrl: URL.createObjectURL(file), uploadName: file.name, pendingFile: file });
+    hideError();
+    views.all();
+  },
+
+  async convert() {
+    if (convertBlocker(state)) return;
+    const file = state.pendingFile;
+    clearTimeout(state.render.timer);
+    resetForFile(state);
+    state.analyzing = true;
+    const token = state.analyzeSeq;
+    let scrollTop = false;
     hideError();
     views.all();
     try {
@@ -568,10 +574,11 @@ export const views = {
   status() {
     const s = state;
     let text = '';
-    if (s.analyzing) text = 'Analyzing...';
+    if (s.analyzing) text = 'Converting...';
     else if (s.render.dirty || s.render.inFlight) text = 'Updating...';
     $('status').textContent = text;
     $('file-name').textContent = s.uploadName || 'No photo loaded';
+    $('convert').disabled = !!convertBlocker(s);
   },
 
   photo() {
@@ -610,7 +617,7 @@ export const views = {
     const box = $('preview');
     views.source();
     if (!state.svg) {
-      box.replaceChildren(el('p', { class: 'muted center', text: state.analyzing ? 'Analyzing the photo...' : 'The generated SVG appears here.' }));
+      box.replaceChildren(el('p', { class: 'muted center', text: state.analyzing ? 'Converting the photo...' : (state.pendingFile ? 'Press Convert to SVG to make the SVG.' : 'The generated SVG appears here.') }));
       views.overlay();
       return;
     }
@@ -659,7 +666,7 @@ export const views = {
     const box = $('parts');
     const rose = $('model-rose');
     if (!state.model) {
-      box.replaceChildren(el('p', { class: 'muted', text: state.analyzing ? 'Analyzing...' : 'No parts yet.' }));
+      box.replaceChildren(el('p', { class: 'muted', text: state.analyzing ? 'Converting...' : 'No parts yet.' }));
       rose.disabled = true;
       rose.checked = false;
       return;
@@ -839,7 +846,7 @@ export function photoFrame(img) {
 
 function init() {
   $('file-input').addEventListener('change', (ev) => {
-    actions.loadFile(ev.target.files[0]);
+    actions.chooseFile(ev.target.files[0]);
     ev.target.value = '';
   });
   const zone = $('drop-zone');
@@ -851,7 +858,7 @@ function init() {
   zone.addEventListener('drop', (ev) => {
     ev.preventDefault();
     zone.classList.remove('over');
-    if (ev.dataTransfer.files.length) actions.loadFile(ev.dataTransfer.files[0]);
+    if (ev.dataTransfer.files.length) actions.chooseFile(ev.dataTransfer.files[0]);
   });
   $('photo').addEventListener('load', () => {
     state.photoFrame = photoFrame($('photo'));
@@ -870,6 +877,7 @@ function init() {
   $('source-toggle').addEventListener('change', (ev) => actions.setSim({ source: ev.target.checked }));
   $('model-rose').addEventListener('change', (ev) => actions.setModelRose(ev.target.checked));
   $('download').addEventListener('click', () => actions.download());
+  $('convert').addEventListener('click', () => actions.convert());
   views.all();
 }
 

@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  SOURCE_NOT_READY, downloadBlockers, errorText, flagItems, parseValue, sourceNotice,
+  SOURCE_NOT_READY, convertBlocker, downloadBlockers, errorText, flagItems, parseValue, resetForFile, sourceNotice,
 } from '../../app/static/logic.js';
 import { applyConfig } from '../../app/static/simulator.js';
 
@@ -65,7 +65,7 @@ test('an invalid field blocks download', () => {
 
 test('no model, or analysis running, blocks download', () => {
   assert.equal(downloadBlockers(ready({ model: null })).length, 1);
-  assert.match(downloadBlockers(ready({ analyzing: true }))[0], /Analyzing/);
+  assert.match(downloadBlockers(ready({ analyzing: true }))[0], /Converting/);
 });
 
 // ------------------------------------------------------------ flagItems
@@ -266,4 +266,49 @@ test('the SVG source carries a not-ready banner while download is blocked', () =
   assert.equal(sourceNotice(ready({ render: { dirty: true, inFlight: false, error: null } })), SOURCE_NOT_READY);
   // nothing to show yet: no banner over an empty source
   assert.equal(sourceNotice(ready({ model: null, svg: null })), null);
+});
+
+// ------------------------------------------------------------ explicit Convert step
+
+function fullState(overrides = {}) {
+  return {
+    ...ready(), pendingFile: { name: 'new.png' }, filename: 'old.svg', analyzeSeq: 3, photoFrame: { left: 1 },
+    render: { seq: 5, timer: null, dirty: false, inFlight: false, error: 'x' },
+    sim: { tried: new Set(['pattern', 'rose']) },
+    guided: { mode: 'guided', step: 4, reached: 5 },
+    ...overrides,
+  };
+}
+
+test('Convert is disabled until a file is chosen, and while converting', () => {
+  assert.match(convertBlocker({ pendingFile: null, analyzing: false }), /Choose a photo/);
+  assert.equal(convertBlocker({ pendingFile: { name: 'a.png' }, analyzing: false }), null);
+  assert.equal(convertBlocker({ pendingFile: { name: 'a.png' }, analyzing: true }), 'Converting...');
+});
+
+test('choosing a new file clears the old model so it cannot be downloaded under the new name', () => {
+  const s = fullState({ invalid: new Set(['head.r']) });
+  assert.equal(s.confirmed.size, 1);
+  resetForFile(s);
+  assert.equal(s.model, null);
+  assert.equal(s.svg, null);
+  assert.equal(s.filename, null);
+  assert.deepEqual(s.issues, []);
+  assert.equal(s.flagged, false);
+  assert.equal(s.photoFrame, null);
+  assert.equal(s.confirmed.size, 0);
+  assert.equal(s.invalid.size, 0);
+  assert.equal(s.sim.tried.size, 0);
+  assert.equal(s.analyzing, false);
+  assert.equal(s.analyzeSeq, 4); // an analysis still running for the old file is dropped
+  assert.equal(s.render.seq, 6); // and so is a render
+  assert.deepEqual([s.render.dirty, s.render.inFlight, s.render.error], [false, false, null]);
+  assert.deepEqual([s.guided.step, s.guided.reached, s.guided.mode], [1, 1, 'guided']);
+  assert.deepEqual(downloadBlockers(s), ['Convert the photo to SVG first.']);
+  assert.equal(sourceNotice(s), null);
+  assert.equal(convertBlocker(s), null);
+});
+
+test('no file at all asks for an upload', () => {
+  assert.deepEqual(downloadBlockers(ready({ model: null, svg: null, pendingFile: null })), ['Upload a photo first.']);
 });

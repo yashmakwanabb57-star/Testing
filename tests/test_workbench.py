@@ -61,3 +61,12 @@ def test_svg_source_has_not_ready_banner():
     assert 'id="svg-source-note"' in html and 'id="svg-source-text"' in html
     js = (STATIC / "app.js").read_text(encoding="utf-8")
     assert "sourceNotice" in js
+
+
+def test_convert_button_starts_disabled():
+    html = client.get("/").text
+    assert re.search(r'<button[^>]*id="convert"[^>]*disabled[^>]*>Convert to SVG</button>', html)
+    js = (STATIC / "app.js").read_text(encoding="utf-8")
+    # choosing a file only previews it; the Convert action calls /api/analyze
+    assert "chooseFile" in js and "loadFile" not in js
+    assert "'Converting...'" in js

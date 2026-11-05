@@ -30,7 +30,7 @@ then open http://127.0.0.1:8765. The server only listens on the local machine.
 
 ## The two UI modes
 
-Upload a photo, then work in either mode (switch at the top; both share the same state):
+Choose or drop a photo (it is shown as a preview), press **Convert to SVG**, then work in either mode (switch at the top; both share the same state):
 
 - **Workbench** - everything on one screen: the photo, the detected model (parts, color groups, Color 1-4 assignment, rose on/off), a live preview of the SVG in the shop's solid and pattern configurations, and edit controls for every part and color. Best for fixing a result.
 - **Guided** - the same controls one step at a time, asking about each color and each part. Best for a quick check.

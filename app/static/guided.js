@@ -4,7 +4,9 @@
 // parts list, warnings, checks, download) and puts them back when switching to Workbench,
 // so edits and confirmations are the same in both modes.
 import { state, actions, views, listeners, el, hex } from './app.js';
-import { GUIDED_STEPS, advanceBlocker, canJump, clampStep, colorQuestions, flagItems, partChecks } from './logic.js';
+import {
+  GUIDED_STEPS, advanceBlocker, canJump, clampStep, colorQuestions, convertBlocker, flagItems, partChecks,
+} from './logic.js';
 
 const MODE_KEY = 'rosette.mode';
 const LAST = GUIDED_STEPS.length;
@@ -15,7 +17,7 @@ const MOVABLE = ['drop-zone', 'stage', 'sim-controls', 'svg-source', 'parts', 'm
 const home = new Map();
 
 const INTRO = {
-  1: 'Upload a photo of the rosette: drop it on the photo area or use Upload photo.',
+  1: 'Choose a photo of the rosette (drop it on the photo area or use Choose photo...), then press Convert to SVG.',
   2: 'Compare every part with the photo. Fix any value that is off, then tick "Looks right" on each card.',
   3: 'One question per color, flagged colors first. Answer Yes, or use Change... to pick the right color.',
   4: 'Try the shop options on the preview: switch Color 2 between Solid and Pattern, and the Rose on and off.',
@@ -52,7 +54,8 @@ function uploadStatus() {
 
 function fillUploadStatus(box) {
   let text = 'No photo yet.';
-  if (state.analyzing) text = 'Analyzing the photo...';
+  if (state.analyzing) text = 'Converting...';
+  else if (state.pendingFile && !state.model) text = `${state.uploadName} chosen. Press Convert to SVG.`;
   else if (state.model) {
     const flags = flagItems(state.model, state.issues, state.flagged).length;
     text = `Found ${partChecks(state.model).length} part card(s) and ${state.model.groups.length} color(s).`
@@ -142,7 +145,15 @@ function layout(step) {
   const intro = el('p', { class: 'g-intro', text: INTRO[step] });
   switch (step) {
     case 1:
-      return { visual: ['drop-zone'], task: [intro, el('label', { class: 'btn', for: 'file-input', text: 'Choose photo...' }), uploadStatus()] };
+      return {
+        visual: ['drop-zone'],
+        task: [intro, el('div', { class: 'q-actions' },
+          el('label', { class: 'btn', for: 'file-input', text: 'Choose photo...' }),
+          el('button', {
+            type: 'button', id: 'g-convert', class: 'btn primary', text: 'Convert to SVG',
+            disabled: !!convertBlocker(state), onclick: () => actions.convert(),
+          })), uploadStatus()],
+      };
     case 2:
       return { visual: ['drop-zone', 'stage'], task: [intro, 'parts', 'model-rose-row'] };
     case 3:
@@ -229,6 +240,8 @@ function refresh() {
   }
   const status = $('g-upload-status');
   if (status) fillUploadStatus(status);
+  const convert = $('g-convert');
+  if (convert) convert.disabled = !!convertBlocker(state);
   renderQuestions();
   renderChecklist();
   refreshNav();

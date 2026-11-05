@@ -63,7 +63,7 @@ test('one check per non-tail part and one per tail group', () => {
 
 test('step 1 needs an analyzed photo', () => {
   assert.match(advanceBlocker(1, st({ model: null, svg: null })), /Upload a photo/);
-  assert.match(advanceBlocker(1, st({ analyzing: true })), /analysis/);
+  assert.match(advanceBlocker(1, st({ analyzing: true })), /conversion/);
   assert.equal(canAdvance(1, st()), true);
 });
 
@@ -224,4 +224,13 @@ test('a low-confidence head is flagged and needs its Looks right', () => {
   const m = model();
   m.parts[0].confidence = 0.4;
   assert.match(advanceBlocker(2, st({ model: m, confirmed: new Set(['part:points-1', tailCheckKey(0)]) })), /1 of 3 left/);
+});
+
+// ------------------------------------------------------------ step 1 Convert
+
+test('step 1 Next is blocked until the chosen photo is converted', () => {
+  const chosen = st({ model: null, svg: null, pendingFile: { name: 'a.png' } });
+  assert.equal(advanceBlocker(1, chosen), 'Convert the photo to SVG first.');
+  assert.equal(advanceBlocker(1, { ...chosen, analyzing: true }), 'Wait for the conversion to finish.');
+  assert.equal(canAdvance(1, st({ pendingFile: { name: 'a.png' } })), true);
 });

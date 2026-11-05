@@ -72,10 +72,35 @@ export function flagItems(model, issues, serverFlagged) {
   return items;
 }
 
+const NEEDS_CONVERT = 'Convert the photo to SVG first.';
+
+// Why "Convert to SVG" is disabled; null means it may run. s.pendingFile is the chosen
+// photo (choosing or dropping a file only previews it; Convert calls /api/analyze).
+export function convertBlocker(s) {
+  if (!s.pendingFile) return 'Choose a photo first.';
+  if (s.analyzing) return 'Converting...';
+  return null;
+}
+
+// Clear everything derived from the previous photo, so a newly chosen file can never
+// leave the old model downloadable under the new name. Run on choosing a file and again
+// when Convert starts. Bumping the sequence numbers drops any analysis or render still
+// in flight. The caller clears its render timer.
+export function resetForFile(s) {
+  s.analyzeSeq++;
+  s.render.seq++;
+  Object.assign(s.render, { dirty: false, inFlight: false, error: null });
+  Object.assign(s, { filename: null, model: null, svg: null, issues: [], flagged: false, analyzing: false, photoFrame: null });
+  s.confirmed.clear();
+  s.invalid.clear();
+  s.sim.tried.clear();
+  Object.assign(s.guided, { step: 1, reached: 1 });
+}
+
 // Reasons Download is disabled for a workbench state; empty means ready.
 export function downloadBlockers(s) {
-  if (s.analyzing) return ['Analyzing the photo...'];
-  if (!s.model || !s.svg) return ['Upload a photo first.'];
+  if (s.analyzing) return ['Converting the photo...'];
+  if (!s.model || !s.svg) return [s.pendingFile ? NEEDS_CONVERT : 'Upload a photo first.'];
   const out = [];
   if (s.invalid.size) out.push('Fix the invalid values (red fields).');
   if (s.render.dirty || s.render.inFlight) out.push('Updating the SVG...');
@@ -176,8 +201,8 @@ export function colorQuestions(model, issues = [], serverFlagged = false) {
 // Why Next is blocked on a guided step, in plain words; null means the user may go on.
 export function advanceBlocker(step, s) {
   if (step >= GUIDED_STEPS.length) return 'This is the last step.';
-  if (s.analyzing) return 'Wait for the analysis to finish.';
-  if (!s.model || !s.svg) return 'Upload a photo first.';
+  if (s.analyzing) return 'Wait for the conversion to finish.';
+  if (!s.model || !s.svg) return s.pendingFile ? NEEDS_CONVERT : 'Upload a photo first.';
   if (step === 2) {
     if (s.invalid.size) return 'Fix the invalid values (red fields) first.';
     const checks = partChecks(s.model);
