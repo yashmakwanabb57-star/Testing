@@ -57,6 +57,10 @@ BODY_UNITS, BODY_COV = 5.0, 0.5
 # grows to the rim and it drops 0.903 -> 0.900; at 0.6 A15-17 0.976 -> 0.949 and S43-15
 # 1.00 -> 0.96 (rings now overlap the loops' inner ends, still correct).
 RING_EXTEND_COV = 0.6
+# Growth is at most RING_MAX_GROWTH_UNITS (a pleat's depth; far beyond it the ring
+# would be a guess) and stops at another label's points layer once that label covers
+# RING_STOP_COV of the circle (its lobes show there, the ring must not hide them).
+RING_MAX_GROWTH_UNITS, RING_STOP_COV = 8.0, 0.4
 # Zones thinner than this (canvas units) are band edges (teeth, polygon corners).
 MIN_ZONE_UNITS = 10.0
 # Mean zone coverage a label needs to be a candidate points layer.
@@ -274,14 +278,23 @@ def _kind(w: np.ndarray) -> str:
 
 
 def _ring_outer(bd: _Band, bands: list[_Band], dom: np.ndarray, cov: np.ndarray, radii: np.ndarray,
-                fr: Frame, same_points_r_in: list[float]) -> int:
+                fr: Frame, layers: list[tuple[float, int]]) -> int:
     """Outer radius index of a ring band grown while its label is dominant with
-    >= RING_EXTEND_COV, stopping at other bands and at same-label points layers."""
-    stop = min(same_points_r_in, default=np.inf)
+    >= RING_EXTEND_COV, by at most RING_MAX_GROWTH_UNITS, stopping at other bands, at
+    the inner radius of a same-label points layer and at the inner radius of any
+    other points layer whose label covers >= RING_STOP_COV of the circle there.
+    `layers` are the points layers' (r_inner in canvas units, label)."""
     taken = {i for b in bands if b is not bd for i in range(b.i0, b.i1)}
+    edge = fr.d(radii[bd.i1 - 1])
+
+    def blocked(i: int) -> bool:
+        r = fr.d(radii[i])
+        return (r - edge > RING_MAX_GROWTH_UNITS
+                or any(r >= r_in and (g == bd.label or cov[i, g] >= RING_STOP_COV) for r_in, g in layers))
+
     i1 = bd.i1
     while (i1 < len(radii) and i1 not in taken and dom[i1] == bd.label
-           and cov[i1, bd.label] >= RING_EXTEND_COV and fr.d(radii[i1]) < stop):
+           and cov[i1, bd.label] >= RING_EXTEND_COV and not blocked(i1)):
         i1 += 1
     return i1
 
@@ -422,7 +435,7 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
     rings = [bd for bd in bands if bd is not head_band and bd is not center_band and id(bd) not in eaten]
     for depth, bd in enumerate(reversed(rings)):  # outermost first, inner rings on top
         i1 = _ring_outer(bd, bands, dom, cov, radii, fr, [
-            float(q.params["r_inner"]) for q in parts if q.role == "points" and q.color_group == bd.label])
+            (float(q.params["r_inner"]), q.color_group) for q in parts if q.role == "points"])
         parts.append(Part(f"ring-{depth}", "ring", {"cx": r3(ccx), "cy": r3(ccy),
                                                     "r_outer": r3(unit(i1)), "r_inner": r3(unit(bd.i0))},
                           bd.label, min(49, 30 + depth), r3(bd.cov)))

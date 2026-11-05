@@ -229,3 +229,36 @@ def test_blob_read_points_layer_is_flagged_without_pixel_symmetry():
     dark = min(groups, key=lambda g: sum(g.rgb)).id
     pts = [q for q in detect_parts(p, labels) if q.role == "points" and q.color_group == dark]
     assert len(pts) == 1 and pts[0].confidence < FLAG_BELOW
+
+
+def _grow(label_cov, other_cov=None, bands_extra=(), layers=()):
+    """_ring_outer on a constructed profile: radii 0..59 (1 unit each), a ring band of
+    label 0 over 10..20, label 0's coverage `label_cov` beyond it."""
+    from rosette.vision.parts_common import Frame
+    from rosette.vision.parts_head import _Band, _ring_outer
+    n = 60
+    cov = np.zeros((n, 2))
+    cov[10:20, 0] = 1.0
+    cov[20:, 0] = label_cov
+    cov[20:, 1] = other_cov if other_cov is not None else 1 - label_cov
+    dom = cov.argmax(axis=1)
+    bd = _Band(10, 20, 0, 1.0)
+    bands = [bd] + [_Band(i0, i1, 1, 1.0) for i0, i1 in bands_extra]
+    return _ring_outer(bd, bands, dom, cov, np.arange(n, dtype=float), Frame(0.0, 0.0, 1.0), list(layers))
+
+
+def test_ring_growth_stops_at_another_band():
+    assert _grow(0.7, bands_extra=[(23, 30)]) == 23
+
+
+def test_ring_growth_stops_at_another_label_points_layer_that_shows_there():
+    # a points layer of label 1 starting at 24 units and covering 0.45 (>= 0.4) of the
+    # circle there: the ring must not be drawn over its lobes
+    assert _grow(0.65, other_cov=0.45, layers=[(24.0, 1)]) == 24
+    # the same layer barely showing (under 0.4) does not stop the ring
+    assert _grow(0.65, other_cov=0.2, layers=[(24.0, 1)]) > 24
+
+
+def test_ring_growth_is_capped():
+    # coverage that stays high far out is not a pleated edge any more
+    assert _grow(0.7) <= 20 + 8
