@@ -43,14 +43,26 @@ SAMPLE_N = 20000
 SILHOUETTE_N = 2000
 # k-means restarts per k and iterations per restart.
 KMEANS_RESTARTS, KMEANS_ITERS = 3, 30
+# Smallest distance (feature units) allowed between two cluster centers; a k whose
+# centers come closer is rejected. Measured over the 76 reference photos with
+# tools/color_report.py: one shaded red ribbon (A13-15) splits into centers 7.0 apart
+# and a shaded single satin with RGB noise sigma 3 into 8.8, while the closest
+# genuinely different ribbons (S58-17 cream vs white) are 14.9 apart.
+MIN_CENTER_SEP = 11.0
 # Seed for every random choice (sampling, k-means init): same input, same output.
 SEED = 0
 # A same-label connected blob smaller than this (canvas units^2) is a motif/text/sparkle
 # blob and is absorbed into the group surrounding it.
 MOTIF_MAX_UNITS2 = 900.0
-# Glitter split: a group is split in two when at least SPLIT_MIN_FRAC of its pixels
+# Glitter split: a cluster is split in two when at least SPLIT_MIN_FRAC of its pixels
 # have grain below SATIN_GRAIN (satin) and as many above GLITTER_GRAIN (sparkle).
-SATIN_GRAIN, GLITTER_GRAIN, SPLIT_MIN_FRAC = 1.5, 6.0, 0.2
+# The grain feature alone leaves same-hue satin + glitter in one cluster on two
+# reference photos: S18-15B red (40% satin / 43% sparkle) and S5-15 gold (38% / 47%).
+# The highest min(satin, sparkle) share of any other cluster over the 76 photos is
+# 0.19 (A13-15B), hence 0.28. Satin grain is 0.2-0.8, glitter 10-13 (S46), so the
+# split point between the two bounds (3.75) leaves no satin edge slivers in the
+# glitter half on S18-15B / S5-15 (0 components thinner than 4 px).
+SATIN_GRAIN, GLITTER_GRAIN, SPLIT_MIN_FRAC = 1.5, 6.0, 0.28
 # Print blobs on the tails (text, logos) up to this share of the mask are absorbed when
 # at least PRINT_RING_DOM of a PRINT_RING_UNITS-wide ring around them is one other group
 # and at most PRINT_RING_OUT of that ring lies outside the mask.
@@ -65,7 +77,7 @@ TEXTURE_EDGE_UNITS = 4.0
 TEXTURE_MIN_TAIL_UNITS2 = 1500.0
 # texture above this marks a pattern group. Tuned on S46-15 (glitter 20.1, satin <= 2.8)
 # and S35-19 (hearts 11.4, satin <= 1.2); over all 76 reference photos plain ribbon
-# groups measure <= 2.83 and patterned ones >= 8.47.
+# groups measure <= 2.83 and patterned ones >= 8.47 (table: tools/color_report.py).
 PATTERN_T = 5.0
 
 
@@ -96,16 +108,16 @@ def _kmeans(x: np.ndarray, k: int, rng: np.random.Generator) -> tuple[np.ndarray
     """k-means++ with restarts; returns (centers, inertia) of the best run, or
     (None, inf) when the points hold fewer than k distinct values."""
     best_c, best_in = None, np.inf
-    for _ in range(KMEANS_RESTARTS):
+    for _restart in range(KMEANS_RESTARTS):
         c = [x[rng.integers(len(x))]]
         d2 = ((x - c[0]) ** 2).sum(1)
-        for _ in range(1, k):
+        for _center in range(1, k):
             if d2.max() <= 1e-9:  # fewer distinct points than k: k is not attainable
                 return None, np.inf
             c.append(x[rng.choice(len(x), p=d2 / d2.sum())])
             d2 = np.minimum(d2, ((x - c[-1]) ** 2).sum(1))
         c = np.array(c)
-        for _ in range(KMEANS_ITERS):
+        for _step in range(KMEANS_ITERS):
             lab = _nearest(x, c)
             new = np.array([x[lab == j].mean(0) if (lab == j).any() else c[j] for j in range(k)])
             if np.allclose(new, c):
@@ -140,8 +152,15 @@ def _silhouette(x: np.ndarray, lab: np.ndarray) -> float:
     return float(np.mean([s[lab == j].mean() for j in ks]))
 
 
+def _min_sep(c: np.ndarray) -> float:
+    d = np.sqrt(((c[:, None, :] - c[None, :, :]) ** 2).sum(2))
+    d[np.eye(len(c), dtype=bool)] = np.inf
+    return float(d.min())
+
+
 def _cluster(feat: np.ndarray, max_groups: int) -> np.ndarray:
-    """Cluster centers for the feature rows, k in 2..max_groups by silhouette."""
+    """Cluster centers for the feature rows, k in 2..max_groups by silhouette among
+    the k whose centers are all MIN_CENTER_SEP apart; one center when none is."""
     rng = np.random.default_rng(SEED)
     x = feat[rng.choice(len(feat), min(SAMPLE_N, len(feat)), replace=False)].astype(np.float64)
     xs_idx = rng.choice(len(x), min(SILHOUETTE_N, len(x)), replace=False)
@@ -150,6 +169,8 @@ def _cluster(feat: np.ndarray, max_groups: int) -> np.ndarray:
         c, _ = _kmeans(x, k, rng)
         if c is None:
             break
+        if _min_sep(c) < MIN_CENTER_SEP:  # one color split by shading or noise
+            continue
         s = _silhouette(x[xs_idx], _nearest(x[xs_idx], c))
         if s > best_s:
             best_c, best_s = c, s

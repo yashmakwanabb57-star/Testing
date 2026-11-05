@@ -73,18 +73,18 @@ def s35():
     return p, *pixel_groups(p)
 
 
-# S46-15 working-pixel points chosen by inspecting the photo (row 900 crosses
-# all tail stripes): left/right glitter stripe, green tail, gold tail.
-S46_GLITTER = [(160, 900), (415, 900)]
-S46_GREEN = [(100, 900), (460, 900)]
-S46_GOLD = [(220, 900), (370, 900)]
+# S46-15 canvas points (600x850 frame), chosen by inspecting the photo at working
+# pixel row 900, which crosses all tail stripes (px x 160/415 glitter, 100/460
+# green, 220/370 gold), mapped back to canvas once.
+S46_GLITTER = [(212, 633), (388, 633)]
+S46_GREEN = [(171, 633), (419, 633)]
+S46_GOLD = [(254, 633), (357, 633)]
 
 
 def test_glitter_is_pattern(s46):
     p, labels, groups = s46
-    glitter = {_label_at(labels, x, y) for x, y in S46_GLITTER}
-    green = {_label_at(labels, x, y) for x, y in S46_GREEN}
-    gold = {_label_at(labels, x, y) for x, y in S46_GOLD}
+    pick = lambda pts: {_label_at(labels, *canvas_to_px(p, x, y)) for x, y in pts}
+    glitter, green, gold = pick(S46_GLITTER), pick(S46_GREEN), pick(S46_GOLD)
     assert len(glitter) == len(green) == len(gold) == 1
     assert len(glitter | green | gold) == 3
     assert groups[glitter.pop()].pattern is True
@@ -137,3 +137,68 @@ def test_single_color_is_one_group():
     labels, groups = pixel_groups(_synthetic(lab))
     assert len(groups) == 1 and groups[0].area == pytest.approx(1.0)
     assert (labels == 0).all()
+
+
+def _noisy(p: Prepared, sigma: float, seed: int = 1) -> Prepared:
+    rng = np.random.default_rng(seed)
+    rgb = np.clip(p.rgb.astype(np.float64) + rng.normal(0, sigma, p.rgb.shape), 0, 255).astype(np.uint8)
+    return Prepared(rgb=rgb, mask=p.mask, axis_x=p.axis_x, head=p.head, tails_top_y=p.tails_top_y,
+                    bottom_y=p.bottom_y, scale=p.scale)
+
+
+def test_noisy_shaded_single_color_is_one_group():
+    lab = np.zeros((600, 300, 3), np.float32)
+    lab[..., 0] = np.linspace(30, 80, 600)[:, None]  # satin shine/shadow
+    lab[..., 1], lab[..., 2] = 35, 20
+    labels, groups = pixel_groups(_noisy(_synthetic(lab), sigma=3.0))
+    assert len(groups) == 1
+    assert (labels == 0).all()
+    assert groups[0].pattern is False
+
+
+def test_noisy_two_colors_still_two_groups():
+    lab = np.zeros((600, 400, 3), np.float32)
+    lab[:, :200, 0] = np.linspace(30, 80, 600)[:, None]
+    lab[:, :200, 1], lab[:, :200, 2] = 35, 20
+    lab[:, 200:] = (55, -10, -40)
+    _, groups = pixel_groups(_noisy(_synthetic(lab), sigma=3.0))
+    assert len(groups) == 2
+
+
+# S58-17: block of white print ("Bomholt Intercoiffure ...") on the black centre
+# tail, canvas x 268..327, y 460..683 (working px x 260..345, y 640..960).
+S58_TEXT_BOX = ((268, 460), (327, 683))
+
+
+def test_tail_text_absorbed_and_not_pattern():
+    p = prepare((PHOTOS / "S58-17.png").read_bytes())
+    labels, groups = pixel_groups(p)
+    (x0, y0), (x1, y1) = (canvas_to_px(p, *c) for c in S58_TEXT_BOX)
+    box = labels[int(y0):int(y1), int(x0):int(x1)]
+    lum = p.rgb[int(y0):int(y1), int(x0):int(x1)].mean(axis=2)
+    assert (lum > 150).mean() > 0.05  # the box really holds light print
+    black = int(np.bincount(box.ravel()).argmax())
+    assert max(groups[black].rgb) < 60
+    assert (box == black).mean() > 0.97  # print absorbed into the black ribbon
+    assert groups[black].pattern is False
+
+
+def test_max_groups_bound(s46):
+    p = s46[0]
+    labels, groups = pixel_groups(p, max_groups=2)
+    assert 1 <= len(groups) <= 2
+    assert set(np.unique(labels[p.mask])) == set(range(len(groups)))
+
+
+def test_tiny_mask_does_not_crash():
+    rgb = np.full((120, 60, 3), 255, np.uint8)
+    mask = np.zeros((120, 60), bool)
+    mask[50:58, 20:28] = True
+    rgb[50:58, 20:28] = (200, 30, 40)
+    rgb[53:55, 23:25] = (20, 40, 200)  # enclosed blob: exercises print/motif absorption
+    p = Prepared(rgb=rgb, mask=mask, axis_x=24.0, head=(24.0, 52.0, 3.0), tails_top_y=0.0,
+                 bottom_y=57.0, scale=0.01)
+    labels, groups = pixel_groups(p)
+    assert (labels[~mask] == -1).all() and (labels[mask] >= 0).all()
+    assert 1 <= len(groups) <= 2
+    assert sum(g.area for g in groups) == pytest.approx(1.0)
