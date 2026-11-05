@@ -53,3 +53,11 @@ def test_logo_served():
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/webp"
     assert r.content[:4] == b"RIFF" and r.content[8:12] == b"WEBP"
+
+
+def test_svg_source_has_not_ready_banner():
+    html = client.get("/").text
+    assert re.search(r'<div[^>]*id="svg-source"[^>]*hidden', html)
+    assert 'id="svg-source-note"' in html and 'id="svg-source-text"' in html
+    js = (STATIC / "app.js").read_text(encoding="utf-8")
+    assert "sourceNotice" in js

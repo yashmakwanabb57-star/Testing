@@ -2,7 +2,9 @@
 // Run: node --test tests/js/workbench.test.mjs (tests/test_js.py runs it when node is on PATH)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { downloadBlockers, errorText, flagItems, parseValue } from '../../app/static/logic.js';
+import {
+  SOURCE_NOT_READY, downloadBlockers, errorText, flagItems, parseValue, sourceNotice,
+} from '../../app/static/logic.js';
 import { applyConfig } from '../../app/static/simulator.js';
 
 // ------------------------------------------------------------ fixtures
@@ -252,4 +254,16 @@ test('confident tail stripes are not flagged', () => {
   m.groups[1].confidence = 0.9;
   m.parts.push(stripePart(0, 0, 0.9), stripePart(1, 0, 0.9));
   assert.deepEqual(flagItems(m, [], false), []);
+});
+
+// ------------------------------------------------------------ SVG source gate
+
+test('the SVG source carries a not-ready banner while download is blocked', () => {
+  assert.equal(SOURCE_NOT_READY, 'Not ready for the shop - fix or confirm the items listed first.');
+  assert.equal(sourceNotice(ready()), null);
+  assert.equal(sourceNotice(ready({ confirmed: new Set() })), SOURCE_NOT_READY);
+  assert.equal(sourceNotice(ready({ issues: [{ code: 'group_order', message: 'm', element: null }] })), SOURCE_NOT_READY);
+  assert.equal(sourceNotice(ready({ render: { dirty: true, inFlight: false, error: null } })), SOURCE_NOT_READY);
+  // nothing to show yet: no banner over an empty source
+  assert.equal(sourceNotice(ready({ model: null, svg: null })), null);
 });

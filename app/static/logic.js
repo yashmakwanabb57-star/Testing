@@ -87,6 +87,15 @@ export function downloadBlockers(s) {
   return out;
 }
 
+export const SOURCE_NOT_READY = 'Not ready for the shop - fix or confirm the items listed first.';
+
+// Banner over the "SVG source" view: the source stays readable for debugging, but while
+// Download is blocked it must not pass for a shop-ready file. null: no banner.
+export function sourceNotice(s) {
+  if (!s.svg) return null;
+  return downloadBlockers(s).length ? SOURCE_NOT_READY : null;
+}
+
 export function groupColor(model, category) {
   const gs = model.groups.filter((g) => g.category === category).sort((a, b) => b.area - a.area);
   return gs.length ? hex(gs[0].rgb) : null;

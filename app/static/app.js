@@ -5,7 +5,7 @@
 import { applyConfig, glitterPattern, COLOR_INDICES } from './simulator.js';
 import {
   MAX_COUNT, POINT_KINDS, errorText, hex, flagItems,
-  downloadBlockers as blockersFor, groupColor, tailGroups, parseValue, tailCheckKey,
+  downloadBlockers as blockersFor, groupColor, tailGroups, parseValue, tailCheckKey, sourceNotice,
 } from './logic.js';
 
 export { errorText, flagItems, parseValue, tailGroups, hex };
@@ -608,9 +608,7 @@ export const views = {
 
   preview() {
     const box = $('preview');
-    const src = $('svg-source');
-    src.hidden = !state.sim.source;
-    src.textContent = state.svg || '';
+    views.source();
     if (!state.svg) {
       box.replaceChildren(el('p', { class: 'muted center', text: state.analyzing ? 'Analyzing the photo...' : 'The generated SVG appears here.' }));
       views.overlay();
@@ -632,6 +630,16 @@ export const views = {
     });
     box.replaceChildren(svg);
     views.overlay();
+  },
+
+  // The source of the last render, with a not-ready banner while Download is blocked.
+  source() {
+    $('svg-source').hidden = !state.sim.source;
+    $('svg-source-text').textContent = state.svg || '';
+    const note = sourceNotice(state);
+    const box = $('svg-source-note');
+    box.hidden = !note;
+    box.textContent = note ? `${note} ${downloadBlockers().join(' ')}` : '';
   },
 
   overlay() {
@@ -752,6 +760,7 @@ export const views = {
   download() {
     const blockers = downloadBlockers();
     $('download').disabled = blockers.length > 0;
+    views.source();
     $('download-reason').textContent = blockers.length ? blockers.join(' ') : `Ready: ${state.filename}`;
     notify();
   },
