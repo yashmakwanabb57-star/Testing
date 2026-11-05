@@ -49,3 +49,15 @@ def test_flagged_rules():
     low = _model()
     low.groups[0].confidence = 0.5
     assert is_flagged(low, [])
+
+
+def test_low_confidence_points_ring_is_flagged():
+    # S41-15: a points ring whose rotational symmetry is weak (detector confidence
+    # below FLAG_BELOW) is a misread layer as often as not - ask the user to check
+    m = _model()
+    pts = Part("points-1", "points", {"cx": 300.0, "cy": 175.0, "kind": "star", "count": 6, "r_inner": 50.0,
+                                      "r_outer": 90.0, "rotation_deg": 0.0, "width_ratio": 0.5}, 0, 20, 0.9)
+    m.parts.append(pts)
+    assert not is_flagged(m, [])
+    pts.confidence = 0.55
+    assert is_flagged(m, [])
