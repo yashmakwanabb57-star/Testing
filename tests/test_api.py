@@ -128,3 +128,17 @@ def test_render_rejects_non_finite_numbers():
         raw = json.dumps({"model": model}).replace("0.123456", token)
         r = client.post("/api/render", content=raw, headers={"content-type": "application/json"})
         assert r.status_code == 422, token
+
+
+def test_render_rejects_degenerate_geometry():
+    for key, value in (("r_outer", -10), ("r_inner", 0), ("r_inner", 500), ("width_ratio", 0),
+                       ("cx", 900), ("cy", -20)):
+        model, pts = _points_model()
+        pts["params"][key] = value
+        r = client.post("/api/render", json={"model": model})
+        assert r.status_code == 422, (key, value)
+        assert r.json()["detail"] == "The model data is invalid."
+    model = _post("S46-15.png", _png()).json()["model"]
+    tail = next(p for p in model["parts"] if p["role"] == "tail_stripe")
+    tail["params"]["top_y"] = tail["params"]["bottom_y"]
+    assert client.post("/api/render", json={"model": model}).status_code == 422

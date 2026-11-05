@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from rosette.model import ColorGroup, Part, RosetteModel
 from rosette.pipeline import RenderResult, analyze, is_flagged, render
 
@@ -85,3 +87,11 @@ def test_s31_low_confidence_tails_are_flagged():
     stripes = [q for q in model.parts if q.role == "tail_stripe"]
     assert stripes and all(q.confidence < 0.6 for q in stripes)
     assert is_flagged(model, render(model).issues)
+
+
+@pytest.mark.slow
+def test_every_reference_analysis_passes_check_params():
+    # the pipeline must never produce a model that /api/render rejects
+    for f in sorted(PHOTOS.iterdir()):
+        model = analyze(f.read_bytes())
+        RosetteModel.from_json(model.to_json())  # runs check_params on every part

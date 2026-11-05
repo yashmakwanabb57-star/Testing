@@ -12,9 +12,23 @@ _COUNT_PARAMS = ("count", "tails_count", "tail_index", "stripe_index")
 _LIST_PARAMS = ("stripes", "stripes_bottom")
 
 
+_POSITIVE = ("r", "r_inner", "r_outer", "width_ratio", "top_width", "bottom_width")
+_CANVAS = {"cx": 600, "cy": 850}  # viewBox 0 0 600 850
+
+
+def _number(params: dict, k: str) -> float:
+    v = params[k]
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+        raise ValueError(f"param {k} must be a finite number")
+    return float(v)
+
+
 def check_params(params: dict) -> None:
     """Raise ValueError for params that would hang or break the builders: counts must be
-    ints in 1..MAX_COUNT (indices 0..MAX_COUNT), numbers must be finite, stripe lists short."""
+    ints in 1..MAX_COUNT (indices 0..MAX_COUNT), numbers must be finite, stripe lists short.
+    Geometry must not be degenerate: radii, width_ratio and tail widths > 0, r_inner <
+    r_outer, top_y < bottom_y, and the center (cx, cy) on the 600x850 canvas. Every
+    analyze output on the 76 reference photos passes these rules."""
     for k, v in params.items():
         if k in _COUNT_PARAMS:
             lo = 0 if k.endswith("index") else 1
@@ -26,6 +40,16 @@ def check_params(params: dict) -> None:
                 raise ValueError(f"param {k} too long")
         elif isinstance(v, float) and not math.isfinite(v):
             raise ValueError(f"param {k} not finite")
+    for k in _POSITIVE:
+        if k in params and not _number(params, k) > 0:
+            raise ValueError(f"param {k} must be above 0")
+    for k, hi in _CANVAS.items():
+        if k in params and not 0 <= _number(params, k) <= hi:
+            raise ValueError(f"param {k} is off the canvas")
+    if "r_inner" in params and "r_outer" in params and not params["r_inner"] < params["r_outer"]:
+        raise ValueError("param r_inner must be below r_outer")
+    if "top_y" in params and "bottom_y" in params and not _number(params, "top_y") < _number(params, "bottom_y"):
+        raise ValueError("param top_y must be above bottom_y")
 
 
 @dataclass
