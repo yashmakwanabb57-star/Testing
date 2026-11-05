@@ -1,3 +1,89 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Rosette SVG generator</title></head>
-<body><p>Rosette SVG generator</p></body></html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rosette SVG generator</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>Rosette to SVG</h1>
+  <span id="file-name" class="muted">No photo loaded</span>
+  <span id="status" class="status" aria-live="polite"></span>
+  <label class="btn primary" for="file-input">Upload photo</label>
+  <input id="file-input" type="file" accept=".png,.webp,.jpg,.jpeg,image/png,image/webp,image/jpeg" hidden>
+</header>
+
+<div id="error-banner" class="banner" role="alert" hidden>
+  <span id="error-text"></span>
+  <button id="error-close" class="btn small" type="button">Dismiss</button>
+</div>
+
+<main class="workbench">
+  <!-- Column 1: photo -->
+  <section class="col" id="col-photo">
+    <h2>Photo</h2>
+    <div id="drop-zone" class="drop-zone">
+      <img id="photo" alt="Uploaded rosette photo" hidden>
+      <p id="drop-hint" class="muted">Drop a PNG, WEBP or JPG photo here, or use Upload photo.</p>
+    </div>
+  </section>
+
+  <!-- Column 2: SVG preview with simulator controls -->
+  <section class="col" id="col-preview">
+    <h2>Generated SVG</h2>
+    <div class="sim-controls" id="sim-controls">
+      <div class="color-pickers" id="color-pickers"></div>
+      <div class="sim-row">
+        <span class="label-inline">Color 2</span>
+        <div class="seg" role="group" aria-label="Color 2 fill">
+          <button type="button" id="c2-solid" class="seg-btn active">Solid</button>
+          <button type="button" id="c2-pattern" class="seg-btn">Pattern</button>
+        </div>
+        <span class="label-inline">Rose</span>
+        <div class="seg" role="group" aria-label="Rose">
+          <button type="button" id="rose-on" class="seg-btn">On</button>
+          <button type="button" id="rose-off" class="seg-btn">Off</button>
+        </div>
+      </div>
+      <div class="sim-row">
+        <label class="check"><input type="checkbox" id="overlay-toggle"> Overlay photo</label>
+        <input type="range" id="overlay-slider" min="0" max="100" value="50" aria-label="SVG opacity over the photo" disabled>
+        <label class="check"><input type="checkbox" id="source-toggle"> SVG source</label>
+      </div>
+    </div>
+    <div class="stage" id="stage">
+      <img id="overlay-photo" alt="" hidden>
+      <div id="preview" class="preview"><p class="muted center">The generated SVG appears here.</p></div>
+    </div>
+    <pre id="svg-source" class="svg-source" hidden></pre>
+  </section>
+
+  <!-- Column 3: parts, colors, checks, download -->
+  <section class="col" id="col-model">
+    <h2>Detected parts</h2>
+    <div id="parts" class="list"><p class="muted">No parts yet.</p></div>
+    <label class="check rose-model"><input type="checkbox" id="model-rose" disabled> Draw the rose in the SVG</label>
+
+    <h2>Colors</h2>
+    <div id="groups" class="list"><p class="muted">No colors yet.</p></div>
+
+    <div id="warnings-block" hidden>
+      <h2>Warnings</h2>
+      <div id="warnings" class="list"></div>
+    </div>
+
+    <h2>Checks</h2>
+    <ul id="checks" class="checks"></ul>
+
+    <div class="download">
+      <p id="download-reason" class="muted"></p>
+      <button type="button" id="download" class="btn primary wide" disabled>Download SVG</button>
+    </div>
+  </section>
+</main>
+
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>
