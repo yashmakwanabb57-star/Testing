@@ -51,11 +51,12 @@ def render(model: RosetteModel) -> RenderResult:
 
 
 def is_flagged(model: RosetteModel, issues: list[Issue]) -> bool:
-    """True when the user is asked to check something: a low-confidence color, a
-    points ring read with low confidence (weak rotational symmetry), an unrecognised
-    (placeholder) part, any warning, or a validation issue."""
+    """True when the user is asked to check something: a low-confidence color, a part
+    of any role read with low confidence (head, ring, points, center, tail stripe), an
+    unrecognised (placeholder) part, any warning, or a validation issue. app/static/logic.js
+    flagItems applies the same rules."""
     return (any(g.confidence < FLAG_BELOW for g in model.groups)
-            or any(q.role == "points" and q.confidence < FLAG_BELOW for q in model.parts)
+            or any(q.confidence < FLAG_BELOW for q in model.parts)
             or any(q.role == "unknown" for q in model.parts)
             or bool(model.warnings)
             or bool(issues))

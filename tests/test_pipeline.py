@@ -68,3 +68,20 @@ def test_merged_print_and_satin_is_flagged():
     model = analyze(_photo("S2-15B"))
     assert any("partly patterned" in w for w in model.warnings)
     assert is_flagged(model, render(model).issues)
+
+
+def test_low_confidence_part_of_any_role_is_flagged():
+    # head, ring, center and tail stripe confidences count, not just points
+    for role in ("head", "ring", "center", "tail_stripe"):
+        m = _model(role=role)
+        assert not is_flagged(m, []), role
+        m.parts[0].confidence = 0.55
+        assert is_flagged(m, []), role
+
+
+def test_s31_low_confidence_tails_are_flagged():
+    # S31-15: every tail stripe at 0.545 used to come back unflagged
+    model = analyze(_photo("S31-15"))
+    stripes = [q for q in model.parts if q.role == "tail_stripe"]
+    assert stripes and all(q.confidence < 0.6 for q in stripes)
+    assert is_flagged(model, render(model).issues)

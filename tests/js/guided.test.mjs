@@ -207,3 +207,21 @@ test('color questions: flagged first, then model order, with a part noun', () =>
   assert.equal(qs[0].uses, 2);
   assert.deepEqual(colorQuestions(null), []);
 });
+
+// ------------------------------------------------------------ flagged parts in step 2
+
+test('a flagged tails card still needs its Looks right in step 2, and is not a step 3 warning', () => {
+  const m = model();
+  for (const p of m.parts) if (p.role === 'tail_stripe') p.confidence = 0.545;
+  const partsOnly = new Set(['part:head', 'part:points-1']);
+  assert.match(advanceBlocker(2, st({ model: m, confirmed: partsOnly })), /1 of 3 left/);
+  assert.equal(canAdvance(2, st({ model: m, confirmed: new Set(ALL_PARTS) })), true);
+  // step 3 does not count the tails flag as a warning
+  assert.equal(canAdvance(3, st({ model: m, confirmed: new Set(ALL_GROUPS) })), true);
+});
+
+test('a low-confidence head is flagged and needs its Looks right', () => {
+  const m = model();
+  m.parts[0].confidence = 0.4;
+  assert.match(advanceBlocker(2, st({ model: m, confirmed: new Set(['part:points-1', tailCheckKey(0)]) })), /1 of 3 left/);
+});

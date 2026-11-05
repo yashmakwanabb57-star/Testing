@@ -212,3 +212,44 @@ test('the rose toggle shows st4 or st_circel', () => {
   assert.equal(one(off, '.st4').style.display, 'none');
   assert.equal(one(off, '.st_circel').style.display, 'inline');
 });
+
+// ------------------------------------------------------------ part confidence (all roles)
+
+function stripePart(t, s, conf) {
+  return {
+    id: `tail-${t}-${s}`, role: 'tail_stripe', color_group: 0, z: 1, confidence: conf,
+    params: { tails_count: 2, top_y: 300, bottom_y: 800, top_width: 80, bottom_width: 120, spread_deg: 10,
+      stripes: [0.5, 0.5], stripes_bottom: [0.5, 0.5], tail_index: t, stripe_index: s },
+  };
+}
+
+test('a low-confidence part of any role is flagged, like is_flagged', () => {
+  for (const role of ['head', 'ring', 'center']) {
+    const m = model();
+    m.groups[1].confidence = 0.9;
+    assert.deepEqual(flagItems(m, [], false), [], role);
+    m.parts[0].role = role;
+    m.parts[0].confidence = 0.55;
+    assert.deepEqual(flagItems(m, [], false).map((f) => f.key), ['part:head'], role);
+  }
+});
+
+test('low-confidence tail stripes give one flag for their tails card', () => {
+  const m = model();
+  m.groups[1].confidence = 0.9;
+  m.parts.push(stripePart(0, 0, 0.545), stripePart(0, 1, 0.545), stripePart(1, 0, 0.545), stripePart(1, 1, 0.545));
+  const flags = flagItems(m, [], false);
+  assert.deepEqual(flags.map((f) => f.key), ['tails:0']);
+  assert.match(flags[0].text, /Tails/);
+  // confirming the tails card clears the blocker
+  const s = ready({ model: m, confirmed: new Set() });
+  assert.match(downloadBlockers(s)[0], /1 of 1 flagged/);
+  assert.deepEqual(downloadBlockers(ready({ model: m, confirmed: new Set(['tails:0']) })), []);
+});
+
+test('confident tail stripes are not flagged', () => {
+  const m = model();
+  m.groups[1].confidence = 0.9;
+  m.parts.push(stripePart(0, 0, 0.9), stripePart(1, 0, 0.9));
+  assert.deepEqual(flagItems(m, [], false), []);
+});

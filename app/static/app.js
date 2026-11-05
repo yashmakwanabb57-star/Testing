@@ -537,7 +537,7 @@ function tailCard(parts, n) {
     el('div', { class: 'card-head' },
       el('strong', { text: 'Tails' }),
       el('span', { class: 'muted', text: ` ${first.params.tails_count} x ${stripes.length} stripe(s)` })),
-    grid, stripeList, confirmBox(key));
+    grid, stripeList, el('p', { class: 'flag-text', text: 'Please confirm' }), confirmBox(key));
 }
 
 export const views = {

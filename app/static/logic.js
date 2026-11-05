@@ -26,7 +26,14 @@ export function errorText(status, body) {
 
 export const hex = (rgb) => '#' + rgb.map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
 
+const LOW_TEXT = {
+  head: 'head read with low confidence', ring: 'ring read with low confidence',
+  points: 'points read with low confidence', center: 'center read with low confidence',
+};
+
 // Mirrors rosette/pipeline.py is_flagged: one item per thing the user must confirm.
+// A part of any role below FLAG_BELOW is flagged; tail stripes are confirmed per tails
+// card (tailCheckKey), so a low-confidence tail group gives one item.
 export function flagItems(model, issues, serverFlagged) {
   if (!model) return [];
   const items = [];
@@ -35,9 +42,17 @@ export function flagItems(model, issues, serverFlagged) {
       items.push({ key: `group:${g.id}`, text: `Color group ${g.id}: is Color ${g.category ?? '-'} right?` });
     }
   }
+  const tails = tailGroups(model);
+  const tailFirst = new Map(tails.map((ps, n) => [ps[0], n]));
   for (const p of model.parts) {
-    if (p.role === 'points' && p.confidence < FLAG_BELOW) {
-      items.push({ key: `part:${p.id}`, text: `${p.id}: points read with low confidence` });
+    if (p.role === 'tail_stripe') {
+      if (!tailFirst.has(p)) continue;
+      const n = tailFirst.get(p);
+      if (tails[n].some((q) => q.confidence < FLAG_BELOW)) {
+        items.push({ key: tailCheckKey(n), text: 'Tails: stripes read with low confidence' });
+      }
+    } else if (p.role !== 'unknown' && p.confidence < FLAG_BELOW) {
+      items.push({ key: `part:${p.id}`, text: `${p.id}: ${LOW_TEXT[p.role] || 'read with low confidence'}` });
     } else if (p.role === 'unknown') {
       // build warns "part <id>: unrecognised shape..."; that warning is shown on this part
       // card and confirmed with it, so it is not listed twice.
@@ -163,12 +178,13 @@ export function advanceBlocker(step, s) {
   if (step === 3) {
     // Every color question needs an answer (Yes), flagged or not: a wrong color in a wrong
     // layer is the worst failure. A pick through Change... clears the answer, so it gets a
-    // fresh Yes. Warnings (and the server-flagged fallback) must be confirmed as well.
+    // fresh Yes. Warnings (and the server-flagged fallback) must be confirmed as well;
+    // part and tails flags are confirmed in step 2.
     const qs = colorQuestions(s.model, s.issues, s.flagged);
     const open = qs.filter((q) => !s.confirmed.has(q.key)).length;
     if (open) return `Answer every color question first (${open} of ${qs.length} left).`;
     const warnings = flagItems(s.model, s.issues, s.flagged)
-      .filter((f) => !f.key.startsWith('part:') && !f.key.startsWith('group:') && !s.confirmed.has(f.key)).length;
+      .filter((f) => !/^(part|tails|group):/.test(f.key) && !s.confirmed.has(f.key)).length;
     if (warnings) return `Confirm ${warnings} warning(s) first.`;
   }
   if (step === 4) {
