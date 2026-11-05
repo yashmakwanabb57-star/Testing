@@ -222,3 +222,10 @@ def prepare(data: bytes) -> Prepared:
     return Prepared(rgb=np.ascontiguousarray(rgb, dtype=np.uint8), mask=mask, axis_x=ax,
                     head=head, tails_top_y=tails_top, bottom_y=float(bottom),
                     scale=(bottom - top) / CANVAS_SPAN)
+
+
+def canvas_to_px(p: Prepared, x: float, y: float) -> tuple[float, float]:
+    """Canvas point (600x850 frame: x=300 on the axis, y 25..825 = mask top..bottom)
+    -> working-pixel (x, y)."""
+    top = float(np.flatnonzero(p.mask.any(axis=1))[0])
+    return p.axis_x + (x - 300.0) * p.scale, top + (y - 25.0) * p.scale

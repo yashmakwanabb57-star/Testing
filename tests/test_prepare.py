@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from rosette.vision.prepare import InputError, Prepared, prepare
+from rosette.vision.prepare import InputError, Prepared, canvas_to_px, prepare
 from tools.rasterize import rasterize
 
 REF = Path(__file__).resolve().parent.parent / "reference"
@@ -129,3 +129,12 @@ def test_corrupt_bytes_raises():
     for data in (b"", b"definitely not an image", _png(Image.new("RGB", (50, 100), "red"))[:40]):
         with pytest.raises(InputError, match="^Could not read the image file.$"):
             prepare(data)
+
+
+def test_canvas_to_px(s46):
+    top = float(np.flatnonzero(s46.mask.any(axis=1))[0])
+    assert canvas_to_px(s46, 300, 25) == pytest.approx((s46.axis_x, top))
+    assert canvas_to_px(s46, 300, 825)[1] == pytest.approx(s46.bottom_y)
+    x, y = canvas_to_px(s46, 400, 425)
+    assert x == pytest.approx(s46.axis_x + 100 * s46.scale)
+    assert y == pytest.approx(top + 400 * s46.scale)
