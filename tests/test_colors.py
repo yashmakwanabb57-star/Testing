@@ -260,6 +260,15 @@ def test_star_tips_in_a_ring_are_not_absorbed_as_motifs():
     a = stats[1:, cv2.CC_STAT_AREA] / p.scale ** 2
     tips = ((d > 0.4 * r) & (d < r) & (a > 500)).sum()
     assert tips >= 6
+    # and they become the points layer the designer draws: 6 tips at k * 60 deg
+    # (designer file: blue tips centered at 0, 60, ..., 300 deg around the head)
+    from rosette.vision.parts import detect_parts
+    pts = [q for q in detect_parts(p, labels) if q.role == "points" and q.color_group == dark]
+    assert len(pts) == 1
+    q = pts[0].params
+    assert q["count"] == 6 and q["kind"] in ("star", "diamond", "petal")
+    rot = float(q["rotation_deg"]) % 60
+    assert min(rot, 60 - rot) < 8
 
 
 def test_stripe_changes_do_not_cross_the_background_between_tails():
