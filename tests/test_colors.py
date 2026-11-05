@@ -236,3 +236,12 @@ def test_partly_patterned_plain_group_reported():
 def test_clean_groups_not_reported_as_partly_patterned(s35):
     p, labels, groups = s35
     assert mixed_texture_groups(p, labels, groups) == []
+
+
+@pytest.mark.parametrize("sid", ["S80-22", "S56-17B"])
+def test_similar_stripes_apart_across_a_third_stripe(sid):
+    # S80-22: light pink outer stripes and the burgundy middle, with pink glitter
+    # stripes between them; S56-17B likewise. The two satin colors never touch, so
+    # comparing only neighbouring pixels saw no stripe edges and kept them merged.
+    outer, middle = _row_labels(sid, (0.04, 0.5))
+    assert outer != middle

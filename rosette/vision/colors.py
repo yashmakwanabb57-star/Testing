@@ -75,6 +75,10 @@ SATIN_GRAIN, GLITTER_GRAIN, SPLIT_MIN_FRAC = 1.5, 6.0, 0.28
 # the canonical photos (docs/pipeline.md): merged similar ribbons measure sep 10.6-20,
 # smaller half >= 0.19, tail half >= 0.35, row/column ratio >= 3.0; the closest
 # single ribbons fail at least one test (sep 9.7, half 0.18 / tail half 0.18, ratio 1.0).
+# Changes are counted between consecutive pixels of the cluster along a row or column,
+# skipping other groups' pixels between them (a glitter stripe between two satins:
+# S80-22, S56-17B, S40-15). Over the 76 photos this adds exactly those three splits,
+# all with 3-color designer files; no other cluster's decision changes.
 STRIPE_SPLIT_SEP, STRIPE_MIN_SHARE, STRIPE_MIN_TAIL_SHARE, STRIPE_MIN_HV = 10.0, 0.17, 0.3, 2.5
 # Print blobs on the tails (text, logos) up to this share of the mask are absorbed when
 # at least PRINT_RING_DOM of a PRINT_RING_UNITS-wide ring around them is one other group
@@ -274,13 +278,21 @@ def _split_stripes(centers: np.ndarray, flat_feat: np.ndarray, feat_img: np.ndar
         half[region] = _nearest_chunked(feat_img[region], sub)
         if np.bincount(half[region], minlength=2).min() < STRIPE_MIN_TAIL_SHARE * region.sum():
             continue
-        along_rows = ((half[:, :-1] >= 0) & (half[:, 1:] >= 0) & (half[:, :-1] != half[:, 1:])).sum()
-        along_cols = ((half[:-1] >= 0) & (half[1:] >= 0) & (half[:-1] != half[1:])).sum()
+        along_rows, along_cols = _changes(half), _changes(half.T)
         if along_rows < STRIPE_MIN_HV * max(along_cols, 1):
             continue
         out[j] = sub[0].astype(centers.dtype)
         out.append(sub[1].astype(centers.dtype))
     return np.array(out)
+
+
+def _changes(half: np.ndarray) -> int:
+    """Times the half label changes from one labelled pixel to the next labelled
+    pixel along each row (pixels of other groups in between are skipped: two similar
+    stripes are often kept apart by a third one, e.g. glitter between two satins)."""
+    ys, xs = np.nonzero(half >= 0)
+    v = half[ys, xs]
+    return int(((ys[1:] == ys[:-1]) & (v[1:] != v[:-1])).sum())
 
 
 def _absorb_prints(labels: np.ndarray, mask: np.ndarray, tails_top: float, max_px: float,
