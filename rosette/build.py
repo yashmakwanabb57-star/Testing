@@ -43,7 +43,8 @@ def build(model: RosetteModel) -> list[Shape]:
             finish(p, [ring(q["cx"], q["cy"], q["r_outer"], q["r_inner"])])
         elif p.role == "points":
             finish(p, points_ring(q["cx"], q["cy"], q["kind"], int(q["count"]), q["r_inner"],
-                                  q["r_outer"], q["rotation_deg"], q["width_ratio"]))
+                                  q["r_outer"], q["rotation_deg"], q["width_ratio"],
+                                  float(q.get("inner_ratio", 1.0))))
         elif p.role == "center":
             center = center or p
             finish(p, [disc(q["cx"], q["cy"], q["r"])])

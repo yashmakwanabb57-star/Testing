@@ -143,3 +143,29 @@ def test_tails_stripes_bottom_fractions():
     assert top == [290, 310]
     assert bottom[0] == 300 - 60 + 20 and bottom[-1] == 300 - 60 + 40
     assert validate(write_svg([Shape(s.tag, s.attrs, 1) for s in (left, mid, right)])) == []
+
+
+def test_bow_is_a_block_widening_from_its_inner_width():
+    # The designer's bows (S35-19, S5-15, S30-15, S56-17B) are ribbon loops: blocks
+    # about as wide in the middle as at the ends, often widening outward. The old
+    # bow-tie shape pinched to a quarter of the width in the middle and left white
+    # where the loops are.
+    s = points_ring(300, 167, "bow", 6, 50, 90, 0, 0.5, inner_ratio=0.8)[0]
+    p = pts_of(s)
+    w = 0.5 * 40
+    xs = [x for x, _ in p]
+    assert min(xs) == 350 and max(xs) == 390  # radial extent along +x
+
+    def width_at(x):
+        ys = []
+        for (x0, y0), (x1, y1) in zip(p, p[1:] + p[:1]):
+            if min(x0, x1) <= x <= max(x0, x1) and x0 != x1:
+                ys.append(y0 + (y1 - y0) * (x - x0) / (x1 - x0))
+        return max(ys) - min(ys)
+
+    assert abs(width_at(351) - 0.8 * w) < 0.5
+    assert abs(width_at(370) - 0.9 * w) < 0.5
+    assert abs(width_at(389) - w) < 0.5
+    # without inner_ratio: a block of constant width
+    p = pts_of(points_ring(300, 167, "bow", 6, 50, 90, 0, 0.5)[0])
+    assert abs(width_at(370) - w) < 0.5

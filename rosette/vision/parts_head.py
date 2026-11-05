@@ -15,7 +15,8 @@ straight below the center where the tails show:
   phase of the N-th harmonic over the valid angles, kind comes from
   the lobe width profile across the zone (bow: wide at both ends, star: widest near
   its inner end and narrowing to the tip, diamond/petal: widest in the middle, petal
-  the fuller of the two).
+  the fuller of the two). inner_ratio is the inner quarter's width over the widest
+  (geometry draws a bow as a block widening from that share to the full width).
   A same-label band just inside a layer whose lobes still cover most of the circle
   next to it is that layer's body: the layer becomes a star covering it.
 - the head disc exists when the outline of the upper half is a closed circle
@@ -66,6 +67,8 @@ TAIL_SECTOR_DEG = 35.0
 BOW_ENDS = 0.5
 STAR_PEAK, STAR_OUT = 0.35, 0.5
 PETAL_FULLNESS = 0.6
+# Lower bound of a bow's inner_ratio (inner end width / outer width).
+MIN_INNER_RATIO = 0.3
 # Head outline: angles sampled, search radius (head radii), inner start of the scan.
 RIM_THETA = 1440
 RIM_MAX, RIM_START = 1.2, 0.6
@@ -233,6 +236,12 @@ def _symmetry(ind: np.ndarray, win: np.ndarray) -> tuple[int, float, float]:
     return n, max(0.0, scores[n]), float(rot)
 
 
+def _inner_ratio(w: np.ndarray) -> float:
+    """Width of a lobe's inner quarter over its widest (a bow's inner end)."""
+    q = max(1, len(w) // 4)
+    return float(np.clip(w[:q].mean() / max(w.max(), 1e-9), MIN_INNER_RATIO, 1.0))
+
+
 def _kind(w: np.ndarray) -> str:
     """Point kind from the lobe width profile w (inner -> outer radius)."""
     wmax = w.max()
@@ -274,7 +283,8 @@ def _blob_layer(p: Prepared, labels: np.ndarray, fr: Frame, g: int, r0: float, r
         r_in = fr.d(radii[int(np.argmax(width))])
     params = {"kind": kind, "count": int(ring.order), "r_inner": r3(r_in), "r_outer": r3(r_out),
               "rotation_deg": r3(ring.rotation_deg),
-              "width_ratio": r3(fr.d(width.max()) / max(r_out - r_in, 1e-6))}
+              "width_ratio": r3(fr.d(width.max()) / max(r_out - r_in, 1e-6)),
+              "inner_ratio": r3(_inner_ratio(width))}
     return params, ring.evenness, int(np.searchsorted(np.arange(step / 2, p.head[2], step), rb))
 
 
@@ -356,7 +366,8 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             layers.append(("points", g, share, {
                 "cx": r3(ccx), "cy": r3(ccy), "kind": kind, "count": int(n),
                 "r_inner": r3(r_in), "r_outer": r3(r_out), "rotation_deg": r3(rot),
-                "width_ratio": r3(fr.d(w.max()) / max(r_out - r_in, 1e-6))}, area, rb))
+                "width_ratio": r3(fr.d(w.max()) / max(r_out - r_in, 1e-6)),
+                "inner_ratio": r3(_inner_ratio(w))}, area, rb))
 
     # points: largest layer first; outer layers drawn underneath (lower z)
     by_outer = sorted(range(len(layers)), key=lambda k: -layers[k][5])
