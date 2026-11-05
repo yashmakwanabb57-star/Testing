@@ -16,7 +16,8 @@ straight below the center where the tails show:
   the lobe width profile across the zone (bow: wide at both ends, star: widest near
   its inner end and narrowing to the tip, diamond/petal: widest in the middle, petal
   the fuller of the two).
-  A same-label band just inside a star's lobes is the star's own body.
+  A same-label band just inside a layer whose lobes still cover most of the circle
+  next to it is that layer's body: the layer becomes a star covering it.
 - the head disc exists when the outline of the upper half is a closed circle
   (radius spread < HEAD_ROUND); its label is the majority just inside the outline,
   and it is pinked when the outline, freed of its slow trend, still varies by
@@ -43,6 +44,10 @@ MIN_BAND_UNITS = 3.0
 # A band whose label covers >= BRIDGE_COV of the circles within BRIDGE_REACH_UNITS on
 # both sides is where one points layer's lobes touch, not a ring.
 BRIDGE_COV, BRIDGE_REACH_UNITS = 0.4, 3.0
+# A same-label band just inside a layer is the layer's body (drawn as a star) when
+# the layer still covers >= BODY_COV of the circles within BODY_UNITS outside it;
+# a ring merely touched by its own color's trims falls far below that.
+BODY_UNITS, BODY_COV = 5.0, 0.5
 # Zones thinner than this (canvas units) are band edges (teeth, polygon corners).
 MIN_ZONE_UNITS = 10.0
 # Mean zone coverage a label needs to be a candidate points layer.
@@ -300,13 +305,15 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
                     cx=r3(fr.x(cx + (rr * np.cos(th)).mean())), cy=r3(fr.y(cy + (rr * np.sin(th)).mean())),
                     r=r3(fr.d(np.sqrt(area / np.pi)))), area, rb))
                 continue
-            has_core = inner is not None and inner.label == g and inner is not head_band
+            body = max(1, int(round(BODY_UNITS / RADIAL_STEP_UNITS)))
+            has_core = (inner is not None and inner.label == g and inner is not head_band
+                        and cov[a:a + body, g].mean() >= BODY_COV)
             w = cov[ra:rb, g] * 2 * np.pi * radii[ra:rb] / n
-            kind = _kind(w)
-            if has_core and kind == "star":
+            kind = "star" if has_core else _kind(w)
+            if has_core:  # the band is this layer's body: a star polygon covers it
                 eaten.add(id(inner))
             r_in, r_out = unit(ra), unit(rb - 1)
-            if kind == "star":  # star valleys sit where the lobes are widest
+            if kind == "star" and not has_core:  # valleys sit where the lobes are widest
                 r_in = unit(ra + int(np.argmax(w)))
             layers.append(("points", g, share, {
                 "cx": r3(ccx), "cy": r3(ccy), "kind": kind, "count": int(n),

@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage
 
+from rosette.geometry import tails as tail_geometry
 from rosette.roles import classify_components, category, circular_runs, polar_mask, render_categories
 
 REF = Path(__file__).resolve().parent.parent / "reference"
@@ -115,3 +116,28 @@ def truth_from_svg(sid: str) -> dict:
     if head.any():
         pinked = _rim_depth(head) / f.scale >= PINKED_DEPTH
     return dict(points=points, tails=n_tails, rings=rings, pinked=bool(pinked))
+
+
+FAN_COLORS = ("#d0312d", "#2a3fa0", "#f2c12e")  # stripe colors, left to right
+FAN_HEAD = "#2e8b57"
+
+
+@lru_cache(maxsize=None)
+def fan_rosette_png(count: int, spread: float, top_y: float, top_width: float,
+                    bottom_width: float, stripes: tuple, height: int = 1150) -> bytes:
+    """PNG of a constructed rosette: a plain head disc (top at y=25) over `count`
+    tails drawn by geometry.tails (bottoms at y=825), each stripe its own color.
+    The viewBox is widened so wide fans stay inside the image."""
+    import resvg_py
+
+    head_cx, head_cy, head_r = 300.0, 175.0, 150.0
+    polys = tail_geometry(top_y, 825.0, count, top_width, bottom_width, spread, list(stripes))
+    body = []
+    for row in polys:
+        for i, shape in enumerate(row):
+            body.append(f'<polygon points="{shape.attrs["points"]}" fill="{FAN_COLORS[i % 3]}"/>')
+    body.append(f'<circle cx="{head_cx}" cy="{head_cy}" r="{head_r}" fill="{FAN_HEAD}"/>')
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="-300 -10 1200 870">'
+           + "".join(body) + "</svg>")
+    png = resvg_py.svg_to_bytes(svg_string=svg, height=height, background="#ffffff")
+    return bytes(png)

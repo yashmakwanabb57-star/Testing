@@ -8,7 +8,7 @@ from rosette.vision.colors import pixel_groups
 from rosette.vision.parts import detect_parts
 from rosette.vision.prepare import Prepared, prepare
 from rosette.writer import write_svg
-from tests.helpers import synthetic_photo, truth_from_svg
+from tests.helpers import fan_rosette_png, synthetic_photo, truth_from_svg
 
 IDS = ["S35-19", "S46-15", "S13-15", "S28-15", "S41-15"]
 Z = {"head": (10, 10), "points": (20, 29), "ring": (30, 49), "center": (50, 50),
@@ -51,7 +51,7 @@ def test_counts_match_designer_svg(sid):
     got = counts(detected(sid)[3])
     assert got["points"] == truth["points"], (got, truth)
     assert got["tails"] == truth["tails"], (got, truth)
-    assert abs(got["rings"] - truth["rings"]) <= 1, (got, truth)
+    assert got["rings"] == truth["rings"], (got, truth)
     assert got["pinked"] == truth["pinked"], (got, truth)
 
 
@@ -70,6 +70,10 @@ def test_parts_well_formed(sid):
     for q in heads:  # canvas units: on the axis, inside the 600x850 frame
         assert q.params["cx"] == pytest.approx(300, abs=1e-6)
         assert 25 < q.params["cy"] < 425
+    for q in parts:  # points rings span a real radial range
+        if q.role == "points":
+            assert q.params["r_outer"] - q.params["r_inner"] >= 5, q
+            assert 0 < q.params["width_ratio"] < 10, q
     tails = [q for q in parts if q.role == "tail_stripe"]
     assert tails
     for q in tails:
@@ -80,6 +84,8 @@ def test_parts_well_formed(sid):
 
 
 def test_s35_points_and_tails_measurements():
+    # Supplementary: the expected numbers below were measured by hand on the S35-19
+    # designer file (not derived from it in code); the truth-derived checks are above.
     parts = detected("S35-19")[3]
     pts = [q for q in parts if q.role == "points"]
     # dominant layer: 6 blue bows, two of them horizontal (0 and 180 deg) in the designer file
@@ -130,3 +136,30 @@ def test_unclassifiable_region_becomes_unknown():
     assert unk[0].confidence < 0.5
     heads = [q for q in parts if q.role == "head"]
     assert len(heads) == 1 and heads[0].params["pinked"] == 0
+
+
+FAN = dict(top_y=300.0, top_width=60.0, bottom_width=110.0, stripes=(0.3, 0.4, 0.3))
+
+
+@pytest.mark.parametrize("spread", [60.0, 40.0, 28.0])  # 28: tails part only below ~80 % height
+def test_three_fanned_tails_constructed(spread):
+    # head disc + 3 tails drawn by geometry.tails with known params, through the
+    # normal photo path
+    p = prepare(fan_rosette_png(3, spread, **FAN))
+    labels, groups = pixel_groups(p)
+    parts = detect_parts(p, labels)
+    t = [q for q in parts if q.role == "tail_stripe"]
+    assert {int(q.params["tails_count"]) for q in t} == {3}
+    q = t[0].params
+    assert float(q["spread_deg"]) == pytest.approx(spread, abs=5)
+    assert float(q["top_width"]) == pytest.approx(FAN["top_width"], rel=0.1)
+    assert float(q["bottom_width"]) == pytest.approx(FAN["bottom_width"], rel=0.1)
+    for k in range(3):
+        stripes = [x for x in t if int(x.params["tail_index"]) == k]
+        assert len(stripes) == 3, k
+        fr = [float(v) for v in str(stripes[0].params["stripes"]).split(",")]
+        assert fr == pytest.approx(list(FAN["stripes"]), abs=0.05)
+        # left to right: three different colors, the same on every tail
+        cg = [x.color_group for x in sorted(stripes, key=lambda x: int(x.params["stripe_index"]))]
+        assert len(set(cg)) == 3
+    assert not [x for x in parts if x.role == "unknown"]
