@@ -98,3 +98,21 @@ def test_bar():
     silent = [r["id"] for r in failing if not r["flagged"]]
     assert len(ok) / n >= 0.8, f"{len(ok)}/{n} succeed"
     assert not silent, silent
+
+
+def test_uniform_alignment_keeps_the_generated_aspect():
+    # Reported only: the generated crop is scaled by the height ratio and centered,
+    # not stretched to the designer's width. A generated picture half as wide keeps
+    # half the width; per-axis alignment stretches it to full agreement.
+    designer = _img(100, 80, [((0, 100, 0, 80), 1)])
+    generated = _img(100, 40, [((0, 100, 0, 40), 1)])
+    d, g, _ = score._align_uniform(score.categories(designer), score.categories(generated))
+    assert d.shape == g.shape
+    assert (g[:, 20:60] == 1).all() and (g[:, :20] == 0).all() and (g[:, 60:] == 0).all()
+    assert align_agreement(designer, generated)[0] == pytest.approx(1.0)
+
+
+def test_compare_reports_uniform_agreement_too():
+    svg = svg_text("S35-19")
+    r = compare(svg, svg)
+    assert r["uniform_agreement"] == pytest.approx(1.0)
