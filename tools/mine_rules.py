@@ -15,7 +15,8 @@ to the head's axis, ranked as in rosette.assign.tail_positions. A Color 2 piece 
 Each ref casts one vote per role it contains, split over the categories by area
 share (so a design drawn in many small pieces does not outvote others), then
 P(category | role) = (votes + ALPHA) / (refs + 4 ALPHA), and
-pattern_role_prob[role] = (pattern votes + ALPHA) / (refs + 2 ALPHA).
+pattern_role_prob[role] = (pattern votes + ALPHA) / (refs + 2 ALPHA); the latter
+is informational (assign's pattern rule uses its RIBBON_ROLES).
 """
 from __future__ import annotations
 

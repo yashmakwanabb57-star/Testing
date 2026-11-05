@@ -7,18 +7,24 @@ tools/mine_rules.py into rosette/data/assign_rules.json.
 
 1. Groups no part uses get no category (warned).
 2. More than 4 used groups: the two nearest in CIELAB are merged (the smaller into
-   the larger) until 4 remain; each merge is warned with both colors as hex.
+   the larger) until 4 remain; each merge is warned with both colors as hex. A
+   pattern and a plain group are merged only when no other pair is left (Lab
+   distance + PATTERN_MERGE_PENALTY); the merged group keeps the pattern flag. A
+   merged group's confidence is capped at FLAGGED_CONF.
 3. Pattern rule: a pattern group must be Color 2 - but only if it covers a real
    ribbon role (tail stripe, points, ring) over PATTERN_MIN_RIBBON_SHARE of the
    rosette; a 'pattern' group on head print/logos (unknown, center, head pieces)
-   is treated as plain and warned. Of several such groups only the one with the
-   most ribbon area is Color 2; the others are flagged.
+   is treated as plain, warned and flagged. Of several such groups only the one
+   with the most ribbon area is Color 2; the others are flagged.
 4. With k used groups, every one-to-one mapping of groups onto Colors 1..k is
    scored: sum over parts of area share * log P(category | role). The designer
    files never skip a color (k colors are always 1..k), so neither does this.
 5. A group's confidence is the two-way softmax between the best mapping and the
    best mapping giving that group another color, at evidence scale SCALE; a tie
    gives 0.5. Below FLAG_BELOW the group is flagged for confirmation.
+
+The rules file's pattern_role_prob is informational (printed by the miner, shows
+which roles carry the pattern); the pattern rule above uses RIBBON_ROLES.
 """
 from __future__ import annotations
 
@@ -54,8 +60,12 @@ PATTERN_MIN_RIBBON_SHARE = 0.03
 # Tail stripes whose distances from the axis differ by at most this (canvas units)
 # share a position level.
 TAIL_POS_TOL = 3.0
-# Confidence cap of a pattern group that lost Color 2 to a larger one.
-LOST_PATTERN_CONF = 0.5
+# Confidence cap (below FLAG_BELOW) of groups that must be confirmed whatever the
+# score margin: merged groups, demoted head-print 'pattern' groups, and pattern
+# groups that lost Color 2 to a larger one.
+FLAGGED_CONF = 0.5
+# Added to the Lab distance of a pattern / plain pair so such pairs merge last.
+PATTERN_MERGE_PENALTY = 1000.0
 
 
 @lru_cache(maxsize=None)
@@ -165,14 +175,18 @@ def _prob(rules: dict, key: str, cat: int) -> float:
     return float(dist[str(cat)])
 
 
-def _merge(out: RosetteModel, used: list[int]) -> list[int]:
-    """Merge nearest used groups (CIELAB) until MAX_COLORS remain; returns used ids."""
+def _merge(out: RosetteModel, used: list[int]) -> tuple[list[int], set[int]]:
+    """Merge nearest used groups (CIELAB) until MAX_COLORS remain; returns the used
+    ids and the ids of groups that absorbed another."""
     by_id = {g.id: g for g in out.groups}
     used = list(used)
+    merged: set[int] = set()
     while len(used) > MAX_COLORS:
         best = None
         for a, b in itertools.combinations(used, 2):
             d = float(np.linalg.norm(_lab(by_id[a].rgb) - _lab(by_id[b].rgb)))
+            if by_id[a].pattern != by_id[b].pattern:
+                d += PATTERN_MERGE_PENALTY
             if best is None or d < best[0]:
                 best = (d, a, b)
         _, a, b = best
@@ -182,6 +196,9 @@ def _merge(out: RosetteModel, used: list[int]) -> list[int]:
         if total > 0:
             keep.texture = (keep.texture * keep.area + gone.texture * gone.area) / total
         keep.area = total
+        keep.pattern = keep.pattern or gone.pattern
+        merged.add(keep.id)
+        merged.discard(gone.id)
         for q in out.parts:
             if q.color_group == gone.id:
                 q.color_group = keep.id
@@ -189,7 +206,7 @@ def _merge(out: RosetteModel, used: list[int]) -> list[int]:
         used.remove(gone.id)
         out.warnings.append(f"Merged color {hex_rgb(gone.rgb)} into {hex_rgb(keep.rgb)}: the photo "
                             f"has more than {MAX_COLORS} color groups - check the colors.")
-    return used
+    return used, merged
 
 
 def _sigmoid(x: float) -> float:
@@ -207,7 +224,7 @@ def assign(model: RosetteModel, rules: dict | None = None) -> RosetteModel:
             out.warnings.append(f"Color {hex_rgb(g.rgb)} is not used by any part - it gets no Color.")
     if not used:
         return out
-    used = _merge(out, used)
+    used, merged = _merge(out, used)
     by_id = {g.id: g for g in out.groups}
 
     areas = [part_area(q, out.parts) for q in out.parts]
@@ -233,7 +250,9 @@ def assign(model: RosetteModel, rules: dict | None = None) -> RosetteModel:
     for i in pattern:
         if i not in real:
             out.warnings.append(f"Color {hex_rgb(by_id[used[i]].rgb)} looks like a pattern but covers no "
-                                "ribbon (head print or small regions) - not forced to Color 2.")
+                                "ribbon (head print or small regions), so the pattern was ignored - "
+                                "check its Color.")
+    demoted = [i for i in pattern if i not in real]
     forced = max(real, key=lambda i: (ribbon[i], -used[i])) if real else None
     losers = [i for i in real if i != forced]
     for i in losers:
@@ -255,7 +274,7 @@ def assign(model: RosetteModel, rules: dict | None = None) -> RosetteModel:
         g.category = int(best[i])
         alts = [s for s, perm in maps if perm[i] != best[i]]
         c = _sigmoid(SCALE * (best_s - max(alts))) if alts else 1.0
-        if i in losers:
-            c = min(c, LOST_PATTERN_CONF)
+        if i in losers or i in demoted or gid in merged:
+            c = min(c, FLAGGED_CONF)
         g.confidence = round(float(c), 3)
     return out

@@ -36,6 +36,9 @@ def unknown(pid, g, r=15.0):
 
 
 def tails(groups_per_stripe, fracs=None):
+    """One tail (tails_count=1) split into stripes left to right. By the mining
+    convention the stripe nearest the axis is 'inner': tails([a, b, c]) gives
+    outer, inner, outer."""
     n = len(groups_per_stripe)
     fracs = fracs or [1.0 / n] * n
     stripes = ",".join(f"{f:.4f}" for f in fracs)
@@ -116,9 +119,26 @@ def test_merge_over_four():
     assert {p.color_group for p in out.parts} == {0, 1, 2, 3}
     merged = next(g for g in out.groups if g.id == 0)
     assert merged.area == pytest.approx(0.4)
+    assert merged.confidence < A.FLAG_BELOW  # a merge is always confirmed
     w = [x for x in out.warnings if "#cd2320" in x and "#c81e1e" in x]
     assert w, out.warnings
     assert all("—" not in x and "–" not in x for x in out.warnings)
+
+
+def test_merge_never_hides_pattern_group():
+    # glitter red on every tail, Lab-near a plain red head: the pattern group must
+    # not be swallowed by the plain one (other pairs merge first) and stays Color 2
+    groups = [group(0, (200, 30, 30), area=0.3), group(1, (205, 35, 32), pattern=True, area=0.3),
+              group(2, (240, 200, 40), area=0.1), group(3, (20, 140, 60), area=0.1),
+              group(4, (30, 30, 200), area=0.1), group(5, (40, 40, 210), area=0.1)]
+    parts = [head(0), ring("ring-0", 2, 60, 45), center(3), points("points-1", 4),
+             points("points-2", 5), *tails([1, 1, 1])]
+    out = A.assign(RosetteModel(parts=parts, groups=groups))
+    assert len(out.groups) == 4
+    tails_g = next(g for g in out.groups if g.id == out.parts[-1].color_group)
+    assert tails_g.pattern
+    assert tails_g.category == 2
+    assert {0, 1} <= {g.id for g in out.groups}  # red head and glitter red both kept
 
 
 def test_merge_keeps_input_untouched():
@@ -163,6 +183,18 @@ def test_head_print_pattern_not_forced():
     out = A.assign(RosetteModel(parts=parts, groups=groups), rules=rules)
     assert cats(out) == {0: 2, 1: 1}  # rules decide, the head print is not forced to 2
     assert any("#b0897c" in w and "pattern" in w for w in out.warnings), out.warnings
+    assert conf(out)[1] < A.FLAG_BELOW  # demoted pattern group is always confirmed
+
+
+def test_head_print_pattern_ending_color2_is_flagged():
+    # two groups: the head-print 'pattern' group ends Color 2 by elimination, which
+    # must not look settled (A1-15)
+    groups = [group(0, (228, 179, 188)), group(1, (176, 137, 124), pattern=True, area=0.07)]
+    parts = [head(0, r=157), unknown("unknown-1", 1, 57), center(1, r=7.5), *tails([0])]
+    out = A.assign(RosetteModel(parts=parts, groups=groups))
+    assert cats(out)[1] == 2
+    assert conf(out)[1] < A.FLAG_BELOW
+    assert any("#b0897c" in w and "ignored" in w and "check its Color" in w for w in out.warnings)
 
 
 def test_two_pattern_groups_only_one_color2():
