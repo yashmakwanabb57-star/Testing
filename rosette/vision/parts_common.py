@@ -24,6 +24,11 @@ CANVAS_AXIS_X, CANVAS_TOP_Y = 300.0, 25.0
 # is off by a few units): RING_EVEN sits below it at 0.8.
 RING_MIN_UNITS2, RING_MAX_UNITS2 = 250.0, 3600.0
 RING_MIN_BLOBS, RING_RADIUS_TOL, RING_AREA_RATIO, RING_EVEN = 4, 0.15, 2.5, 0.8
+# |mean exp(i N theta)| is also high for a few blobs bunched on one side (4 blobs within
+# 24 degrees: 0.82), so the blobs must also go round: the largest angular gap between
+# neighbours is at most RING_MAX_GAP steps of 360/N (3 = two blobs hidden side by side
+# behind the tails, plus 10 % slack for hand-made spacing).
+RING_MAX_GAP = 3.3
 
 
 @dataclass
@@ -93,6 +98,12 @@ class BlobRing:
     rotation_deg: float
 
 
+def _max_gap_deg(theta: np.ndarray) -> float:
+    """Largest angle (deg) between neighbouring directions around the circle."""
+    t = np.sort(np.degrees(theta) % 360.0)
+    return float(np.max(np.diff(np.concatenate([t, [t[0] + 360.0]]))))
+
+
 def blob_rings(binary: np.ndarray, head: tuple[float, float, float], scale: float) -> list[BlobRing]:
     """Rings of blobs of `binary` around the head center (see RING_MIN_BLOBS): blobs
     of RING_MIN_UNITS2..RING_MAX_UNITS2 inside the head circle, grouped from the
@@ -117,7 +128,7 @@ def blob_rings(binary: np.ndarray, head: tuple[float, float, float], scale: floa
             continue
         order, even = max(((m, float(abs(np.exp(1j * m * th[grp]).mean())))
                            for m in range(len(grp), len(grp) + 3)), key=lambda t: t[1])
-        if even < RING_EVEN:
+        if even < RING_EVEN or _max_gap_deg(th[grp]) > RING_MAX_GAP * 360.0 / order:
             continue
         used.update(int(k) for k in grp)
         rot = float(np.degrees(np.angle(np.exp(1j * order * th[grp]).mean())) / order) % (360.0 / order)
