@@ -217,3 +217,15 @@ def test_pleated_ring_drawn_past_its_full_coverage_radii():
     labels, groups = pixel_groups(p)
     rings = [q for q in detect_parts(p, labels) if q.role == "ring"]
     assert len(rings) == 1 and rings[0].params["r_outer"] >= 76
+
+
+def test_blob_read_points_layer_is_flagged_without_pixel_symmetry():
+    # A layer read from its blobs has only their evenness behind it (>= 0.8 by
+    # construction); without the pixel symmetry at the same count agreeing, its kind
+    # and count are unverified and must be confirmed (confidence below FLAG_BELOW).
+    from rosette.assign import FLAG_BELOW
+    p = prepare((PHOTOS / "S40-15.png").read_bytes())
+    labels, groups = pixel_groups(p)
+    dark = min(groups, key=lambda g: sum(g.rgb)).id
+    pts = [q for q in detect_parts(p, labels) if q.role == "points" and q.color_group == dark]
+    assert len(pts) == 1 and pts[0].confidence < FLAG_BELOW

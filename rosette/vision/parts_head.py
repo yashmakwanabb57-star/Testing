@@ -75,6 +75,12 @@ TAIL_SECTOR_DEG = 35.0
 BOW_ENDS = 0.5
 STAR_PEAK, STAR_OUT = 0.35, 0.5
 PETAL_FULLNESS = 0.6
+# Confidence of a points layer read from its blobs (below assign.FLAG_BELOW, so it is
+# flagged) unless the layer's zone pixels are also rotationally symmetric at the blob
+# count (score >= LOW_SYM) and no blob had to be assumed hidden behind the tails. The
+# blob reading is only tried when that symmetry is weak, so in practice every
+# blob-read layer is flagged.
+BLOB_UNCONFIRMED_CONF = 0.5
 # Lower bound of a bow's inner_ratio (inner end width / outer width).
 MIN_INNER_RATIO = 0.3
 # Head outline: angles sampled, search radius (head radii), inner start of the scan.
@@ -220,6 +226,17 @@ def _pearson(a: np.ndarray, b: np.ndarray) -> float:
     return float(((a - a.mean()) * (b - b.mean())).mean() / (sa * sb))
 
 
+def _score_at(x: np.ndarray, win: np.ndarray, n: int) -> float:
+    """Mean correlation of indicator x with itself turned by m*360/n (m = 1..n-1)."""
+    t = x.shape[1]
+    cs = []
+    for m in range(1, n):
+        sh = int(round(m * t / n))
+        ok = win & np.roll(win, -sh)
+        cs.append(_pearson(x[:, ok].ravel(), np.roll(x, -sh, axis=1)[:, ok].ravel()))
+    return float(np.mean(cs))
+
+
 def _symmetry(ind: np.ndarray, win: np.ndarray) -> tuple[int, float, float]:
     """(order N, score, rotation deg) of a (radii, theta) indicator seen through the
     angular window `win`. Score of N = mean correlation of the indicator with itself
@@ -228,14 +245,7 @@ def _symmetry(ind: np.ndarray, win: np.ndarray) -> tuple[int, float, float]:
     and unrelated N do not)."""
     t = ind.shape[1]
     x = ind.astype(np.float32)
-    scores = {}
-    for n in range(2, MAX_COUNT + 1):
-        cs = []
-        for m in range(1, n):
-            sh = int(round(m * t / n))
-            ok = win & np.roll(win, -sh)
-            cs.append(_pearson(x[:, ok].ravel(), np.roll(x, -sh, axis=1)[:, ok].ravel()))
-        scores[n] = float(np.mean(cs))
+    scores = {n: _score_at(x, win, n) for n in range(2, MAX_COUNT + 1)}
     strong = [n for n, sc in scores.items() if sc >= SYM_T]
     n = max(strong) if strong else max(scores, key=scores.get)
     th = np.linspace(0, 2 * np.pi, t, endpoint=False)
@@ -277,12 +287,17 @@ def _ring_outer(bd: _Band, bands: list[_Band], dom: np.ndarray, cov: np.ndarray,
 
 
 def _blob_layer(p: Prepared, labels: np.ndarray, fr: Frame, g: int, r0: float, r1: float,
-                step: float) -> tuple[dict, float, int] | None:
+                step: float, ind: np.ndarray, win: np.ndarray) -> tuple[dict, float, int] | None:
     """Points layer of label g read from its blobs between radii r0..r1 (px) when they
     form an even ring (parts_common.blob_rings): star tips or loop ends whose pixel
     pattern is too irregular for the rotational self-correlation (hand-made layouts,
-    a center a few units off). Returns (params without cx/cy, confidence = evenness,
-    outer radius index) of the ring with the most blobs, or None."""
+    a center a few units off). Returns (params without cx/cy, confidence, outer radius
+    index) of the ring with the most blobs, or None. The confidence is the evenness
+    only when an independent signal agrees - the layer's zone indicator `ind` (seen
+    through `win`) is rotationally symmetric at the blob count (>= LOW_SYM) - and no
+    blob is assumed hidden; otherwise BLOB_UNCONFIRMED_CONF (kind and count unverified).
+    The blobs' own pixels are not used for that check: isolated blobs correlate with
+    themselves whatever their shape."""
     cx, cy, _ = p.head
     h, w = labels.shape
     yy, xx = np.ogrid[:h, :w]
@@ -299,6 +314,8 @@ def _blob_layer(p: Prepared, labels: np.ndarray, fr: Frame, g: int, r0: float, r
     pol = polar_sample(ring.pixels.astype(np.int8), cx, cy, radii, RING_THETA, fill=0) > 0
     width = pol.mean(axis=1) * 2 * np.pi * radii / ring.visible
     kind = _kind(width)
+    agree = _score_at(ind.astype(np.float32), win, ring.order) >= LOW_SYM
+    conf = ring.evenness if agree and ring.order == ring.visible else BLOB_UNCONFIRMED_CONF
     r_in, r_out = fr.d(ra), fr.d(rb)
     if kind == "star":  # valleys sit where the lobes are widest
         r_in = fr.d(radii[int(np.argmax(width))])
@@ -306,7 +323,7 @@ def _blob_layer(p: Prepared, labels: np.ndarray, fr: Frame, g: int, r0: float, r
               "rotation_deg": r3(ring.rotation_deg),
               "width_ratio": r3(fr.d(width.max()) / max(r_out - r_in, 1e-6)),
               "inner_ratio": r3(_inner_ratio(width))}
-    return params, ring.evenness, int(np.searchsorted(np.arange(step / 2, p.head[2], step), rb))
+    return params, conf, int(np.searchsorted(np.arange(step / 2, p.head[2], step), rb))
 
 
 def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
@@ -360,7 +377,7 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             area = float((cov[ra:rb, g] * 2 * np.pi * radii[ra:rb]).sum() * step)
             n, share, rot = _symmetry(ind, win)
             if share < LOW_SYM:
-                found = _blob_layer(p, labels, fr, g, radii[a], radii[b - 1] + step, step)
+                found = _blob_layer(p, labels, fr, g, radii[a], radii[b - 1] + step, step, ind, win)
                 if found is not None:
                     params, conf, rb_blob = found
                     params.update(cx=r3(ccx), cy=r3(ccy))
