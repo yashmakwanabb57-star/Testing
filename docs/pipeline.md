@@ -71,8 +71,9 @@ Runtime: 1.4-2.2 s per photo for analyze + render; the scoreboard over all 34 ID
 **What was changed** (one commit per fix, regression test first):
 
 1. `colors._split_stripes` - a k-means cluster hiding two similar ribbon colors (navy beside navy-blue, dark beside light orange) is split by 2-means when the halves are >= 10 feature units apart, each holds >= 17 % of the flat pixels and >= 30 % of the cluster's tail pixels, and on the tails the halves alternate >= 2.5x more often along rows than along columns (stripe edges run down the tails; shading and folds do not). Fixed A14-17 (holdout), A15-17, S10-19. Over all 76 reference photos it splits 12, all of whose designer files use 3 colors.
-2. `geometry/clip.clip_occluded` (new dependency `shapely==2.2.0`) - Color 1 is always painted first (Layer_1), so a Color 1 center over a Color 3 star, or the Color 1 head over the tails' tops, was hidden. Lower shapes are now cut by the higher-z shapes the layer order paints beneath them, as the designer files do. Fixed A10-15B, S28-15, s34-15.
-3. `assign` plausibility warning - when even the best coloring's area-weighted mean log P(Color | role) is below log(1/k) (no better than a random guess) the model is warned. Flags S2-15B (2 colors found for a 3-color ribbon).
+2. `geometry/clip.clip_occluded` (new dependency `shapely==2.2.0`) - Color 1 is always painted first (Layer_1), so a Color 1 center over a Color 3 star, or the Color 1 head over the tails' tops, was hidden. Lower shapes are now cut by the strictly-higher-z shapes the layer order paints beneath them, as the designer files do; a color shape it cannot read raises ValueError. Fixed A10-15B, S28-15, s34-15.
+3. `assign` plausibility warning - P(Color | role) is renormalized over the Colors 1..k in use; when even the best coloring's area-weighted mean log of it is below log(1/k) (no better than a random guess) the model is warned. (Review fix: without the renormalization 17 of 23 real 2-color photos warned; now 12 of 23, none of A12-15, S4-15, S6-15, S55-15, S65-18.)
+3b. `colors.mixed_texture_groups` + `analyze` warning - a plain group whose tail interior has local texture above `PATTERN_T` on >= 42 % of its pixels may hide a merged patterned ribbon. Flags S2-15B (snowflake print merged with white satin; 0.45). Thin margin: set from that one case, next plain groups S70-19 0.39, S46-15 0.36; S58-17 (0.56, white text on black) is also warned. None of the 23 two-color photos warn.
 4. `pipeline.is_flagged` - a points ring with detector confidence below `FLAG_BELOW` is flagged (S41-15's misread star layers).
 5. `parts_tails._edge_fracs` + `geometry.tails(stripes_bottom=...)` - stripe boundaries are fitted as straight lines over the measured rows and read at the tail's top and bottom edges, so a ribbon of constant width on a widening tail keeps its width. S41-15 0.650 -> 0.925 (success); S26-15 0.892 -> 0.800 (its glitter stripes really narrow toward the head in the photo, the designer drew them wider; still flagged).
 
@@ -86,8 +87,8 @@ Runtime: 1.4-2.2 s per photo for analyze + render; the scoreboard over all 34 ID
 | A15-17 | tune | 0.949 | 0.856 | 0.96 | yes | yes | 6/6 | 1/1 |
 | A16-17 | tune | 0.837 | 0.507 | 0.90 | yes | no | 0/8 | 1/1 |
 | A9-15B | holdout | 1.000 | 0.809 | 0.94 | yes | yes | 19/1 | 1/1 |
-| S10-19 | tune | 0.917 | 0.696 | 0.88 | yes | yes | 0/4 | 1/1 |
-| S13-15 | tune | 0.815 | 0.689 | 0.96 | yes | no | 6/6 | 1/1 |
+| S10-19 | tune | 0.904 | 0.696 | 0.88 | yes | yes | 0/4 | 1/1 |
+| S13-15 | tune | 0.840 | 0.689 | 0.96 | yes | no | 6/6 | 1/1 |
 | S17-15 | holdout | 0.633 | 0.532 | 0.83 | yes | no | 0/8 | 1/1 |
 | S2-15B | tune | 0.000 | 0.035 | 0.90 | yes | no | 4/4 | 1/1 |
 | S26-15 | tune | 0.800 | 0.762 | 0.93 | yes | no | 6/6 | 1/1 |
