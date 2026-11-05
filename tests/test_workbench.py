@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 STATIC = Path(__file__).resolve().parent.parent / "app" / "static"
-ASSETS = ["index.html", "app.js", "simulator.js", "styles.css"]
+ASSETS = ["index.html", "app.js", "logic.js", "simulator.js", "styles.css"]
 client = TestClient(app)
 
 
@@ -16,7 +16,8 @@ def test_workbench_html():
     assert r.status_code == 200
     html = r.text
     for needle in ('id="file-input"', 'id="preview"', 'id="parts"', 'id="groups"',
-                   'id="checks"', 'id="download"', 'src="/static/app.js"', 'href="/static/styles.css"'):
+                   'id="checks"', 'id="download"', 'src="/static/app.js"', 'href="/static/styles.css"',
+                   'src="/static/logo.webp" alt="BR Roset"'):
         assert needle in html, needle
     assert re.search(r'<button[^>]*id="download"[^>]*disabled', html)
 
@@ -41,3 +42,10 @@ def test_no_fancy_dashes_in_ui():
     for name in ASSETS:
         text = (STATIC / name).read_text(encoding="utf-8")
         assert chr(0x2014) not in text and chr(0x2013) not in text, name
+
+
+def test_logo_served():
+    r = client.get("/static/logo.webp")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/webp"
+    assert r.content[:4] == b"RIFF" and r.content[8:12] == b"WEBP"

@@ -3,16 +3,18 @@
 // init (event wiring). A guided mode can reuse state, api, derived and actions and add
 // its own views.
 import { applyConfig, glitterPattern, COLOR_INDICES } from './simulator.js';
+import {
+  MAX_COUNT, POINT_KINDS, errorText, hex, flagItems,
+  downloadBlockers as blockersFor, groupColor, tailGroups, parseValue,
+} from './logic.js';
+
+export { errorText, flagItems, parseValue, tailGroups, hex };
+export const downloadBlockers = () => blockersFor(state);
 
 // ---------------------------------------------------------------- constants
 
-const FLAG_BELOW = 0.6; // rosette/assign.py FLAG_BELOW
-const MAX_COUNT = 200; // rosette/model.py MAX_COUNT
 const DEBOUNCE_MS = 200;
-const POINT_KINDS = ['star', 'diamond', 'bow', 'petal'];
 const DEFAULT_COLORS = { 1: '#2e6b4a', 2: '#9fb7c4', 3: '#d9b26f', 4: '#8a5a9e' };
-const TAIL_SHARED = ['tails_count', 'top_y', 'bottom_y', 'top_width', 'bottom_width', 'spread_deg'];
-const TAIL_KEYS = [...TAIL_SHARED, 'stripes', 'stripes_bottom']; // rosette/build.py _TAIL_KEYS
 
 // Validation codes from rosette/validate.py, in check order.
 const CHECKS = [
@@ -81,20 +83,6 @@ export const state = {
 
 // ---------------------------------------------------------------- api
 
-export function errorText(status, body) {
-  const d = body && body.detail;
-  if (typeof d === 'string') return d;
-  if (Array.isArray(d)) {
-    const bits = d.map((e) => {
-      const loc = (e && Array.isArray(e.loc) ? e.loc : []).filter((x) => x !== 'body').join('.');
-      const msg = e && e.msg ? e.msg : 'invalid value';
-      return loc ? `${loc}: ${msg}` : msg;
-    });
-    return `The request was rejected - ${bits.join('; ')}`;
-  }
-  if (status === 413) return 'File is too large. The limit is 25 MB.';
-  return `The request failed (HTTP ${status}).`;
-}
 
 async function request(url, options) {
   let res;
@@ -129,95 +117,13 @@ export const api = {
   },
 };
 
-// ---------------------------------------------------------------- derived (pure)
-
-export const hex = (rgb) => '#' + rgb.map((v) => Math.round(v).toString(16).padStart(2, '0')).join('');
-
-// Mirrors rosette/pipeline.py is_flagged: one item per thing the user must confirm.
-export function flagItems(model, issues, serverFlagged) {
-  if (!model) return [];
-  const items = [];
-  for (const g of model.groups) {
-    if (g.confidence < FLAG_BELOW) {
-      items.push({ key: `group:${g.id}`, text: `Color group ${g.id}: is Color ${g.category ?? '-'} right?` });
-    }
-  }
-  for (const p of model.parts) {
-    if (p.role === 'points' && p.confidence < FLAG_BELOW) {
-      items.push({ key: `part:${p.id}`, text: `${p.id}: points read with low confidence` });
-    } else if (p.role === 'unknown') {
-      // build warns "part <id>: unrecognised shape..."; that warning is shown on this part
-      // card and confirmed with it, so it is not listed twice.
-      const w = model.warnings.find((x) => x.startsWith(`part ${p.id}: `));
-      items.push({ key: `part:${p.id}`, text: w || `part ${p.id}: unrecognised shape, drawn as a plain disc` });
-    }
-  }
-  const unknown = new Set(model.parts.filter((p) => p.role === 'unknown').map((p) => p.id));
-  for (const w of model.warnings) {
-    const m = /^part (\S+): /.exec(w);
-    if (m && unknown.has(m[1])) continue;
-    items.push({ key: `warning:${w}`, text: w });
-  }
-  if (serverFlagged && !items.length && !issues.length) {
-    items.push({ key: 'server:flagged', text: 'The server flagged this result. Check it before download.' });
-  }
-  return items;
-}
-
-export function downloadBlockers() {
-  const s = state;
-  if (s.analyzing) return ['Analyzing the photo...'];
-  if (!s.model || !s.svg) return ['Upload a photo first.'];
-  const out = [];
-  if (s.invalid.size) out.push('Fix the invalid values (red fields).');
-  if (s.render.dirty || s.render.inFlight) out.push('Updating the SVG...');
-  else if (s.render.error) out.push('The last update failed. Change a value to retry.');
-  if (s.issues.length) out.push(`${s.issues.length} check(s) failed.`);
-  const flags = flagItems(s.model, s.issues, s.flagged);
-  const open = flags.filter((f) => !s.confirmed.has(f.key)).length;
-  if (open) out.push(`${open} of ${flags.length} flagged item(s) still to confirm.`);
-  return out;
-}
-
-function groupColor(model, category) {
-  const gs = model.groups.filter((g) => g.category === category).sort((a, b) => b.area - a.area);
-  return gs.length ? hex(gs[0].rgb) : null;
-}
-
-function tailKey(p) {
-  return JSON.stringify(TAIL_KEYS.map((k) => p.params[k] ?? ''));
-}
-
-// Tail stripe parts grouped the way rosette/build.py groups them (same _TAIL_KEYS).
-export function tailGroups(model) {
-  const groups = new Map();
-  for (const p of model.parts) {
-    if (p.role !== 'tail_stripe') continue;
-    const k = tailKey(p);
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k).push(p);
-  }
-  return [...groups.values()];
-}
-
-// Parse one input value. Returns {ok, value}.
-export function parseValue(type, raw) {
-  if (type === 'kind') return { ok: POINT_KINDS.includes(raw), value: raw };
-  if (type === 'bool') return { ok: true, value: raw ? 1 : 0 };
-  const t = String(raw).trim();
-  if (t === '') return { ok: false };
-  const v = Number(t);
-  if (!Number.isFinite(v)) return { ok: false };
-  if (type === 'int' && (!Number.isInteger(v) || v < 1 || v > MAX_COUNT)) return { ok: false };
-  return { ok: true, value: v };
-}
-
 // ---------------------------------------------------------------- actions
 
 export const actions = {
   async loadFile(file) {
     if (!file) return;
     const token = ++state.analyzeSeq;
+    let scrollTop = false;
     clearTimeout(state.render.timer);
     state.render.seq++; // drop any render still in flight
     Object.assign(state.render, { dirty: false, inFlight: false, error: null });
@@ -241,12 +147,14 @@ export const actions = {
       state.sim.pattern = false;
       state.sim.rose = !!res.model.rose;
       actions.defaultColors();
+      scrollTop = true;
     } catch (e) {
       if (token === state.analyzeSeq) showError(e.message);
     } finally {
       if (token === state.analyzeSeq) {
         state.analyzing = false;
         views.all();
+        if (scrollTop) views.scrollToTop();
       }
     }
   },
@@ -268,8 +176,28 @@ export const actions = {
     }
     state.invalid.delete(field);
     part.params[key] = r.value;
+    actions.unconfirm(`part:${part.id}`);
     actions.scheduleRender();
     return true;
+  },
+
+  // A confirmation covers what was on screen when it was given: editing the item clears it.
+  unconfirm(...keys) {
+    let changed = false;
+    for (const k of keys) changed = state.confirmed.delete(k) || changed;
+    if (changed) {
+      views.flagsMarked();
+      views.download();
+    }
+  },
+
+  // Validate a value without applying it (marks the field invalid or valid).
+  checkField(type, raw, field) {
+    const ok = parseValue(type, raw).ok;
+    if (ok) state.invalid.delete(field);
+    else state.invalid.add(field);
+    views.download();
+    return ok;
   },
 
   // Shared tail params apply to every stripe of the tail group, so build keeps them together.
@@ -323,18 +251,23 @@ export const actions = {
     const rest = state.model.parts.filter((p) => !mine.has(p));
     rest.splice(at, 0, ...fresh);
     state.model.parts = rest;
-    views.parts();
+    rebuildParts(field);
     actions.scheduleRender();
     return true;
   },
 
   setPartGroup(parts, groupId) {
     for (const p of parts) p.color_group = groupId;
+    actions.unconfirm(...parts.map((p) => `part:${p.id}`));
     actions.scheduleRender();
   },
 
   setGroupCategory(group, category) {
     group.category = category;
+    // Also clears warnings that name this group's color (e.g. "Color #xxxxxx is partly patterned").
+    const h = hex(group.rgb);
+    actions.unconfirm(`group:${group.id}`,
+      ...state.model.warnings.filter((w) => w.includes(h)).map((w) => `warning:${w}`));
     actions.defaultColors();
     views.simControls();
     views.parts(); // group option labels show the category
@@ -468,7 +401,10 @@ function confirmBox(key) {
     ' Confirmed');
 }
 
-function paramField(type, label, value, field, onInput) {
+// onInput(raw, target) applies a value. With onCommit set, typing only validates
+// (onInput) and the value is applied on change (onCommit), for fields whose edit
+// rebuilds the card and would otherwise take the focus away mid-typing.
+function paramField(type, label, value, field, onInput, onCommit = null) {
   let input;
   if (type === 'kind') {
     input = el('select', { 'data-field': field, onchange: (ev) => onInput(ev.target.value, ev.target) },
@@ -485,6 +421,7 @@ function paramField(type, label, value, field, onInput) {
       step: type === 'int' ? '1' : 'any', min: type === 'int' ? '1' : null, max: type === 'int' ? String(MAX_COUNT) : null,
       class: state.invalid.has(field) ? 'invalid' : null,
       oninput: (ev) => onInput(ev.target.value, ev.target),
+      onchange: onCommit ? (ev) => onCommit(ev.target.value, ev.target) : null,
     });
   }
   return el('label', { class: 'param' }, el('span', { text: label }), input);
@@ -492,6 +429,23 @@ function paramField(type, label, value, field, onInput) {
 
 function markInvalid(target, ok) {
   target.classList.toggle('invalid', !ok);
+}
+
+function partSummary(p) {
+  const summary = p.role === 'points' ? `${p.params.kind} x ${p.params.count}` : '';
+  return ` ${p.id}${summary ? ' - ' + summary : ''}`;
+}
+
+// Re-render the parts list; if the edited field had focus (Enter in a number field, a
+// select change), focus its replacement so keyboard work can continue.
+function rebuildParts(field) {
+  const active = document.activeElement;
+  const had = active && active.getAttribute && active.getAttribute('data-field') === field;
+  views.parts();
+  if (had) {
+    const next = document.querySelector(`[data-field="${CSS.escape(field)}"]`);
+    if (next) next.focus();
+  }
 }
 
 function partCard(p) {
@@ -506,14 +460,14 @@ function partCard(p) {
     grid.append(paramField(type, label, value, field, (raw, target) => {
       const ok = actions.setParam(p, k, type, raw, field);
       if (target.type === 'number') markInvalid(target, ok);
-      if (k === 'kind') views.parts();
+      if (k === 'kind') rebuildParts(field);
+      else if (ok) card.querySelector('.part-summary').textContent = partSummary(p);
     }));
   }
-  const summary = p.role === 'points' ? `${p.params.kind} x ${p.params.count}` : '';
   const card = el('div', { class: 'card', 'data-flag': key },
     el('div', { class: 'card-head' },
       el('strong', { text: ROLE_LABELS[p.role] || p.role }),
-      el('span', { class: 'muted', text: ` ${p.id}${summary ? ' - ' + summary : ''}` }),
+      el('span', { class: 'muted part-summary', text: partSummary(p) }),
       el('span', { class: 'conf muted', text: `${Math.round(p.confidence * 100)}%` })),
     el('label', { class: 'param wide' }, el('span', { text: 'Color group' }),
       el('select', { onchange: (ev) => actions.setPartGroup([p], Number(ev.target.value)) }, ...groupOptions(p.color_group))),
@@ -527,6 +481,15 @@ function tailCard(parts, n) {
   const grid = el('div', { class: 'params' });
   for (const [k, label, type] of PARAMS.tail_stripe) {
     const field = `tails${n}.${k}`;
+    if (k === 'tails_count') {
+      grid.append(paramField(type, label, first.params[k], field,
+        (raw, target) => markInvalid(target, actions.checkField(type, raw, field)),
+        (raw, target) => {
+          const ok = actions.setTailParam(parts, k, raw, field);
+          if (target.isConnected) markInvalid(target, ok);
+        }));
+      continue;
+    }
     grid.append(paramField(type, label, first.params[k], field, (raw, target) => {
       const ok = actions.setTailParam(parts, k, raw, field);
       if (target.isConnected) markInvalid(target, ok);
@@ -552,6 +515,12 @@ function tailCard(parts, n) {
 }
 
 export const views = {
+  // A new upload starts at the top of the page and of the parts panel.
+  scrollToTop() {
+    window.scrollTo(0, 0);
+    for (const id of ['col-model', 'parts']) $(id).scrollTop = 0;
+  },
+
   all() {
     views.photo();
     views.simControls();
