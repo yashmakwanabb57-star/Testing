@@ -220,10 +220,7 @@ def test_simulate_flag_off_and_missing_module_ok():
 def test_s46_reference_structure():
     issues = validate(REF.read_text(encoding="utf-8"))
     allowed = {"root", "style_mismatch", "not_closed"}
-    # Legacy quirk: S46-15 has a stroke-only <line class="st6"> in Layer_6. The tool never
-    # emits <line> (spec 3.3), so the validator stays strict; only that one element is excused.
-    extra = [i for i in issues if i.code not in allowed
-             and not (i.code == "bad_element" and i.element == '<line class="st6">')]
+    extra = [i for i in issues if i.code not in allowed]
     assert extra == [], [(i.code, i.element, i.message) for i in extra]
 
 
@@ -251,7 +248,7 @@ def test_classless_shape_flagged(gname):
     assert "class_layer" in codes(r)
 
 
-@pytest.mark.parametrize("tag", ["rect", "line", "use", "text", "image"])
+@pytest.mark.parametrize("tag", ["rect", "use", "text", "image"])
 def test_bad_element(tag):
     r = root_of()
     etree.SubElement(gid(r, "Layer_6"), f"{{http://www.w3.org/2000/svg}}{tag}")
@@ -287,3 +284,14 @@ def test_sim_issues_reported(monkeypatch):
     m.sim_issues = lambda svg: ["<path x>"]
     monkeypatch.setattr(v.importlib, "import_module", lambda n: m)
     assert [i.code for i in v.validate(good_svg())] == ["sim_unfilled"]
+
+
+def test_line_allowed_in_stroke_layers_only():
+    r = root_of()
+    for g in ("Layer_6", "Layer_rose"):
+        etree.SubElement(gid(r, g), "{http://www.w3.org/2000/svg}line",
+                         {"class": "st6" if g == "Layer_6" else "st4", "x1": "0"})
+    assert "bad_element" not in codes(r)
+    etree.SubElement(gid(r, "Layer_1"), "{http://www.w3.org/2000/svg}line",
+                     {"class": "st0_1", "x1": "0"})
+    assert "bad_element" in codes(r)

@@ -30,6 +30,7 @@ SUFFIX_LAYERS = {
     "4": {"Layer_3_4", "Layer_2_1_4"},
 }
 SPECIAL_LAYERS = {"st4": {"Layer_rose"}, "st6": {"Layer_6"}, "st_circel": {"Layer_rose"}}
+STROKE_ONLY = {"Layer_6", "Layer_rose"}
 NEUTRAL_TAGS = {"svg", "g", "defs", "style", "pattern"}
 COLOR_RE = re.compile(r"^st(\d+)_(1|2_pattern|2|3|4)$")
 COLOR_GROUPS = {g for gs in SUFFIX_LAYERS.values() for g in gs}
@@ -135,6 +136,8 @@ def validate(svg: str, simulate_check: bool = True) -> list[Issue]:
             continue
         if _local(e) == "image" and e.getparent() is not None                 and _local(e.getparent()) == "pattern":
             continue
+        if _local(e) == "line" and _layer_of(e, known) in STROKE_ONLY:
+            continue  # live shop SVGs use <line> in stroke-only layers; never filled
         add("bad_element", f"element <{_local(e)}> is not allowed", e)
 
     # shape elements: class vs layer
