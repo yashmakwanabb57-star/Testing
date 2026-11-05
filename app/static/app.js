@@ -5,11 +5,18 @@
 import { applyConfig, glitterPattern, COLOR_INDICES } from './simulator.js';
 import {
   MAX_COUNT, POINT_KINDS, errorText, hex, flagItems,
-  downloadBlockers as blockersFor, groupColor, tailGroups, parseValue,
+  downloadBlockers as blockersFor, groupColor, tailGroups, parseValue, tailCheckKey,
 } from './logic.js';
 
 export { errorText, flagItems, parseValue, tailGroups, hex };
 export const downloadBlockers = () => blockersFor(state);
+
+// Called after every change that can affect the blockers or the simulator (guided mode
+// listens here to keep its Next button and checklists current).
+export const listeners = [];
+function notify() {
+  for (const f of listeners) f();
+}
 
 // ---------------------------------------------------------------- constants
 
@@ -74,11 +81,13 @@ export const state = {
     touched: new Set(), // color indices the user picked by hand
     pattern: false, // Color 2 uses the sample pattern
     rose: true,
+    tried: new Set(), // 'pattern' / 'rose' once the user has toggled them since the upload
     overlay: false,
     opacity: 50,
     source: false,
   },
   photoFrame: null, // overlay placement of the photo in the 600x850 frame
+  guided: { mode: 'workbench', step: 1, reached: 1 }, // guided mode view state
 };
 
 // ---------------------------------------------------------------- api
@@ -134,6 +143,8 @@ export const actions = {
     });
     state.confirmed.clear();
     state.invalid.clear();
+    state.sim.tried.clear();
+    Object.assign(state.guided, { step: 1, reached: 1 });
     hideError();
     views.all();
     try {
@@ -211,6 +222,7 @@ export const actions = {
     }
     state.invalid.delete(field);
     for (const p of parts) p.params[key] = r.value;
+    actions.unconfirm(...tailConfirmations());
     actions.scheduleRender();
     return true;
   },
@@ -251,6 +263,7 @@ export const actions = {
     const rest = state.model.parts.filter((p) => !mine.has(p));
     rest.splice(at, 0, ...fresh);
     state.model.parts = rest;
+    actions.unconfirm(...tailConfirmations());
     rebuildParts(field);
     actions.scheduleRender();
     return true;
@@ -258,7 +271,8 @@ export const actions = {
 
   setPartGroup(parts, groupId) {
     for (const p of parts) p.color_group = groupId;
-    actions.unconfirm(...parts.map((p) => `part:${p.id}`));
+    const tails = parts.some((p) => p.role === 'tail_stripe') ? tailConfirmations() : [];
+    actions.unconfirm(...parts.map((p) => `part:${p.id}`), ...tails);
     actions.scheduleRender();
   },
 
@@ -293,9 +307,13 @@ export const actions = {
   },
 
   setSim(patch) {
+    for (const k of ['pattern', 'rose']) {
+      if (k in patch && patch[k] !== state.sim[k]) state.sim.tried.add(k);
+    }
     Object.assign(state.sim, patch);
     views.simControls();
     views.preview();
+    notify();
   },
 
   scheduleRender() {
@@ -351,11 +369,17 @@ export const actions = {
   },
 };
 
+// Guided-mode "Looks right" keys of the tail groups. A tail edit can regroup or reorder
+// the stripes, so it clears all of them.
+function tailConfirmations() {
+  return [...state.confirmed].filter((k) => k.startsWith('tails:'));
+}
+
 // ---------------------------------------------------------------- views
 
 const $ = (id) => document.getElementById(id);
 
-function el(tag, attrs = {}, ...children) {
+export function el(tag, attrs = {}, ...children) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
     if (v === null || v === undefined || v === false) continue;
@@ -398,7 +422,8 @@ function confirmBox(key) {
       type: 'checkbox', 'data-confirm': key, checked: state.confirmed.has(key),
       onchange: (ev) => actions.confirm(key, ev.target.checked),
     }),
-    ' Confirmed');
+    el('span', { class: 'lbl-wb', text: ' Confirmed' }),
+    el('span', { class: 'lbl-guided', text: ' Looks right' }));
 }
 
 // onInput(raw, target) applies a value. With onCommit set, typing only validates
@@ -507,11 +532,12 @@ function tailCard(parts, n) {
       el('select', { onchange: (ev) => actions.setPartGroup(same, Number(ev.target.value)) },
         ...groupOptions(sp.color_group))));
   }
-  return el('div', { class: 'card' },
+  const key = tailCheckKey(n);
+  return el('div', { class: 'card', 'data-flag': key },
     el('div', { class: 'card-head' },
       el('strong', { text: 'Tails' }),
       el('span', { class: 'muted', text: ` ${first.params.tails_count} x ${stripes.length} stripe(s)` })),
-    grid, stripeList);
+    grid, stripeList, confirmBox(key));
 }
 
 export const views = {
@@ -686,6 +712,7 @@ export const views = {
       const flagged = items.has(key);
       card.classList.toggle('flagged', flagged);
       card.classList.toggle('confirmed', flagged && state.confirmed.has(key));
+      card.classList.toggle('checked', state.confirmed.has(key)); // guided "Looks right"
       const box = card.querySelector(`input[data-confirm]`);
       if (box) box.checked = state.confirmed.has(key);
       const text = card.querySelector('.flag-text');
@@ -725,6 +752,7 @@ export const views = {
     const blockers = downloadBlockers();
     $('download').disabled = blockers.length > 0;
     $('download-reason').textContent = blockers.length ? blockers.join(' ') : `Ready: ${state.filename}`;
+    notify();
   },
 };
 

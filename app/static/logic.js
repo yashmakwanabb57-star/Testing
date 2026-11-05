@@ -104,3 +104,90 @@ export function parseValue(type, raw) {
   if (type === 'int' && (!Number.isInteger(v) || v < 1 || v > MAX_COUNT)) return { ok: false };
   return { ok: true, value: v };
 }
+
+// ---------------------------------------------------------------- guided mode
+
+export const GUIDED_STEPS = [
+  { n: 1, label: 'Upload', title: 'Upload a photo' },
+  { n: 2, label: 'Parts', title: 'Check the parts' },
+  { n: 3, label: 'Colors', title: 'Check colors' },
+  { n: 4, label: 'Test', title: 'Test on site colors' },
+  { n: 5, label: 'Download', title: 'Download' },
+];
+
+export const tailCheckKey = (n) => `tails:${n}`;
+
+// One "Looks right" check per part card, the way the workbench lays them out: each
+// non-tail part, and one per tail group. Part keys are the same as the flag keys, so
+// confirming a flagged part here confirms it everywhere.
+export function partChecks(model) {
+  if (!model) return [];
+  const out = [];
+  const tails = tailGroups(model);
+  const tailFirst = new Map(tails.map((ps, n) => [ps[0], n]));
+  for (const p of model.parts) {
+    if (p.role !== 'tail_stripe') out.push({ key: `part:${p.id}`, label: p.id });
+    else if (tailFirst.has(p)) out.push({ key: tailCheckKey(tailFirst.get(p)), label: 'Tails' });
+  }
+  return out;
+}
+
+const ROLE_NOUNS = { head: 'head', ring: 'ring', points: 'point', center: 'center', tail_stripe: 'stripe', unknown: 'shape' };
+
+// One question per color group, flagged groups first, otherwise in model order.
+// usedOn lists the part kinds using the color ("stripe"); noun is set when there is one.
+// A plain s is the plural: these words all take one.
+export function colorQuestions(model, issues = [], serverFlagged = false) {
+  if (!model) return [];
+  const flagged = new Set(flagItems(model, issues, serverFlagged).map((f) => f.key));
+  const qs = model.groups.map((g, order) => {
+    const users = model.parts.filter((p) => p.color_group === g.id);
+    const nouns = [...new Set(users.map((p) => ROLE_NOUNS[p.role] || 'shape'))];
+    const key = `group:${g.id}`;
+    return { key, group: g, noun: nouns.length === 1 ? nouns[0] : null, usedOn: nouns, uses: users.length, flagged: flagged.has(key), order };
+  });
+  return qs.sort((a, b) => (b.flagged - a.flagged) || (a.order - b.order));
+}
+
+// Why Next is blocked on a guided step, in plain words; null means the user may go on.
+export function advanceBlocker(step, s) {
+  if (step >= GUIDED_STEPS.length) return 'This is the last step.';
+  if (s.analyzing) return 'Wait for the analysis to finish.';
+  if (!s.model || !s.svg) return 'Upload a photo first.';
+  if (step === 2) {
+    if (s.invalid.size) return 'Fix the invalid values (red fields) first.';
+    const checks = partChecks(s.model);
+    const open = checks.filter((c) => !s.confirmed.has(c.key)).length;
+    if (open) return `Mark every part "Looks right" first (${open} of ${checks.length} left).`;
+  }
+  if (step === 3) {
+    const open = flagItems(s.model, s.issues, s.flagged)
+      .filter((f) => !f.key.startsWith('part:') && !s.confirmed.has(f.key));
+    const colors = open.filter((f) => f.key.startsWith('group:')).length;
+    const warnings = open.length - colors;
+    const bits = [];
+    if (colors) bits.push(`answer Yes for ${colors} flagged color(s)`);
+    if (warnings) bits.push(`confirm ${warnings} warning(s)`);
+    if (bits.length) return `Please ${bits.join(' and ')} first.`;
+  }
+  if (step === 4) {
+    const tried = (s.sim && s.sim.tried) || new Set();
+    const missing = [];
+    if (!tried.has('pattern')) missing.push('Color 2 Solid / Pattern');
+    if (!tried.has('rose')) missing.push('Rose On / Off');
+    if (missing.length) return `Try ${missing.join(' and ')} at least once first.`;
+  }
+  return null;
+}
+
+export const canAdvance = (step, s) => advanceBlocker(step, s) === null;
+
+// Breadcrumb jumps: back is always allowed; forward only to a step already reached, and
+// only if every step in between could be passed with Next right now.
+export function canJump(from, to, s, reached) {
+  if (to < 1 || to > GUIDED_STEPS.length) return false;
+  if (to <= from) return true;
+  if (to > reached) return false;
+  for (let k = from; k < to; k++) if (!canAdvance(k, s)) return false;
+  return true;
+}

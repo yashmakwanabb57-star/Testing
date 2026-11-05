@@ -10,6 +10,10 @@
 <header class="topbar">
   <img class="logo" src="/static/logo.webp" alt="BR Roset" width="63" height="38">
   <h1>Rosette to SVG</h1>
+  <div class="seg mode-switch" role="group" aria-label="Mode">
+    <button type="button" id="mode-workbench" class="seg-btn active" aria-pressed="true">Workbench</button>
+    <button type="button" id="mode-guided" class="seg-btn" aria-pressed="false">Guided</button>
+  </div>
   <span id="file-name" class="muted">No photo loaded</span>
   <span id="status" class="status" aria-live="polite"></span>
   <label class="btn primary" for="file-input">Upload photo</label>
@@ -21,7 +25,7 @@
   <button id="error-close" class="btn small" type="button">Dismiss</button>
 </div>
 
-<main class="workbench">
+<main class="workbench" id="workbench">
   <!-- Column 1: photo -->
   <section class="col" id="col-photo">
     <h2>Photo</h2>
@@ -65,7 +69,7 @@
   <section class="col" id="col-model">
     <h2>Detected parts</h2>
     <div id="parts" class="list"><p class="muted">No parts yet.</p></div>
-    <label class="check rose-model"><input type="checkbox" id="model-rose" disabled> Draw the rose in the SVG</label>
+    <label class="check rose-model" id="model-rose-row"><input type="checkbox" id="model-rose" disabled> Draw the rose in the SVG</label>
 
     <h2>Colors</h2>
     <div id="groups" class="list"><p class="muted">No colors yet.</p></div>
@@ -78,13 +82,33 @@
     <h2>Checks</h2>
     <ul id="checks" class="checks"></ul>
 
-    <div class="download">
+    <div class="download" id="download-box">
       <p id="download-reason" class="muted"></p>
       <button type="button" id="download" class="btn primary wide" disabled>Download SVG</button>
     </div>
   </section>
 </main>
 
+<!-- Guided mode: the same state and controls, one step at a time. guided.js moves the
+     workbench's own photo, preview, parts, warnings, checks and download nodes into the
+     slots below and puts them back when switching to Workbench. -->
+<main class="guided" id="guided" hidden>
+  <nav class="crumbs" id="g-crumbs" aria-label="Steps"></nav>
+  <h2 class="g-title" id="g-title"></h2>
+  <div class="g-body">
+    <div class="g-visual" id="g-visual"></div>
+    <div class="g-task">
+      <div id="g-task"></div>
+      <div class="g-nav">
+        <button type="button" id="g-back" class="btn">Back</button>
+        <button type="button" id="g-next" class="btn primary">Next</button>
+        <span id="g-reason" class="g-reason" aria-live="polite"></span>
+      </div>
+    </div>
+  </div>
+</main>
+
 <script type="module" src="/static/app.js"></script>
+<script type="module" src="/static/guided.js"></script>
 </body>
 </html>

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 STATIC = Path(__file__).resolve().parent.parent / "app" / "static"
-ASSETS = ["index.html", "app.js", "logic.js", "simulator.js", "styles.css"]
+ASSETS = ["index.html", "app.js", "logic.js", "guided.js", "simulator.js", "styles.css"]
 client = TestClient(app)
 
 
@@ -17,9 +17,13 @@ def test_workbench_html():
     html = r.text
     for needle in ('id="file-input"', 'id="preview"', 'id="parts"', 'id="groups"',
                    'id="checks"', 'id="download"', 'src="/static/app.js"', 'href="/static/styles.css"',
-                   'src="/static/logo.webp" alt="BR Roset"'):
+                   'src="/static/logo.webp" alt="BR Roset"', 'src="/static/guided.js"',
+                   'id="mode-workbench"', 'id="mode-guided"', 'id="guided"', 'id="g-next"', 'id="g-crumbs"'):
         assert needle in html, needle
     assert re.search(r'<button[^>]*id="download"[^>]*disabled', html)
+    # Workbench is the default view; the guided view starts hidden.
+    assert re.search(r'<main[^>]*id="guided"[^>]*hidden', html)
+    assert re.search(r'id="mode-workbench"[^>]*aria-pressed="true"', html)
 
 
 def test_static_assets_served():

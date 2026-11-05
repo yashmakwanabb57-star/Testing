@@ -14,6 +14,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); }
 .logo { height: 38px; width: auto; display: block; }
 h1 { font-size: 15px; margin: 0; font-weight: 600; }
@@ -112,6 +113,51 @@ h2:first-child { margin-top: 0; }
 .download { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
 .download p { margin: 0 0 6px; }
 
+/* Mode switch (header) */
+.mode-switch { margin-left: 8px; }
+
+/* Guided mode */
+.guided { padding: 12px; max-width: 1400px; margin: 0 auto; }
+.crumbs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+.crumb { border: 0; background: none; font: inherit; color: var(--accent); cursor: pointer; padding: 2px 4px; border-radius: 3px; }
+.crumb:hover:not(:disabled) { background: #eef4fa; }
+.crumb.current { font-weight: 700; color: var(--text); cursor: default; }
+.crumb:disabled:not(.current) { color: #9aa0a8; cursor: not-allowed; }
+.crumbs .sep { color: var(--muted); }
+.g-title { font-size: 15px; text-transform: none; letter-spacing: 0; color: var(--text); margin: 12px 0 8px; }
+.g-body { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(340px, 1fr); gap: 12px; align-items: start; }
+.g-visual, .g-task { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px; min-width: 0; }
+.g-visual { display: grid; gap: 12px; align-items: start; }
+.g-visual.n2 { grid-template-columns: 1fr 1fr; }
+.g-visual .drop-zone img { max-height: 70vh; margin: 0 auto; }
+.g-visual .stage { max-width: 520px; }
+.g-intro { margin: 0 0 10px; }
+.g-status { margin: 10px 0 0; font-weight: 600; }
+.g-task > * + * { margin-top: 10px; }
+.g-task .download { margin-top: 10px; }
+.g-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; padding-top: 10px;
+  border-top: 1px solid var(--line); }
+.g-reason { color: #8a6100; }
+.question .q-text { margin: 0 0 4px; font-size: 14px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.question .q-text .swatch { margin: 0 2px; }
+.question .q-meta { margin: 0 0 6px; font-size: 11px; }
+.q-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.q-actions select { font: inherit; padding: 2px 4px; border: 1px solid var(--line); border-radius: 3px; }
+.card.question.checked:not(.flagged) { border-color: #c9d6c3; background: #f6faf4; }
+.g-checklist li.todo .mark { color: #8a6100; }
+.g-checklist li.pass .mark { color: var(--ok); }
+.g-checklist .mark { min-width: 44px; }
+
+/* "Looks right" on every part card in guided mode (the workbench shows it on flagged cards only) */
+.lbl-guided { display: none; }
+body.mode-guided #parts .lbl-guided { display: inline; }
+body.mode-guided #parts .lbl-wb { display: none; }
+body.mode-guided #parts .card .confirm { display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+  margin-top: 6px; font-weight: 600; }
+body.mode-guided #parts .card.checked:not(.flagged) { border-color: #c9d6c3; background: #f6faf4; }
+
 @media (max-width: 1000px) {
   .workbench { grid-template-columns: 1fr; }
+  .g-body { grid-template-columns: 1fr; }
 }
