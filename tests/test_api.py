@@ -1,4 +1,5 @@
 import io
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -90,7 +91,7 @@ def test_render_roundtrip():
 
 
 def test_render_invalid_model_422():
-    for payload in ({"model": {"parts": [{"bogus": 1}]}}, {"model": 5}, {}, {"model": {"groups": [{"id": 1}]}}):
+    for payload in ({"model": {"parts": [{"bogus": 1}]}}, {"model": 5}, {}, {"model": {"groups": [{"id": 1}]}}, {"model": None}, []):
         r = client.post("/api/render", json=payload)
         assert r.status_code == 422, payload
     r = client.post("/api/render", content=b"{bad", headers={"content-type": "application/json"})
@@ -105,3 +106,25 @@ def test_download_name():
 def test_index_served():
     assert client.get("/").status_code == 200
     assert client.get("/static/index.html").status_code == 200
+
+
+def _points_model():
+    model = _post("S46-15.png", _png()).json()["model"]
+    return model, next(p for p in model["parts"] if p["role"] == "points")
+
+
+def test_render_rejects_bad_counts_quickly():
+    for value in (10**9, -1, 0, 201, 2.5, "x", None, True):
+        model, pts = _points_model()
+        pts["params"]["count"] = value
+        r = client.post("/api/render", json={"model": model})
+        assert r.status_code == 422, value
+
+
+def test_render_rejects_non_finite_numbers():
+    for token in ("NaN", "Infinity"):
+        model, pts = _points_model()
+        pts["params"]["cx"] = 0.123456
+        raw = json.dumps({"model": model}).replace("0.123456", token)
+        r = client.post("/api/render", content=raw, headers={"content-type": "application/json"})
+        assert r.status_code == 422, token

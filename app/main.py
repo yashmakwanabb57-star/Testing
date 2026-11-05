@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import logging
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ EXTENSIONS = {".png", ".webp", ".jpg", ".jpeg"}
 FORMATS = {"PNG", "WEBP", "JPEG"}
 STATIC = Path(__file__).resolve().parent / "static"
 
+log = logging.getLogger("rosette.api")
 app = FastAPI(title="Rosette SVG generator")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
@@ -44,6 +46,7 @@ def _issues(issues) -> list[dict]:
 
 
 def _read_limited(file: UploadFile) -> bytes:
+    # Starlette has already spooled the upload to disk, so this caps memory, not disk.
     buf = bytearray()
     while chunk := file.file.read(CHUNK):
         buf += chunk
@@ -91,6 +94,7 @@ def api_render(req: RenderRequest) -> dict:
         model = RosetteModel.from_json(req.model)
         result = render(model)
     except Exception:
+        log.exception("render failed for submitted model")
         raise HTTPException(422, INVALID_MODEL) from None
     return {"svg": result.svg, "issues": _issues(result.issues),
             "flagged": is_flagged(model, result.issues)}
