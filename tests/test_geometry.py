@@ -57,17 +57,31 @@ def make_tails():
 def test_tails_mirror_symmetry():
     t = make_tails()
     assert len(t) == 5 and all(len(row) == 3 for row in t)
-
-    def cloud(row):
-        return sorted(p for s in row for p in pts_of(s))
-
     for k in range(5):
-        a, b = cloud(t[k]), cloud(t[4 - k])
-        mirrored = sorted((600 - x, y) for x, y in b)
-        # compare as sets of rounded points
-        assert {(round(x, 2), round(y, 2)) for x, y in a} == \
-               {(round(x, 2), round(y, 2)) for x, y in mirrored}
+        for i in range(3):
+            o = pts_of(t[k][i])
+            m = pts_of(t[4 - k][2 - i])
+            assert len(o) == len(m)
+            mir = [(600 - x, y) for x, y in o]
+            exp = [mir[1], mir[0]] + mir[2:][::-1]
+            for (ex, ey), (mx, my) in zip(exp, m):
+                assert abs(ex - mx) < 0.01 and abs(ey - my) < 0.01
     assert t[0][0].category is None
+
+
+def test_tails_index_zero_leftmost():
+    t = make_tails()
+    means = [sum(x for s in row for x, _ in pts_of(s)) / sum(len(pts_of(s)) for s in row)
+             for row in t]
+    assert means[0] < 300
+    assert all(a < b for a, b in zip(means, means[1:]))
+
+
+def test_tails_bottoms_on_one_line():
+    for row in make_tails():
+        for s in row:
+            for x, y in pts_of(s)[2:]:
+                assert min(abs(y - 820), abs(y - (820 - 5.383))) < 0.01
 
 
 def test_tails_stripes_cover_width():

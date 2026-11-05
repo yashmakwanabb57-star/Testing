@@ -65,7 +65,7 @@ def place_rose(cx: float, cy: float, r: float) -> list[Shape]:
     half_diag = math.hypot(max(xs) - min(xs), max(ys) - min(ys)) / 2
     s = r / half_diag
     tx, ty = cx - s * bx, cy - s * by
-    transform = f"matrix({fmt(s)} 0 0 {fmt(s)} {fmt(tx)} {fmt(ty)})"
+    transform = f"matrix({s:.6f} 0 0 {s:.6f} {fmt(tx)} {fmt(ty)})"
     out = []
     for e in els:
         tag = etree.QName(e).localname
