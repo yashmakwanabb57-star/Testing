@@ -159,7 +159,10 @@ def part_area(part: Part, parts: list[Part] | None = None) -> float:
         ro, ri = float(p["r_outer"]), float(p["r_inner"])
         annulus = pi * max(0.0, ro * ro - ri * ri)
         if "width_ratio" in p and "count" in p:
-            return min(annulus, int(p["count"]) * 0.5 * float(p["width_ratio"]) * (ro - ri) ** 2)
+            # a bow is a block from inner_ratio * width to width (geometry.points);
+            # other kinds are tapered, about half their bounding box
+            fill = (1 + float(p.get("inner_ratio", 1.0))) / 2 if p.get("kind") == "bow" else 0.5
+            return min(annulus, int(p["count"]) * fill * float(p["width_ratio"]) * (ro - ri) ** 2)
         return 0.5 * annulus
     if part.role == "tail_stripe":
         f = _fracs(p)

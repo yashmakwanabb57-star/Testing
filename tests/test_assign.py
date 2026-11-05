@@ -275,3 +275,14 @@ def test_usual_two_color_layout_is_not_warned_below_chance():
     groups = [group(0, (200, 30, 30)), group(1, (240, 200, 40))]
     out = A.assign(RosetteModel(parts=[head(0), center(1), *tails([0, 1, 0])], groups=groups))
     assert not any("plausible" in w for w in out.warnings)
+
+
+def test_bow_area_is_a_block_from_its_inner_width():
+    # geometry draws a bow as a block from inner_ratio * w to w over its length L
+    q = {"cx": 300, "cy": 167, "kind": "bow", "count": 6, "r_inner": 60.0, "r_outer": 100.0,
+         "rotation_deg": 0.0, "width_ratio": 0.5}
+    L, w = 40.0, 20.0
+    assert A.part_area(Part("p", "points", {**q, "inner_ratio": 0.5}, 0, 20, 1.0)) == pytest.approx(6 * 0.75 * w * L)
+    assert A.part_area(Part("p", "points", q, 0, 20, 1.0)) == pytest.approx(6 * w * L)
+    # other kinds keep the half-width estimate
+    assert A.part_area(Part("p", "points", {**q, "kind": "diamond"}, 0, 20, 1.0)) == pytest.approx(6 * 0.5 * w * L)
