@@ -1,0 +1,333 @@
+"""Head-side part detection: head disc (pinked or smooth), rings, points rings, center.
+
+Everything is read off a polar unwrap of the color-group labels around the head
+center (radius step ~1 canvas unit, RING_THETA angles), leaving out the sector
+straight below the center where the tails show:
+- radial profile: a radius where one label covers >= FULL_COV of the circle is 'full';
+  contiguous full radii of one label form a band. The band at the middle is the
+  center disc, the outermost band of the head label is the head disc, the others
+  are rings (inner ones drawn on top).
+- the radii between bands are 'zones'; each label in a zone is a candidate points
+  ring. Its count N is the symmetry order of its angular indicator: the largest N
+  for which the indicator, turned by every multiple of 360/N, still correlates with
+  itself (>= SYM_T). An FFT peak needs the full circle, which the tails sector breaks;
+  the turned self-correlation only uses angles valid in both copies. Rotation is the
+  phase of the N-th harmonic over the valid angles, kind comes from
+  the lobe width profile across the zone (bow: wide at both ends, star: widest near
+  its inner end and narrowing to the tip, diamond/petal: widest in the middle, petal
+  the fuller of the two).
+  A same-label band just inside a star's lobes is the star's own body.
+- the head disc exists when the outline of the upper half is a closed circle
+  (radius spread < HEAD_ROUND); its label is the majority just inside the outline,
+  and it is pinked when the outline, freed of its slow trend, still varies by
+  PINKED_DEPTH units or more (designer scallops: 2-3.3 units).
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+
+import numpy as np
+from scipy import ndimage
+
+from rosette.model import Part
+from rosette.vision.parts_common import Frame, majority, polar_sample, r3
+from rosette.vision.prepare import Prepared
+
+# Radial sampling step (canvas units) and angular samples per circle.
+RADIAL_STEP_UNITS = 1.0
+RING_THETA = 720
+# Coverage of one label at which a circle counts as full (a band radius).
+FULL_COV = 0.8
+# Bands thinner than this (canvas units) are noise or edge teeth, not parts.
+MIN_BAND_UNITS = 3.0
+# A band whose label covers >= BRIDGE_COV of the circles within BRIDGE_REACH_UNITS on
+# both sides is where one points layer's lobes touch, not a ring.
+BRIDGE_COV, BRIDGE_REACH_UNITS = 0.4, 3.0
+# Zones thinner than this (canvas units) are band edges (teeth, polygon corners).
+MIN_ZONE_UNITS = 10.0
+# Mean zone coverage a label needs to be a candidate points layer.
+MIN_LAYER_COV = 0.01
+# Coverage below which a radius does not belong to a layer's radial extent.
+EXTENT_COV = 0.02
+# Highest points count reported.
+MAX_COUNT = 24
+# Rotational self-correlation that fixes the symmetry order; below LOW_SYM a layer is unknown.
+SYM_T, LOW_SYM = 0.6, 0.4
+# Half-angle (deg) of the sector straight below the center left out of the head
+# analysis: the tails show there between and below the head's parts.
+TAIL_SECTOR_DEG = 35.0
+# Lobe width profile (shares of the widest lobe width): a bow is wide at both ends; a
+# star is widest in its inner STAR_PEAK of the radial extent and narrow at the tips.
+BOW_ENDS = 0.5
+STAR_PEAK, STAR_OUT = 0.35, 0.5
+PETAL_FULLNESS = 0.6
+# Head outline: angles sampled, search radius (head radii), inner start of the scan.
+RIM_THETA = 1440
+RIM_MAX, RIM_START = 1.2, 0.6
+# Upper-half outline radius spread (5-95 %, head radii) below which the head is a disc.
+HEAD_ROUND = 0.12
+# Outline detrend window (canvas units of arc) and pinked threshold (canvas units).
+RIM_TREND_UNITS = 40.0
+PINKED_DEPTH = 1.2
+# Center search: +- units along the axis, over radii RECENTER_FROM..RECENTER_TO head
+# radii sampled every RECENTER_RADIAL_STEP units.
+RECENTER_UNITS = 12.0
+RECENTER_FROM, RECENTER_TO, RECENTER_RADIAL_STEP = 0.3, 0.95, 2.0
+# Head label is sampled this far (canvas units) inside the outline.
+RIM_LABEL_UNITS = 6.0
+# A head band must reach this share of the head radius.
+HEAD_BAND_EDGE = 0.8
+# A band starting within this many canvas units of the middle is the center disc;
+# one that also reaches HEAD_BAND_EDGE is a plain head disc.
+CENTER_START_UNITS = 3.0
+
+
+@dataclass
+class _Band:
+    i0: int
+    i1: int  # exclusive
+    label: int
+    cov: float
+
+
+def _rim(p: Prepared, fr: Frame) -> tuple[np.ndarray, np.ndarray]:
+    """(theta, outline radius px) over the upper half of the head."""
+    cx, cy, r = p.head
+    step = max(0.5, fr.scale * RADIAL_STEP_UNITS / 2)
+    radii = np.arange(RIM_START * r, RIM_MAX * r, step)
+    pol = polar_sample(p.mask.astype(np.int8), cx, cy, radii, RIM_THETA, fill=0) > 0
+    th = np.linspace(0, 2 * np.pi, RIM_THETA, endpoint=False)
+    upper = th > np.pi  # y < cy on screen
+    first_off = np.where(~pol, np.arange(len(radii))[:, None], len(radii)).min(axis=0)
+    rim = np.where(first_off > 0, radii[np.maximum(first_off - 1, 0)], RIM_START * r)
+    return th[upper], rim[upper]
+
+
+def _rot_score(pol: np.ndarray, win: np.ndarray, n: int, n_groups: int) -> float:
+    """Mean self-correlation of the label indicators turned by multiples of 360/n."""
+    t = pol.shape[1]
+    total, used = 0.0, 0
+    for g in range(n_groups):
+        x = (pol == g).astype(np.float32)
+        if x[:, win].mean() < MIN_LAYER_COV:
+            continue
+        for m in range(1, n):
+            sh = int(round(m * t / n))
+            ok = win & np.roll(win, -sh)
+            total += _pearson(x[:, ok].ravel(), np.roll(x, -sh, axis=1)[:, ok].ravel())
+            used += 1
+    return total / used if used else 0.0
+
+
+def refine_center(p: Prepared, labels: np.ndarray, fr: Frame, n: int) -> Prepared:
+    """Move the head center along the axis to where the points zone is most n-fold
+    symmetric. The localization's center can sit a few units off (it scores the mask
+    outline, not the inner parts), which blurs every angular profile."""
+    cx, cy, r = p.head
+    step = fr.scale * RECENTER_RADIAL_STEP
+    radii = np.arange(RECENTER_FROM * r, RECENTER_TO * r, step)
+    theta = np.degrees(np.linspace(0, 2 * np.pi, RING_THETA, endpoint=False))
+    win = np.abs(theta - 90.0) > TAIL_SECTOR_DEG
+    n_groups = int(labels.max()) + 1
+    lab = labels.astype(np.int32)
+    best = (-2.0, cy)
+    for dy in np.arange(-RECENTER_UNITS, RECENTER_UNITS + 1e-9, 1.0):
+        c = cy + dy * fr.scale
+        sc = _rot_score(polar_sample(lab, cx, c, radii, RING_THETA, fill=-1), win, n, n_groups)
+        if sc > best[0] + 1e-9 or (abs(sc - best[0]) <= 1e-9 and abs(dy) < abs(best[1] - cy) / fr.scale):
+            best = (sc, c)
+    c = best[1]
+    top = cy - r
+    return replace(p, head=(cx, float(c), float(c - top)))
+
+
+def _head_disc(p: Prepared, labels: np.ndarray, fr: Frame) -> dict | None:
+    cx, cy, r = p.head
+    th, rim = _rim(p, fr)
+    spread = (np.percentile(rim, 95) - np.percentile(rim, 5)) / r
+    if spread >= HEAD_ROUND:
+        return None
+    arc = r * (th[1] - th[0])
+    win = max(3, int(round(RIM_TREND_UNITS * fr.scale / arc)) | 1)
+    hp = rim - ndimage.median_filter(rim, size=win, mode="nearest")
+    depth = fr.d(np.percentile(hp, 95) - np.percentile(hp, 5))
+    inside = rim - RIM_LABEL_UNITS * fr.scale
+    xs = np.rint(cx + inside * np.cos(th)).astype(int)
+    ys = np.rint(cy + inside * np.sin(th)).astype(int)
+    ok = (xs >= 0) & (xs < labels.shape[1]) & (ys >= 0) & (ys < labels.shape[0])
+    label, share = majority(labels[ys[ok], xs[ok]])
+    if label < 0:
+        return None
+    pinked = depth >= PINKED_DEPTH
+    pink_conf = min(1.0, 0.5 + abs(depth - PINKED_DEPTH) / PINKED_DEPTH / 2)
+    return dict(label=label, r=float(np.percentile(rim, 90)), pinked=pinked,
+                confidence=float(min(share, pink_conf, 1 - spread)))
+
+
+def _drop_bridges(bands: list[_Band], cov: np.ndarray, reach: int, head_label: int) -> list[_Band]:
+    """Leave out inner bands whose label also covers much of the circle just inside
+    and just outside them: lobes of one points layer touching each other there.
+    The head label is exempt (it shows between everyone's lobes)."""
+    out = []
+    for k, bd in enumerate(bands):
+        if bd.label == head_label:
+            out.append(bd)
+            continue
+        inner_side = cov[max(0, bd.i0 - reach):bd.i0, bd.label]
+        outer_side = cov[bd.i1:bd.i1 + reach, bd.label]
+        if (0 < k < len(bands) - 1 and inner_side.size and outer_side.size
+                and inner_side.mean() >= BRIDGE_COV and outer_side.mean() >= BRIDGE_COV):
+            continue
+        out.append(bd)
+    return out
+
+
+def _bands(dom: np.ndarray, domc: np.ndarray, min_len: int) -> list[_Band]:
+    bands, i, n = [], 0, len(dom)
+    while i < n:
+        if domc[i] < FULL_COV:
+            i += 1
+            continue
+        j = i
+        while j < n and domc[j] >= FULL_COV and dom[j] == dom[i]:
+            j += 1
+        if j - i >= min_len:
+            bands.append(_Band(i, j, int(dom[i]), float(domc[i:j].mean())))
+        i = j
+    return bands
+
+
+def _pearson(a: np.ndarray, b: np.ndarray) -> float:
+    sa, sb = a.std(), b.std()
+    if sa == 0 or sb == 0:
+        return 0.0
+    return float(((a - a.mean()) * (b - b.mean())).mean() / (sa * sb))
+
+
+def _symmetry(ind: np.ndarray, win: np.ndarray) -> tuple[int, float, float]:
+    """(order N, score, rotation deg) of a (radii, theta) indicator seen through the
+    angular window `win`. Score of N = mean correlation of the indicator with itself
+    turned by m*360/N (m = 1..N-1) over the angles valid in both; the order is the
+    largest N scoring >= SYM_T (divisors of the true order score as high, multiples
+    and unrelated N do not)."""
+    t = ind.shape[1]
+    x = ind.astype(np.float32)
+    scores = {}
+    for n in range(2, MAX_COUNT + 1):
+        cs = []
+        for m in range(1, n):
+            sh = int(round(m * t / n))
+            ok = win & np.roll(win, -sh)
+            cs.append(_pearson(x[:, ok].ravel(), np.roll(x, -sh, axis=1)[:, ok].ravel()))
+        scores[n] = float(np.mean(cs))
+    strong = [n for n, sc in scores.items() if sc >= SYM_T]
+    n = max(strong) if strong else max(scores, key=scores.get)
+    th = np.linspace(0, 2 * np.pi, t, endpoint=False)
+    c = (x[:, win] * np.exp(-1j * n * th[win])[None]).sum()
+    rot = (-np.degrees(np.angle(c)) / n) % (360.0 / n)
+    return n, max(0.0, scores[n]), float(rot)
+
+
+def _kind(w: np.ndarray) -> str:
+    """Point kind from the lobe width profile w (inner -> outer radius)."""
+    wmax = w.max()
+    q = max(1, len(w) // 4)
+    w_in, w_out = w[:q].mean() / wmax, w[-q:].mean() / wmax
+    peak = float(np.argmax(w)) / max(1, len(w) - 1)
+    if w_in >= BOW_ENDS and w_out >= BOW_ENDS:
+        return "bow"
+    if peak <= STAR_PEAK and w_out <= STAR_OUT:
+        return "star"
+    return "petal" if w.mean() / wmax >= PETAL_FULLNESS else "diamond"
+
+
+def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
+    """Head disc, rings, points rings and center from the polar label profile."""
+    cx, cy, r = p.head
+    step = fr.scale * RADIAL_STEP_UNITS
+    radii = np.arange(step / 2, r, step)
+    pol = polar_sample(labels.astype(np.int32), cx, cy, radii, RING_THETA, fill=-1)
+    n_groups = int(labels.max()) + 1
+    if n_groups <= 0 or len(radii) == 0:
+        return []
+    theta = np.degrees(np.linspace(0, 2 * np.pi, RING_THETA, endpoint=False))
+    win = np.abs(theta - 90.0) > TAIL_SECTOR_DEG  # the tails show below the head
+    cov = np.stack([(pol[:, win] == g).mean(axis=1) for g in range(n_groups)], axis=1)
+    dom, domc = cov.argmax(axis=1), cov.max(axis=1)
+    bands = _bands(dom, domc, max(1, int(round(MIN_BAND_UNITS / RADIAL_STEP_UNITS))))
+    head = _head_disc(p, labels, fr)
+    bands = _drop_bridges(bands, cov, max(1, int(round(BRIDGE_REACH_UNITS / RADIAL_STEP_UNITS))),
+                          head["label"] if head else -2)
+
+    ccx, ccy = fr.x(cx), fr.y(cy)
+    unit = lambda i: fr.d(radii[min(i, len(radii) - 1)])  # noqa: E731 - radius index -> canvas units
+    parts: list[Part] = []
+    head_band = None
+    if head is not None:
+        outer = [b for b in bands if b.label == head["label"] and radii[b.i1 - 1] >= HEAD_BAND_EDGE * r]
+        head_band = outer[-1] if outer else None
+        parts.append(Part("head", "head", {"cx": r3(ccx), "cy": r3(ccy), "r": r3(fr.d(head["r"])),
+                                           "pinked": int(head["pinked"])},
+                          head["label"], 10, r3(head["confidence"])))
+    center_band = bands[0] if bands and fr.d(radii[bands[0].i0]) <= CENTER_START_UNITS else None
+    if center_band is not None and center_band is head_band:
+        center_band = None  # one plain disc from the middle to the rim
+
+    # zones between bands -> points layers
+    edges = [0] + [i for b in bands for i in (b.i0, b.i1)] + [len(radii)]
+    zones = [(edges[k], edges[k + 1]) for k in range(0, len(edges), 2) if edges[k + 1] > edges[k]]
+    eaten: set[int] = set()  # ids of bands that are a star's body
+    layers = []
+    for a, b in zones:
+        if fr.d(radii[b - 1] - radii[a]) < MIN_ZONE_UNITS:
+            continue
+        zcov = cov[a:b]
+        inner = next((bd for bd in bands if bd.i1 == a), None)
+        for g in range(n_groups):
+            if zcov[:, g].mean() < MIN_LAYER_COV or (head is not None and g == head["label"]):
+                continue
+            rows = np.flatnonzero(zcov[:, g] > EXTENT_COV)
+            ra, rb = a + rows[0], a + rows[-1] + 1
+            ind = pol[ra:rb] == g
+            area = float((cov[ra:rb, g] * 2 * np.pi * radii[ra:rb]).sum() * step)
+            n, share, rot = _symmetry(ind, win)
+            if share < LOW_SYM:
+                ys, xs = np.nonzero(ind[:, win])
+                xs = np.flatnonzero(win)[xs]
+                th = 2 * np.pi * xs / RING_THETA
+                rr = radii[ra + ys]
+                layers.append(("unknown", g, share, dict(
+                    cx=r3(fr.x(cx + (rr * np.cos(th)).mean())), cy=r3(fr.y(cy + (rr * np.sin(th)).mean())),
+                    r=r3(fr.d(np.sqrt(area / np.pi)))), area, rb))
+                continue
+            has_core = inner is not None and inner.label == g and inner is not head_band
+            w = cov[ra:rb, g] * 2 * np.pi * radii[ra:rb] / n
+            kind = _kind(w)
+            if has_core and kind == "star":
+                eaten.add(id(inner))
+            r_in, r_out = unit(ra), unit(rb - 1)
+            if kind == "star":  # star valleys sit where the lobes are widest
+                r_in = unit(ra + int(np.argmax(w)))
+            layers.append(("points", g, share, {
+                "cx": r3(ccx), "cy": r3(ccy), "kind": kind, "count": int(n),
+                "r_inner": r3(r_in), "r_outer": r3(r_out), "rotation_deg": r3(rot),
+                "width_ratio": r3(fr.d(w.max()) / max(r_out - r_in, 1e-6))}, area, rb))
+
+    # points: largest layer first; outer layers drawn underneath (lower z)
+    by_outer = sorted(range(len(layers)), key=lambda k: -layers[k][5])
+    z_of = {k: min(29, 20 + rank) for rank, k in enumerate(by_outer)}
+    order = sorted(range(len(layers)), key=lambda k: -layers[k][4])
+    for k in order:
+        role, g, share, params, _, _ = layers[k]
+        z = z_of[k] if role == "points" else 20
+        parts.append(Part(f"{role}-{len(parts)}", role, params, g, z, r3(min(1.0, share))))
+
+    if center_band is not None and id(center_band) not in eaten:
+        parts.append(Part("center", "center", {"cx": r3(ccx), "cy": r3(ccy), "r": r3(unit(center_band.i1))},
+                          center_band.label, 50, r3(center_band.cov)))
+    rings = [bd for bd in bands if bd is not head_band and bd is not center_band and id(bd) not in eaten]
+    for depth, bd in enumerate(reversed(rings)):  # outermost first, inner rings on top
+        parts.append(Part(f"ring-{depth}", "ring", {"cx": r3(ccx), "cy": r3(ccy),
+                                                    "r_outer": r3(unit(bd.i1)), "r_inner": r3(unit(bd.i0))},
+                          bd.label, min(49, 30 + depth), r3(bd.cov)))
+    return parts
