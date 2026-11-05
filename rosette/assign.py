@@ -22,9 +22,11 @@ tools/mine_rules.py into rosette/data/assign_rules.json.
 5. A group's confidence is the two-way softmax between the best mapping and the
    best mapping giving that group another color, at evidence scale SCALE; a tie
    gives 0.5. Below FLAG_BELOW the group is flagged for confirmation.
-6. Plausibility: when even the best mapping's area-weighted mean log P(category |
-   role) is below log(1/k) - no more plausible than coloring at random - the
-   coloring is a guess (merged or missed colors, misread parts) and is warned.
+6. Plausibility: P(category | role) is renormalized over the Colors 1..k in use
+   (a 2-color rosette is judged among Colors 1-2 only); when even the best
+   mapping's area-weighted mean log of it is below log(1/k) - no more plausible
+   than coloring at random - the coloring is a guess (merged or missed colors,
+   misread parts) and is warned.
 
 The rules file's pattern_role_prob is informational (printed by the miner, shows
 which roles carry the pattern); the pattern rule above uses RIBBON_ROLES.
@@ -220,11 +222,6 @@ def _merge(out: RosetteModel, used: list[int]) -> tuple[list[int], set[int]]:
     return used, merged
 
 
-def _share(parts: list[Part], areas: list[float], col: dict, total: float) -> float:
-    """Share of the part area that lies in assigned groups (the weight of the score)."""
-    return sum(a for q, a in zip(parts, areas) if q.color_group in col) / total
-
-
 def _sigmoid(x: float) -> float:
     return 1.0 / (1.0 + math.exp(-x)) if x > -700 else 0.0
 
@@ -251,6 +248,7 @@ def assign(model: RosetteModel, rules: dict | None = None) -> RosetteModel:
     # per group, per color: summed area share * log P(color | role)
     gs = np.zeros((k, k))
     ribbon = np.zeros(k)
+    norm = weight = 0.0  # renormalization over Colors 1..k, and the scored share
     for q, a, key in zip(out.parts, areas, keys):
         if q.color_group not in col:
             continue
@@ -258,6 +256,8 @@ def assign(model: RosetteModel, rules: dict | None = None) -> RosetteModel:
         share = a / total
         for c in range(1, k + 1):
             gs[i, c - 1] += share * math.log(_prob(rules, key, c))
+        norm += share * math.log(sum(_prob(rules, key, c) for c in range(1, k + 1)))
+        weight += share
         if q.role in RIBBON_ROLES:
             ribbon[i] += share
 
@@ -285,7 +285,7 @@ def assign(model: RosetteModel, rules: dict | None = None) -> RosetteModel:
             continue
         maps.append((float(sum(gs[i, perm[i] - 1] for i in range(k))), perm))
     best_s, best = max(maps, key=lambda m: m[0])  # first of equal scores: stable order
-    if k > 1 and best_s < math.log(1.0 / k) * _share(out.parts, areas, col, total):
+    if k > 1 and best_s - norm < math.log(1.0 / k) * weight:
         out.warnings.append("The colors are no more plausible for this layout than a random guess - "
                             "check every Color.")
     for i, gid in enumerate(used):

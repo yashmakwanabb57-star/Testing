@@ -267,3 +267,11 @@ def test_usual_layout_is_not_warned_below_chance():
     groups = [group(0, (200, 30, 30)), group(1, (30, 30, 200), pattern=True), group(2, (240, 200, 40))]
     out = A.assign(RosetteModel(parts=[head(0), *tails([0, 1, 2, 1, 0])], groups=groups))
     assert not any("plausible" in w for w in out.warnings)
+
+
+def test_usual_two_color_layout_is_not_warned_below_chance():
+    # a plain two-color rosette (head and outer tails one color, centre stripe the
+    # other) is judged among Colors 1-2 only, not against the 3-color layouts
+    groups = [group(0, (200, 30, 30)), group(1, (240, 200, 40))]
+    out = A.assign(RosetteModel(parts=[head(0), center(1), *tails([0, 1, 0])], groups=groups))
+    assert not any("plausible" in w for w in out.warnings)
