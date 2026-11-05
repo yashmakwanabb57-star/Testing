@@ -45,10 +45,10 @@ Download the SVG from the UI (the download is enabled once the flags are confirm
 
 ```
 .venv\Scripts\python.exe -m pytest -q
-.venv\Scripts\python.exe -m pytest -q -m "not slow"
+.venv\Scripts\python.exe -m pytest -q -m slow
 ```
 
-Tests marked `slow` run the scoreboard bar; `pytest -m slow` runs only those. The slow bar test currently fails because the success bar is not met (see docs/pipeline.md).
+The first command runs the fast suite: `pyproject.toml` already sets `-m "not slow"`, so the slow tests are skipped by default. The second runs only the tests marked `slow` (the scoreboard bar and a full pass over the reference photos). The slow bar test currently fails because the success bar is not met (see docs/pipeline.md).
 
 ## Scoring
 
@@ -68,5 +68,6 @@ After converting a photo and confirming the flags, upload the SVG to a test prod
 2. Color 2 in solid color mode: the ribbons take the chosen solid color.
 3. Color 2 in pattern mode: the ribbons show the chosen pattern.
 4. Color 3 in both modes: it must stay correct in solid and in pattern mode.
-5. Look over the whole rosette for missing elements, duplicated elements, or parts with the wrong color.
-6. If something is off, fix it in the UI (or note it for the pipeline) and re-test.
+5. Color 4 (only when the design uses it): change it and confirm only its parts change, in solid and in pattern mode.
+6. Look over the whole rosette for missing elements, duplicated elements, or parts with the wrong color.
+7. If something is off, fix it in the UI (or note it for the pipeline) and re-test.
