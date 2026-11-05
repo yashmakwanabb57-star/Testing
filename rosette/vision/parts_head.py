@@ -31,7 +31,7 @@ import numpy as np
 from scipy import ndimage
 
 from rosette.model import Part
-from rosette.vision.parts_common import Frame, majority, polar_sample, r3
+from rosette.vision.parts_common import Frame, blob_rings, majority, polar_sample, r3
 from rosette.vision.prepare import Prepared
 
 # Radial sampling step (canvas units) and angular samples per circle.
@@ -246,6 +246,38 @@ def _kind(w: np.ndarray) -> str:
     return "petal" if w.mean() / wmax >= PETAL_FULLNESS else "diamond"
 
 
+def _blob_layer(p: Prepared, labels: np.ndarray, fr: Frame, g: int, r0: float, r1: float,
+                step: float) -> tuple[dict, float, int] | None:
+    """Points layer of label g read from its blobs between radii r0..r1 (px) when they
+    form an even ring (parts_common.blob_rings): star tips or loop ends whose pixel
+    pattern is too irregular for the rotational self-correlation (hand-made layouts,
+    a center a few units off). Returns (params without cx/cy, confidence = evenness,
+    outer radius index) of the ring with the most blobs, or None."""
+    cx, cy, _ = p.head
+    h, w = labels.shape
+    yy, xx = np.ogrid[:h, :w]
+    dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+    rings = blob_rings((labels == g) & (dist >= r0) & (dist <= r1), (cx, cy, r1), p.scale)
+    if not rings:
+        return None
+    ring = max(rings, key=lambda q: (q.visible, q.evenness))
+    d = dist[ring.pixels]
+    ra, rb = float(np.percentile(d, 2)), float(np.percentile(d, 98))
+    radii = np.arange(ra, rb + step / 2, step)
+    if len(radii) < 2:
+        return None
+    pol = polar_sample(ring.pixels.astype(np.int8), cx, cy, radii, RING_THETA, fill=0) > 0
+    width = pol.mean(axis=1) * 2 * np.pi * radii / ring.visible
+    kind = _kind(width)
+    r_in, r_out = fr.d(ra), fr.d(rb)
+    if kind == "star":  # valleys sit where the lobes are widest
+        r_in = fr.d(radii[int(np.argmax(width))])
+    params = {"kind": kind, "count": int(ring.order), "r_inner": r3(r_in), "r_outer": r3(r_out),
+              "rotation_deg": r3(ring.rotation_deg),
+              "width_ratio": r3(fr.d(width.max()) / max(r_out - r_in, 1e-6))}
+    return params, ring.evenness, int(np.searchsorted(np.arange(step / 2, p.head[2], step), rb))
+
+
 def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
     """Head disc, rings, points rings and center from the polar label profile."""
     cx, cy, r = p.head
@@ -297,6 +329,12 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             area = float((cov[ra:rb, g] * 2 * np.pi * radii[ra:rb]).sum() * step)
             n, share, rot = _symmetry(ind, win)
             if share < LOW_SYM:
+                found = _blob_layer(p, labels, fr, g, radii[a], radii[b - 1] + step, step)
+                if found is not None:
+                    params, conf, rb_blob = found
+                    params.update(cx=r3(ccx), cy=r3(ccy))
+                    layers.append(("points", g, conf, params, area, rb_blob))
+                    continue
                 ys, xs = np.nonzero(ind[:, win])
                 xs = np.flatnonzero(win)[xs]
                 th = 2 * np.pi * xs / RING_THETA

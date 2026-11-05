@@ -3,12 +3,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import cv2
 import numpy as np
 
 from rosette.vision.prepare import Prepared
 
 # Canvas axis x and rosette top y (600x850 frame).
 CANVAS_AXIS_X, CANVAS_TOP_Y = 300.0, 25.0
+# Star tips are as small as motif blobs (S40-15 black tips 740-1250 units^2, S35-19
+# white tips ~840, A15-17 ~350) but are not absorbed when they form a ring: at least
+# RING_MIN_BLOBS same-label blobs of RING_MIN_UNITS2 .. RING_MAX_UNITS2 inside the head
+# circle, within RING_RADIUS_TOL head radii of each other's distance from the head
+# center, areas within RING_AREA_RATIO of their median, evenly spread around it
+# (|mean exp(i N theta)| >= RING_EVEN for N = their count or up to two more, hidden
+# behind the tails). Measured over the 76 photos (constants as here): rings found on
+# 32 photos, motif-sized blobs kept on 11 (A15-17, S17-15, S31-15, S33-15, S35-19,
+# S40-15, S45-15, S52-19, S53-19, S70-19, s44-15), all of them star tips, loop ends or
+# pleat teeth placed around the head, none a tail motif (motifs lie on the tails or
+# scatter at many radii). The evenness margin is thin on S40-15 (0.85; its head center
+# is off by a few units): RING_EVEN sits below it at 0.8.
+RING_MIN_UNITS2, RING_MAX_UNITS2 = 250.0, 3600.0
+RING_MIN_BLOBS, RING_RADIUS_TOL, RING_AREA_RATIO, RING_EVEN = 4, 0.15, 2.5, 0.8
 
 
 @dataclass
@@ -63,3 +78,48 @@ def majority(values: np.ndarray) -> tuple[int, float]:
 
 def r3(v: float) -> float:
     return round(float(v), 3)
+
+
+@dataclass
+class BlobRing:
+    """Blobs evenly spread around a center: their pixels, the visible count, the
+    order (count including up to two blobs hidden behind the tails), evenness
+    |mean exp(i order theta)| and the rotation (deg, clockwise from +x on screen) of
+    the first blob's direction."""
+    pixels: np.ndarray
+    visible: int
+    order: int
+    evenness: float
+    rotation_deg: float
+
+
+def blob_rings(binary: np.ndarray, head: tuple[float, float, float], scale: float) -> list[BlobRing]:
+    """Rings of blobs of `binary` around the head center (see RING_MIN_BLOBS): blobs
+    of RING_MIN_UNITS2..RING_MAX_UNITS2 inside the head circle, grouped from the
+    innermost out by distance from the center, kept when their areas agree and they
+    are evenly spread around it."""
+    cx, cy, r = head
+    n, cc, stats, cen = cv2.connectedComponentsWithStats(binary.astype(np.uint8), connectivity=8)
+    a = stats[1:, cv2.CC_STAT_AREA] / scale ** 2
+    d = np.hypot(cen[1:, 0] - cx, cen[1:, 1] - cy)
+    th = np.arctan2(cen[1:, 1] - cy, cen[1:, 0] - cx)
+    idx = np.flatnonzero((a >= RING_MIN_UNITS2) & (a < RING_MAX_UNITS2) & (d < r))
+    idx = idx[np.argsort(d[idx], kind="stable")]
+    used: set[int] = set()
+    out = []
+    for i in idx:
+        if i in used:
+            continue
+        grp = [k for k in idx if k not in used and abs(d[k] - d[i]) <= RING_RADIUS_TOL * r]
+        med = float(np.median(a[grp]))
+        grp = [k for k in grp if med / RING_AREA_RATIO <= a[k] <= med * RING_AREA_RATIO]
+        if len(grp) < RING_MIN_BLOBS:
+            continue
+        order, even = max(((m, float(abs(np.exp(1j * m * th[grp]).mean())))
+                           for m in range(len(grp), len(grp) + 3)), key=lambda t: t[1])
+        if even < RING_EVEN:
+            continue
+        used.update(int(k) for k in grp)
+        rot = float(np.degrees(np.angle(np.exp(1j * order * th[grp]).mean())) / order) % (360.0 / order)
+        out.append(BlobRing(np.isin(cc, np.array(grp) + 1), len(grp), order, even, rot))
+    return out

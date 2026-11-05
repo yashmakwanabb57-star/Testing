@@ -31,6 +31,7 @@ import numpy as np
 from scipy import ndimage
 
 from rosette.model import ColorGroup
+from rosette.vision.parts_common import blob_rings
 from rosette.vision.prepare import Prepared
 
 # Weight of L* against a*/b* in the clustering features (shading robustness).
@@ -59,20 +60,7 @@ SEED = 0
 # A same-label connected blob smaller than this (canvas units^2) is a motif/text/sparkle
 # blob and is absorbed into the group surrounding it.
 MOTIF_MAX_UNITS2 = 900.0
-# Star tips are as small as motif blobs (S40-15 black tips 740-1250 units^2, S35-19
-# white tips ~840, A15-17 ~350) but are not absorbed when they form a ring: at least
-# RING_MIN_BLOBS same-label blobs of RING_MIN_UNITS2 .. RING_MAX_UNITS2 inside the head
-# circle, within RING_RADIUS_TOL head radii of each other's distance from the head
-# center, areas within RING_AREA_RATIO of their median, evenly spread around it
-# (|mean exp(i N theta)| >= RING_EVEN for N = their count or up to two more, hidden
-# behind the tails). Measured over the 76 photos (constants as here): rings found on
-# 32 photos, motif-sized blobs kept on 11 (A15-17, S17-15, S31-15, S33-15, S35-19,
-# S40-15, S45-15, S52-19, S53-19, S70-19, s44-15), all of them star tips, loop ends or
-# pleat teeth placed around the head, none a tail motif (motifs lie on the tails or
-# scatter at many radii). The evenness margin is thin on S40-15 (0.85; its head center
-# is off by a few units): RING_EVEN sits below it at 0.8.
-RING_MIN_UNITS2, RING_MAX_UNITS2 = 250.0, 3600.0
-RING_MIN_BLOBS, RING_RADIUS_TOL, RING_AREA_RATIO, RING_EVEN = 4, 0.15, 2.5, 0.8
+# Star tips forming an even ring around the head center are kept (parts_common.blob_rings).
 # Glitter split: a cluster is split in two when at least SPLIT_MIN_FRAC of its pixels
 # have grain below SATIN_GRAIN (satin) and as many above GLITTER_GRAIN (sparkle).
 # The grain feature alone leaves same-hue satin + glitter in one cluster on two
@@ -221,30 +209,11 @@ def _cluster(feat: np.ndarray, max_groups: int) -> np.ndarray:
 def _ring_blobs(labels: np.ndarray, mask: np.ndarray, head: tuple[float, float, float],
                 scale: float) -> np.ndarray:
     """Pixels of same-label blobs that form an evenly spread ring around the head
-    center (star tips, loop ends; see RING_MIN_BLOBS): parts, not motifs."""
-    cx, cy, r = head
+    center (star tips, loop ends; see parts_common.blob_rings): parts, not motifs."""
     keep = np.zeros(labels.shape, bool)
     for j in np.unique(labels[mask]):
-        n, cc, stats, cen = cv2.connectedComponentsWithStats((labels == j).astype(np.uint8), connectivity=8)
-        a = stats[1:, cv2.CC_STAT_AREA] / scale ** 2
-        d = np.hypot(cen[1:, 0] - cx, cen[1:, 1] - cy)
-        th = np.arctan2(cen[1:, 1] - cy, cen[1:, 0] - cx)
-        idx = np.flatnonzero((a >= RING_MIN_UNITS2) & (a < RING_MAX_UNITS2) & (d < r))
-        idx = idx[np.argsort(d[idx], kind="stable")]
-        used: set[int] = set()
-        for i in idx:
-            if i in used:
-                continue
-            grp = [k for k in idx if k not in used and abs(d[k] - d[i]) <= RING_RADIUS_TOL * r]
-            med = float(np.median(a[grp]))
-            grp = [k for k in grp if med / RING_AREA_RATIO <= a[k] <= med * RING_AREA_RATIO]
-            if len(grp) < RING_MIN_BLOBS:
-                continue
-            even = max(abs(np.exp(1j * m * th[grp]).mean()) for m in range(len(grp), len(grp) + 3))
-            if even >= RING_EVEN:
-                used.update(int(k) for k in grp)
-        if used:
-            keep |= np.isin(cc, np.array(sorted(used)) + 1)
+        for ring in blob_rings(labels == j, head, scale):
+            keep |= ring.pixels
     return keep
 
 

@@ -192,3 +192,17 @@ def test_constant_width_centre_ribbon_on_widening_tail():
     w50, w95 = _stripe_width_at(centre, y_of(0.5)), _stripe_width_at(centre, y_of(0.95))
     assert w95 == pytest.approx(88 / p.scale, rel=0.08)
     assert w95 / w50 == pytest.approx(1.0, abs=0.08)
+
+
+def test_star_tips_found_from_their_blobs_when_pixel_symmetry_is_weak():
+    # S40-15: six black star tips peek out between gold points under an inner
+    # pleated ring. They are clearly six evenly spread blobs, but the hand-made
+    # layout and a head center a few units off keep the pixel-level rotational
+    # self-correlation far below SYM_T, so the layer was an 'unknown' disc.
+    p = prepare((PHOTOS / "S40-15.png").read_bytes())
+    labels, groups = pixel_groups(p)
+    dark = min(groups, key=lambda g: sum(g.rgb)).id
+    pts = [q for q in detect_parts(p, labels) if q.role == "points" and q.color_group == dark]
+    assert len(pts) == 1 and pts[0].params["count"] == 6
+    assert 50 < pts[0].params["r_inner"] < pts[0].params["r_outer"] < 110
+
