@@ -85,3 +85,23 @@ def test_color1_part_above_other_colors_stays_visible():
     center, star_body, head_over_tail, tail = (300, 200), (300, 140), (300, 330), (300, 600)
     assert _layered_cat_at(m, [center, star_body, head_over_tail, tail]) == [1, 3, 1, 2]
     assert validate(write_svg(build(m))) == []
+
+
+def test_clip_only_by_strictly_higher_parts():
+    from rosette.geometry import disc
+    from rosette.geometry.clip import clip_occluded
+    low = disc(300, 300, 50)
+    low.category, low.z = 2, 20
+    same = disc(300, 300, 20)
+    same.category, same.z = 1, 20
+    out = clip_occluded([low, same])
+    assert out[0] is low  # equal z: no stacking intent, nothing cut
+
+
+def test_clip_rejects_unknown_color_shape():
+    from rosette.geometry.clip import clip_occluded
+    from rosette.shapes import Shape
+    odd = Shape("path", {"d": "M0,0 L10,0 L10,10z"}, 2, z=0)
+    top = Shape("circle", {"cx": "5", "cy": "5", "r": "3"}, 1, z=5)
+    with pytest.raises(ValueError):
+        clip_occluded([odd, top])

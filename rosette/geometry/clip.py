@@ -41,24 +41,26 @@ def _ring_circles(d: str) -> list[tuple[float, float, float]]:
     return out
 
 
-def to_geom(s: Shape) -> BaseGeometry | None:
-    """Shapely geometry of a color shape (None when the shape kind is not known)."""
+def to_geom(s: Shape) -> BaseGeometry:
+    """Shapely geometry of a color shape; ValueError for a shape this module cannot
+    read (only the geometry package's polygons, circles and ring paths are known)."""
     a = s.attrs
     if s.tag == "polygon":
         nums = [float(v) for v in re.findall(_NUM, a["points"])]
         pts = list(zip(nums[0::2], nums[1::2]))
-        return Polygon(pts).buffer(0) if len(pts) >= 3 else None
+        if len(pts) >= 3:
+            return Polygon(pts).buffer(0)
     if s.tag == "circle":
         return Point(float(a["cx"]), float(a["cy"])).buffer(float(a["r"]), quad_segs=QUAD_SEGS)
     if s.tag == "path" and "a" in a.get("d", ""):
         circles = _ring_circles(a["d"])
         if not circles:
-            return None
+            raise ValueError(f"cannot clip {s.role or 'color'} path: {a['d'][:40]}")
         geom = Point(circles[0][0], circles[0][1]).buffer(circles[0][2], quad_segs=QUAD_SEGS)
         for cx, cy, r in circles[1:]:
             geom = geom.symmetric_difference(Point(cx, cy).buffer(r, quad_segs=QUAD_SEGS))
         return geom
-    return None
+    raise ValueError(f"cannot clip {s.role or 'color'} shape <{s.tag}>")
 
 
 def _ring_d(coords) -> str:
@@ -84,15 +86,16 @@ def from_geom(geom: BaseGeometry, like: Shape) -> Shape | None:
 
 
 def clip_occluded(colors: list[Shape]) -> list[Shape]:
-    """`colors` in intended paint order (low z first); each shape cut by the later
-    shapes the layer order paints underneath it. Shapes left empty are dropped."""
+    """`colors` in intended paint order (low z first); each shape cut by the shapes
+    of strictly higher z that the layer order paints underneath it (equal z states
+    no stacking). Shapes left empty are dropped."""
     geoms = [to_geom(s) for s in colors]
     out = []
     for i, s in enumerate(colors):
         above = [g for t, g in zip(colors[i + 1:], geoms[i + 1:])
-                 if g is not None and _paint_rank(t.category) < _paint_rank(s.category)]
+                 if t.z > s.z and _paint_rank(t.category) < _paint_rank(s.category)]
         g = geoms[i]
-        if g is None or not above:
+        if not above:
             out.append(s)
             continue
         cover = unary_union(above)
