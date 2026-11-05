@@ -260,3 +260,19 @@ def test_star_tips_in_a_ring_are_not_absorbed_as_motifs():
     a = stats[1:, cv2.CC_STAT_AREA] / p.scale ** 2
     tips = ((d > 0.4 * r) & (d < r) & (a > 500)).sum()
     assert tips >= 6
+
+
+def test_stripe_changes_do_not_cross_the_background_between_tails():
+    # Two tails of one satin, the left lit and the right shaded, split by 2-means into
+    # halves 0 and 1: a change seen across the background gap between the tails is
+    # not a stripe edge (else shading alone could pass STRIPE_MIN_HV). A change across
+    # another group's stripe (glitter, still inside the mask) is.
+    from rosette.vision.colors import _changes
+    half = np.full((4, 30), -1, np.int8)
+    half[:, 0:10] = 0
+    half[:, 20:30] = 1
+    gap = np.ones((4, 30), bool)
+    gap[:, 10:20] = False  # background between two tails
+    assert _changes(half, gap) == 0
+    glitter = np.ones((4, 30), bool)  # a glitter stripe of another group in between
+    assert _changes(half, glitter) == 4

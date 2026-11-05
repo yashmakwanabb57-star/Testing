@@ -296,7 +296,7 @@ def _split_stripes(centers: np.ndarray, flat_feat: np.ndarray, feat_img: np.ndar
         half[region] = _nearest_chunked(feat_img[region], sub)
         if np.bincount(half[region], minlength=2).min() < STRIPE_MIN_TAIL_SHARE * region.sum():
             continue
-        along_rows, along_cols = _changes(half), _changes(half.T)
+        along_rows, along_cols = _changes(half, mask), _changes(half.T, mask.T)
         if along_rows < STRIPE_MIN_HV * max(along_cols, 1):
             continue
         out[j] = sub[0].astype(centers.dtype)
@@ -304,13 +304,16 @@ def _split_stripes(centers: np.ndarray, flat_feat: np.ndarray, feat_img: np.ndar
     return np.array(out)
 
 
-def _changes(half: np.ndarray) -> int:
+def _changes(half: np.ndarray, mask: np.ndarray) -> int:
     """Times the half label changes from one labelled pixel to the next labelled
-    pixel along each row (pixels of other groups in between are skipped: two similar
-    stripes are often kept apart by a third one, e.g. glitter between two satins)."""
+    pixel along each row. Pixels of other groups in between are skipped (two similar
+    stripes are often kept apart by a third one, e.g. glitter between two satins),
+    but not background: a change across the gap between two tails is no stripe edge."""
     ys, xs = np.nonzero(half >= 0)
     v = half[ys, xs]
-    return int(((ys[1:] == ys[:-1]) & (v[1:] != v[:-1])).sum())
+    off = np.cumsum(~mask, axis=1)  # background pixels so far along each row
+    clear = off[ys[1:], xs[1:]] == off[ys[:-1], xs[:-1]]
+    return int(((ys[1:] == ys[:-1]) & clear & (v[1:] != v[:-1])).sum())
 
 
 def _absorb_prints(labels: np.ndarray, mask: np.ndarray, tails_top: float, max_px: float,
