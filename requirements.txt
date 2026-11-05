@@ -28,6 +28,7 @@ python-multipart==0.0.33
 resvg_py==0.5.0
 scikit-image==0.26.0
 scipy==1.18.1
+shapely==2.2.0
 starlette==1.10.0
 tifffile==2026.10.15
 typing-inspection==0.4.5

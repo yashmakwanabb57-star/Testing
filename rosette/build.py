@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .geometry import disc, outlines, pinked_circle, place_rose, points_ring, ring, tails
+from .geometry.clip import clip_occluded
 from .model import Part, RosetteModel
 from .shapes import Shape
 
@@ -66,6 +67,7 @@ def build(model: RosetteModel) -> list[Shape]:
             finish(p, [shape])
 
     colors.sort(key=lambda s: s.z)
+    colors = clip_occluded(colors)  # Color 1 is painted first whatever the stacking
     result = list(colors)
     result += outlines(colors)
 
