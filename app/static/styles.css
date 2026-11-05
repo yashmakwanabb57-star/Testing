@@ -40,7 +40,6 @@ h2:first-child { margin-top: 0; }
 .banner { display: flex; align-items: center; gap: 12px; padding: 8px 16px;
   background: #fdecea; border-bottom: 1px solid #f3b8b2; color: var(--fail); }
 .banner span { flex: 1; }
-.banner[hidden] { display: none; }
 
 .workbench { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(300px, 1.15fr) minmax(330px, 1.2fr);
   gap: 12px; padding: 12px; align-items: start; }

@@ -4,7 +4,7 @@
 // parts list, warnings, checks, download) and puts them back when switching to Workbench,
 // so edits and confirmations are the same in both modes.
 import { state, actions, views, listeners, el, hex } from './app.js';
-import { GUIDED_STEPS, advanceBlocker, canJump, colorQuestions, flagItems, partChecks } from './logic.js';
+import { GUIDED_STEPS, advanceBlocker, canJump, clampStep, colorQuestions, flagItems, partChecks } from './logic.js';
 
 const MODE_KEY = 'rosette.mode';
 const LAST = GUIDED_STEPS.length;
@@ -175,21 +175,28 @@ function renderStep() {
 
 // ---------------------------------------------------------------- navigation
 
+// The crumb buttons are built once; refreshNav only updates them in place.
+const crumbs = new Map();
+function buildCrumbs() {
+  const nodes = [];
+  GUIDED_STEPS.forEach((info, i) => {
+    if (i) nodes.push(el('span', { class: 'sep', 'aria-hidden': 'true', text: '>' }));
+    const b = el('button', { type: 'button', class: 'crumb', text: `${info.n} ${info.label}`, onclick: () => go(info.n) });
+    crumbs.set(info.n, b);
+    nodes.push(b);
+  });
+  $('g-crumbs').replaceChildren(...nodes);
+}
+
 function refreshNav() {
   const { step, reached } = state.guided;
-  const crumbs = [];
-  GUIDED_STEPS.forEach((info, i) => {
-    if (i) crumbs.push(el('span', { class: 'sep', 'aria-hidden': 'true', text: '>' }));
-    const current = info.n === step;
-    crumbs.push(el('button', {
-      type: 'button', class: current ? 'crumb current' : 'crumb',
-      'aria-current': current ? 'step' : null,
-      disabled: !current && !canJump(step, info.n, state, reached),
-      text: `${info.n} ${info.label}`,
-      onclick: () => go(info.n),
-    }));
-  });
-  $('g-crumbs').replaceChildren(...crumbs);
+  for (const [n, b] of crumbs) {
+    const current = n === step;
+    b.classList.toggle('current', current);
+    if (current) b.setAttribute('aria-current', 'step');
+    else b.removeAttribute('aria-current');
+    b.disabled = !current && !canJump(step, n, state, reached);
+  }
   const blocker = advanceBlocker(step, state);
   $('g-back').disabled = step === 1;
   $('g-next').hidden = step === LAST;
@@ -215,8 +222,9 @@ function next() {
 // Called by app.js after every relevant change, in either mode.
 function refresh() {
   if (state.guided.mode !== 'guided') return;
+  state.guided.step = clampStep(state.guided.step, state);
   if (rendered !== state.guided.step) {
-    renderStep(); // a new upload moved the guided view back to step 1
+    renderStep(); // a new upload, or an earlier gate that no longer passes, moved the step back
     return;
   }
   const status = $('g-upload-status');
@@ -245,8 +253,10 @@ function setMode(mode, save = true) {
     $(id).classList.toggle('active', on);
     $(id).setAttribute('aria-pressed', String(on));
   }
-  if (guided) renderStep();
-  else {
+  if (guided) {
+    state.guided.step = clampStep(state.guided.step, state); // edits made in the workbench may reopen a step
+    renderStep();
+  } else {
     sendHome();
     views.flagsMarked();
   }
@@ -262,6 +272,7 @@ function savedMode() {
 
 function init() {
   rememberHomes();
+  buildCrumbs();
   listeners.push(refresh);
   $('mode-workbench').addEventListener('click', () => setMode('workbench'));
   $('mode-guided').addEventListener('click', () => setMode('guided'));

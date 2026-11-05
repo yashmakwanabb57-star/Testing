@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  GUIDED_STEPS, advanceBlocker, canAdvance, canJump, colorQuestions, partChecks, tailCheckKey,
+  GUIDED_STEPS, advanceBlocker, canAdvance, canJump, clampStep, colorQuestions, partChecks, tailCheckKey,
 } from '../../app/static/logic.js';
 
 // ------------------------------------------------------------ fixtures
@@ -90,32 +90,42 @@ test('step 2 needs a model', () => {
 
 // ------------------------------------------------------------ step 3
 
-test('step 3 is blocked while a flagged color is unconfirmed', () => {
-  // group 1 has confidence 0.4 < 0.6: flagged
-  assert.match(advanceBlocker(3, st()), /Yes for 1 flagged color/);
-  assert.equal(canAdvance(3, st({ confirmed: new Set(['group:1']) })), true);
+const ALL_GROUPS = ['group:0', 'group:1', 'group:2'];
+
+test('step 3 needs an answer on every color question, flagged or not', () => {
+  assert.match(advanceBlocker(3, st()), /^Answer every color question first \(3 of 3 left\)\.$/);
+  // answering only the flagged group (group 1, confidence 0.4) is not enough
+  assert.match(advanceBlocker(3, st({ confirmed: new Set(['group:1']) })), /\(2 of 3 left\)/);
+  assert.match(advanceBlocker(3, st({ confirmed: new Set(['group:1', 'group:0']) })), /\(1 of 3 left\)/);
+  assert.equal(canAdvance(3, st({ confirmed: new Set(ALL_GROUPS) })), true);
+});
+
+test('step 3 with no flags at all still needs every answer', () => {
+  const m = model();
+  m.groups[1].confidence = 0.9;
+  assert.match(advanceBlocker(3, st({ model: m, flagged: false })), /3 of 3 left/);
+  assert.equal(canAdvance(3, st({ model: m, flagged: false, confirmed: new Set(ALL_GROUPS) })), true);
 });
 
 test('step 3 needs warnings acknowledged as well', () => {
   const m = model();
   m.warnings = ['Color #a0b4c8 is partly patterned'];
-  const b = advanceBlocker(3, st({ model: m, confirmed: new Set(['group:1']) }));
-  assert.match(b, /confirm 1 warning/);
-  assert.doesNotMatch(b, /flagged color/);
-  assert.equal(canAdvance(3, st({ model: m, confirmed: new Set(['group:1', 'warning:Color #a0b4c8 is partly patterned']) })), true);
+  const b = advanceBlocker(3, st({ model: m, confirmed: new Set(ALL_GROUPS) }));
+  assert.equal(b, 'Confirm 1 warning(s) first.');
+  assert.equal(canAdvance(3, st({ model: m, confirmed: new Set([...ALL_GROUPS, 'warning:Color #a0b4c8 is partly patterned']) })), true);
 });
 
-test('step 3 ignores part flags (those are step 2) and unflagged groups', () => {
+test('step 3 ignores part flags (those are step 2)', () => {
   const m = model();
   m.parts[1].confidence = 0.3; // flags part:points-1
-  assert.equal(canAdvance(3, st({ model: m, confirmed: new Set(['group:1']) })), true);
+  assert.equal(canAdvance(3, st({ model: m, confirmed: new Set(ALL_GROUPS) })), true);
 });
 
 test('step 3 includes the server-flagged fallback', () => {
   const m = model();
   m.groups[1].confidence = 0.9; // nothing flagged locally, but the server says flagged
-  assert.match(advanceBlocker(3, st({ model: m })), /warning/);
-  assert.equal(canAdvance(3, st({ model: m, confirmed: new Set(['server:flagged']) })), true);
+  assert.match(advanceBlocker(3, st({ model: m, confirmed: new Set(ALL_GROUPS) })), /warning/);
+  assert.equal(canAdvance(3, st({ model: m, confirmed: new Set([...ALL_GROUPS, 'server:flagged']) })), true);
 });
 
 // ------------------------------------------------------------ step 4
@@ -143,11 +153,45 @@ test('breadcrumb: back always, forward only to reached steps that pass their gat
   assert.equal(canJump(1, 2, s, 1), false); // not reached yet
   assert.equal(canJump(1, 2, s, 2), true); // step 1 passes
   assert.equal(canJump(1, 3, s, 3), false); // step 2 is not passed
-  const done = st({ confirmed: new Set([...ALL_PARTS, 'group:1']), sim: { tried: new Set(['pattern', 'rose']) } });
+  const done = st({ confirmed: new Set([...ALL_PARTS, ...ALL_GROUPS]), sim: { tried: new Set(['pattern', 'rose']) } });
   assert.equal(canJump(1, 5, done, 5), true);
   assert.equal(canJump(1, 5, done, 4), false);
   assert.equal(canJump(1, 0, done, 5), false);
   assert.equal(canJump(1, 6, done, 5), false);
+});
+
+test('canJump turns false after a confirmation is removed', () => {
+  const s = st({ confirmed: new Set([...ALL_PARTS, ...ALL_GROUPS]), sim: { tried: new Set(['pattern', 'rose']) } });
+  assert.equal(canJump(2, 5, s, 5), true);
+  assert.equal(canJump(3, 5, s, 5), true);
+  s.confirmed.delete('part:head'); // e.g. the part was edited
+  assert.equal(canJump(2, 5, s, 5), false);
+  assert.equal(canJump(2, 3, s, 5), false);
+  assert.equal(canJump(3, 5, s, 5), true); // the gates from step 3 on still pass
+  assert.equal(canJump(5, 2, s, 5), true); // going back is always allowed
+  s.confirmed.delete('group:2');
+  assert.equal(canJump(3, 5, s, 5), false);
+});
+
+// ------------------------------------------------------------ clampStep
+
+test('clampStep keeps a step whose earlier gates pass', () => {
+  const s = st({ confirmed: new Set([...ALL_PARTS, ...ALL_GROUPS]), sim: { tried: new Set(['pattern', 'rose']) } });
+  for (const k of [1, 2, 3, 4, 5]) assert.equal(clampStep(k, s), k);
+});
+
+test('clampStep: at step 5, removing a part Looks right check clamps back to step 2', () => {
+  const s = st({ confirmed: new Set([...ALL_PARTS, ...ALL_GROUPS]), sim: { tried: new Set(['pattern', 'rose']) } });
+  assert.equal(clampStep(5, s), 5);
+  s.confirmed.delete(tailCheckKey(0));
+  assert.equal(clampStep(5, s), 2);
+  assert.equal(clampStep(2, s), 2); // the step itself may be blocked; only earlier gates clamp
+});
+
+test('clampStep goes to the first failing gate', () => {
+  const s = st({ confirmed: new Set(ALL_PARTS), sim: { tried: new Set() } });
+  assert.equal(clampStep(5, s), 3); // colors unanswered, and test not tried
+  assert.equal(clampStep(5, st({ model: null, svg: null })), 1);
 });
 
 // ------------------------------------------------------------ colorQuestions

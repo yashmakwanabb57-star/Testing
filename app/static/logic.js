@@ -161,14 +161,15 @@ export function advanceBlocker(step, s) {
     if (open) return `Mark every part "Looks right" first (${open} of ${checks.length} left).`;
   }
   if (step === 3) {
-    const open = flagItems(s.model, s.issues, s.flagged)
-      .filter((f) => !f.key.startsWith('part:') && !s.confirmed.has(f.key));
-    const colors = open.filter((f) => f.key.startsWith('group:')).length;
-    const warnings = open.length - colors;
-    const bits = [];
-    if (colors) bits.push(`answer Yes for ${colors} flagged color(s)`);
-    if (warnings) bits.push(`confirm ${warnings} warning(s)`);
-    if (bits.length) return `Please ${bits.join(' and ')} first.`;
+    // Every color question needs an answer (Yes), flagged or not: a wrong color in a wrong
+    // layer is the worst failure. A pick through Change... clears the answer, so it gets a
+    // fresh Yes. Warnings (and the server-flagged fallback) must be confirmed as well.
+    const qs = colorQuestions(s.model, s.issues, s.flagged);
+    const open = qs.filter((q) => !s.confirmed.has(q.key)).length;
+    if (open) return `Answer every color question first (${open} of ${qs.length} left).`;
+    const warnings = flagItems(s.model, s.issues, s.flagged)
+      .filter((f) => !f.key.startsWith('part:') && !f.key.startsWith('group:') && !s.confirmed.has(f.key)).length;
+    if (warnings) return `Confirm ${warnings} warning(s) first.`;
   }
   if (step === 4) {
     const tried = (s.sim && s.sim.tried) || new Set();
@@ -181,6 +182,13 @@ export function advanceBlocker(step, s) {
 }
 
 export const canAdvance = (step, s) => advanceBlocker(step, s) === null;
+
+// The guided step to show: the given step, or an earlier one whose gate no longer passes
+// (e.g. a part's "Looks right" was removed in the workbench while guided sat on step 5).
+export function clampStep(step, s) {
+  for (let k = 1; k < step; k++) if (!canAdvance(k, s)) return k;
+  return step;
+}
 
 // Breadcrumb jumps: back is always allowed; forward only to a step already reached, and
 // only if every step in between could be passed with Next right now.
