@@ -19,8 +19,7 @@ Z = {"head": (10, 10), "points": (20, 29), "ring": (30, 49), "center": (50, 50),
 KEYS = {
     "head": {"cx", "cy", "r", "pinked"},
     "ring": {"cx", "cy", "r_outer", "r_inner"},
-    "points": {"cx", "cy", "kind", "count", "r_inner", "r_outer", "rotation_deg", "width_ratio",
-               "inner_ratio"},
+    "points": {"cx", "cy", "kind", "count", "r_inner", "r_outer", "rotation_deg", "width_ratio"},
     "center": {"cx", "cy", "r"},
     "tail_stripe": {"tail_index", "stripe_index", "tails_count", "top_y", "bottom_y", "top_width",
                     "bottom_width", "spread_deg", "stripes", "stripes_bottom"},
@@ -65,7 +64,8 @@ def test_parts_well_formed(sid):
     ids = {g.id for g in groups}
     assert len({q.id for q in parts}) == len(parts)
     for q in parts:
-        assert set(q.params) == KEYS[q.role], q
+        bow = q.role == "points" and q.params["kind"] == "bow"
+        assert set(q.params) == KEYS[q.role] | ({"inner_ratio"} if bow else set()), q
         assert q.color_group in ids
         assert 0.0 <= q.confidence <= 1.0
         lo, hi = Z[q.role]

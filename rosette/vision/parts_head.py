@@ -334,8 +334,9 @@ def _blob_layer(p: Prepared, labels: np.ndarray, fr: Frame, g: int, r0: float, r
         r_in = fr.d(radii[int(np.argmax(width))])
     params = {"kind": kind, "count": int(ring.order), "r_inner": r3(r_in), "r_outer": r3(r_out),
               "rotation_deg": r3(ring.rotation_deg),
-              "width_ratio": r3(fr.d(width.max()) / max(r_out - r_in, 1e-6)),
-              "inner_ratio": r3(_inner_ratio(width))}
+              "width_ratio": r3(fr.d(width.max()) / max(r_out - r_in, 1e-6))}
+    if kind == "bow":
+        params["inner_ratio"] = r3(_inner_ratio(width))
     return params, conf, int(np.searchsorted(np.arange(step / 2, p.head[2], step), rb))
 
 
@@ -414,11 +415,12 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             r_in, r_out = unit(ra), unit(rb - 1)
             if kind == "star" and not has_core:  # valleys sit where the lobes are widest
                 r_in = unit(ra + int(np.argmax(w)))
-            layers.append(("points", g, share, {
-                "cx": r3(ccx), "cy": r3(ccy), "kind": kind, "count": int(n),
-                "r_inner": r3(r_in), "r_outer": r3(r_out), "rotation_deg": r3(rot),
-                "width_ratio": r3(fr.d(w.max()) / max(r_out - r_in, 1e-6)),
-                "inner_ratio": r3(_inner_ratio(w))}, area, rb))
+            params = {"cx": r3(ccx), "cy": r3(ccy), "kind": kind, "count": int(n),
+                      "r_inner": r3(r_in), "r_outer": r3(r_out), "rotation_deg": r3(rot),
+                      "width_ratio": r3(fr.d(w.max()) / max(r_out - r_in, 1e-6))}
+            if kind == "bow":
+                params["inner_ratio"] = r3(_inner_ratio(w))
+            layers.append(("points", g, share, params, area, rb))
 
     # points: largest layer first; outer layers drawn underneath (lower z)
     by_outer = sorted(range(len(layers)), key=lambda k: -layers[k][5])
