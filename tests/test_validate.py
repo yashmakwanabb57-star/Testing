@@ -219,5 +219,71 @@ def test_simulate_flag_off_and_missing_module_ok():
 @pytest.mark.skipif(not REF.exists(), reason="reference not present")
 def test_s46_reference_structure():
     issues = validate(REF.read_text(encoding="utf-8"))
-    extra = [i for i in issues if i.code not in {"root", "style_mismatch", "not_closed"}]
+    allowed = {"root", "style_mismatch", "not_closed"}
+    # Legacy quirk: S46-15 has a stroke-only <line class="st6"> in Layer_6. The tool never
+    # emits <line> (spec 3.3), so the validator stays strict; only that one element is excused.
+    extra = [i for i in issues if i.code not in allowed
+             and not (i.code == "bad_element" and i.element == '<line class="st6">')]
     assert extra == [], [(i.code, i.element, i.message) for i in extra]
+
+
+def test_nested_group_shape_hits_dup_geometry():
+    r = root_of()
+    g = gid(r, "Layer_1")
+    inner = etree.SubElement(g, "{http://www.w3.org/2000/svg}g")
+    inner.append(copy.deepcopy(g[0]))
+    assert "dup_geometry" in codes(r)
+
+
+def test_nested_group_shape_hits_toggle_mismatch():
+    r = root_of()
+    g = gid(r, "Layer_2_1_3")
+    inner = etree.SubElement(g, "{http://www.w3.org/2000/svg}g")
+    inner.append(g[0])
+    inner.append(copy.deepcopy(inner[0]))
+    assert "toggle_mismatch" in codes(r)
+
+
+@pytest.mark.parametrize("gname", ["Layer_3", "Layer_6", "Layer_rose", "Layer_1"])
+def test_classless_shape_flagged(gname):
+    r = root_of()
+    etree.SubElement(gid(r, gname), "{http://www.w3.org/2000/svg}path", d="M0,0L1,1z")
+    assert "class_layer" in codes(r)
+
+
+@pytest.mark.parametrize("tag", ["rect", "line", "use", "text", "image"])
+def test_bad_element(tag):
+    r = root_of()
+    etree.SubElement(gid(r, "Layer_6"), f"{{http://www.w3.org/2000/svg}}{tag}")
+    assert "bad_element" in codes(r)
+
+
+def test_sim_hook_not_fail_open(monkeypatch):
+    import types
+    import rosette.validate as v
+
+    def boom(name):
+        raise ModuleNotFoundError("No module named 'numpy'", name="numpy")
+
+    monkeypatch.setattr(v.importlib, "import_module", boom)
+    with pytest.raises(ModuleNotFoundError):
+        v.validate(good_svg())
+
+
+def test_sim_module_without_sim_issues_raises(monkeypatch):
+    import types
+    import rosette.validate as v
+
+    monkeypatch.setattr(v.importlib, "import_module", lambda n: types.ModuleType(n))
+    with pytest.raises(AttributeError):
+        v.validate(good_svg())
+
+
+def test_sim_issues_reported(monkeypatch):
+    import types
+    import rosette.validate as v
+
+    m = types.ModuleType("rosette.simulate")
+    m.sim_issues = lambda svg: ["<path x>"]
+    monkeypatch.setattr(v.importlib, "import_module", lambda n: m)
+    assert [i.code for i in v.validate(good_svg())] == ["sim_unfilled"]

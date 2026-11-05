@@ -30,6 +30,7 @@ SUFFIX_LAYERS = {
     "4": {"Layer_3_4", "Layer_2_1_4"},
 }
 SPECIAL_LAYERS = {"st4": {"Layer_rose"}, "st6": {"Layer_6"}, "st_circel": {"Layer_rose"}}
+NEUTRAL_TAGS = {"svg", "g", "defs", "style", "pattern"}
 COLOR_RE = re.compile(r"^st(\d+)_(1|2_pattern|2|3|4)$")
 COLOR_GROUPS = {g for gs in SUFFIX_LAYERS.values() for g in gs}
 TOGGLE_PAIRS = [("Layer_3_2", "Layer_2_1_2"), ("Layer_3_3", "Layer_2_1_3"),
@@ -128,6 +129,14 @@ def validate(svg: str, simulate_check: bool = True) -> list[Issue]:
                 add("bad_parent", f"{gid} must be a child of {want or 'the root svg'}", g)
     known = set(PARENTS)
 
+    # only the five shape tags are drawable; <image> is allowed only inside <pattern>
+    for e in root.iter():
+        if not isinstance(e.tag, str) or _local(e) in SHAPE_TAGS | NEUTRAL_TAGS:
+            continue
+        if _local(e) == "image" and e.getparent() is not None                 and _local(e.getparent()) == "pattern":
+            continue
+        add("bad_element", f"element <{_local(e)}> is not allowed", e)
+
     # shape elements: class vs layer
     shapes = [e for e in root.iter() if isinstance(e.tag, str) and _local(e) in SHAPE_TAGS]
     used_classes: set[str] = set()
@@ -135,8 +144,7 @@ def validate(svg: str, simulate_check: bool = True) -> list[Issue]:
         cls = (e.get("class") or "").split()
         layer = _layer_of(e, known)
         if not cls:
-            if layer in COLOR_GROUPS:
-                add("class_layer", "element in a color layer has no class", e)
+            add("class_layer", "shape has no class", e)
             continue
         for c in cls:
             used_classes.add(c)
@@ -164,8 +172,9 @@ def validate(svg: str, simulate_check: bool = True) -> list[Issue]:
 
     # toggle sets and duplicates
     def shapes_of(gid):
-        return [c for g in groups.get(gid, []) for c in g
-                if isinstance(c.tag, str) and _local(c) in SHAPE_TAGS]
+        return [c for g in groups.get(gid, []) for c in g.iter()
+                if isinstance(c.tag, str) and _local(c) in SHAPE_TAGS
+                and _layer_of(c, known) == gid]
 
     for a, b in TOGGLE_PAIRS:
         if a in groups and b in groups:
@@ -193,15 +202,17 @@ def validate(svg: str, simulate_check: bool = True) -> list[Issue]:
     for c in sorted(declared - used_classes):
         add("style_mismatch", f"class {c} is declared in <style> but never used", c)
 
-    # simulation (Task 4 provides rosette.simulate; skipped until importable)
+    # simulation: Task 4 provides rosette.simulate.sim_issues(svg) -> list[str].
+    # Skip only when the module itself does not exist yet; any other failure propagates.
     if simulate_check:
         try:
             sim = importlib.import_module("rosette.simulate")
-        except ImportError:
+        except ModuleNotFoundError as exc:
+            if exc.name != "rosette.simulate":
+                raise
             sim = None
-        hook = getattr(sim, "unfilled", None) if sim else None
-        if hook:
-            for desc in hook(svg):
+        if sim is not None:
+            for desc in sim.sim_issues(svg):  # AttributeError if missing: fail closed
                 add("sim_unfilled", f"element left unfilled by shop logic: {desc}", str(desc))
 
     return issues
