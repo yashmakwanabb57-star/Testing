@@ -43,8 +43,9 @@ def render(model: RosetteModel) -> RenderResult:
 
 
 def is_flagged(model: RosetteModel, issues: list[Issue]) -> bool:
-    """True when the user is asked to check something: a low-confidence color, a
-    warning asking for a check, or a validation issue."""
+    """True when the user is asked to check something: a low-confidence color, an
+    unrecognised (placeholder) part, any warning, or a validation issue."""
     return (any(g.confidence < FLAG_BELOW for g in model.groups)
-            or any("check" in w.lower() for w in model.warnings)
+            or any(q.role == "unknown" for q in model.parts)
+            or bool(model.warnings)
             or bool(issues))

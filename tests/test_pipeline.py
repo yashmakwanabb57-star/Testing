@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from rosette.pipeline import RenderResult, analyze, render
+from rosette.model import ColorGroup, Part, RosetteModel
+from rosette.pipeline import RenderResult, analyze, is_flagged, render
 
 PHOTOS = Path(__file__).resolve().parent.parent / "reference" / "photos"
 
@@ -33,3 +34,18 @@ def test_render_is_deterministic():
     a = render(analyze(data))
     b = render(analyze(data))
     assert a.svg == b.svg
+
+
+def _model(role="head", warnings=()):
+    g = ColorGroup(0, (200, 0, 0), False, 0.0, 1.0, 1, 0.9)
+    part = Part("p", role, {"cx": 300.0, "cy": 175.0, "r": 150.0}, 0, 0, 0.9)
+    return RosetteModel(parts=[part], groups=[g], warnings=list(warnings))
+
+
+def test_flagged_rules():
+    assert not is_flagged(_model(), [])
+    assert is_flagged(_model(role="unknown"), [])
+    assert is_flagged(_model(warnings=["part p: unrecognised shape, drawn as a plain disc"]), [])
+    low = _model()
+    low.groups[0].confidence = 0.5
+    assert is_flagged(low, [])
