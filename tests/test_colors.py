@@ -202,3 +202,22 @@ def test_tiny_mask_does_not_crash():
     assert (labels[~mask] == -1).all() and (labels[mask] >= 0).all()
     assert 1 <= len(groups) <= 2
     assert sum(g.area for g in groups) == pytest.approx(1.0)
+
+
+def _row_labels(sid: str, fracs: tuple[float, ...]) -> list[int]:
+    """Labels across the tails at 80 % of their height, at shares of the tail width."""
+    p = prepare((PHOTOS / f"{sid}.png").read_bytes())
+    labels, _ = pixel_groups(p)
+    y = int(p.tails_top_y + 0.8 * (p.bottom_y - p.tails_top_y))
+    xs = np.flatnonzero(p.mask[y])
+    s, e = xs.min(), xs.max()
+    return [_label_at(labels, s + f * (e - s), y) for f in fracs]
+
+
+@pytest.mark.parametrize("sid", ["S10-19", "A15-17"])
+def test_similar_hue_stripes_stay_apart(sid):
+    # S10-19: navy outer stripe beside a lighter navy-blue stripe, then white;
+    # A15-17: black outer, dark orange, light orange middle. k-means' silhouette
+    # prefers the coarse split and merged the two similar hues into one group.
+    outer, second, middle = _row_labels(sid, (0.06, 0.24, 0.5))
+    assert len({outer, second, middle}) == 3

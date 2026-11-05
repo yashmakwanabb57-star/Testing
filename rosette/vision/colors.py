@@ -11,7 +11,11 @@ Pipeline:
    that a median filter removes: glitter sparkle; ~0 on satin and ribbon borders).
 2. k-means (seeded k-means++) on a sample of flat pixels, k in 2..max_groups by the
    cluster-averaged silhouette; every mask pixel takes its nearest center.
-3. A group mixing plain satin with same-hue glitter is split by grain.
+3. A group hiding two similar ribbon colors (navy beside navy-blue, dark beside
+   light orange: the silhouette prefers the coarse split) is split in two when both
+   halves are large, both run down the tails and their boundary there runs along
+   the ribbon (stripe edges) rather than across it (folds and shading). A group
+   mixing plain satin with same-hue glitter is split by grain.
 4. Small same-label blobs (motifs such as hearts, glitter sparkle) are absorbed into
    the group around them; larger print blobs (text, logos) lying wholly on the
    tails and enclosed by one group are absorbed too.
@@ -63,6 +67,15 @@ MOTIF_MAX_UNITS2 = 900.0
 # split point between the two bounds (3.75) leaves no satin edge slivers in the
 # glitter half on S18-15B / S5-15 (0 components thinner than 4 px).
 SATIN_GRAIN, GLITTER_GRAIN, SPLIT_MIN_FRAC = 1.5, 6.0, 0.28
+# Stripe split: a cluster is split by 2-means when the halves' centers are at least
+# STRIPE_SPLIT_SEP apart, each half holds STRIPE_MIN_SHARE of the flat pixels and
+# STRIPE_MIN_TAIL_SHARE of the cluster's tail pixels, and on the tails the halves
+# change places STRIPE_MIN_HV times as often along rows as along columns (stripe
+# edges run down the tails; shading and folds do not). Tuned on the tune split of
+# the canonical photos (docs/pipeline.md): merged similar ribbons measure sep 10.6-20,
+# smaller half >= 0.19, tail half >= 0.35, row/column ratio >= 3.0; the closest
+# single ribbons fail at least one test (sep 9.7, half 0.18 / tail half 0.18, ratio 1.0).
+STRIPE_SPLIT_SEP, STRIPE_MIN_SHARE, STRIPE_MIN_TAIL_SHARE, STRIPE_MIN_HV = 10.0, 0.17, 0.3, 2.5
 # Print blobs on the tails (text, logos) up to this share of the mask are absorbed when
 # at least PRINT_RING_DOM of a PRINT_RING_UNITS-wide ring around them is one other group
 # and at most PRINT_RING_OUT of that ring lies outside the mask.
@@ -222,6 +235,45 @@ def _split_glitter(labels: np.ndarray, mask: np.ndarray, grain: np.ndarray, max_
             labels[region & (grain > (SATIN_GRAIN + GLITTER_GRAIN) / 2)] = int(labels.max()) + 1
 
 
+def _split_stripes(centers: np.ndarray, flat_feat: np.ndarray, feat_img: np.ndarray,
+                   mask: np.ndarray, tails_top: float, max_groups: int) -> np.ndarray:
+    """Centers with every cluster that hides two similar stripe colors split in two
+    (see STRIPE_SPLIT_SEP); one pass over the original clusters."""
+    rng = np.random.default_rng(SEED)
+    x = flat_feat[rng.choice(len(flat_feat), min(SAMPLE_N, len(flat_feat)), replace=False)].astype(np.float64)
+    near = _nearest(x, centers)
+    labels = np.full(mask.shape, -1, np.int32)
+    labels[mask] = _nearest_chunked(feat_img[mask], centers)
+    tails = np.zeros(mask.shape, bool)
+    tails[int(np.ceil(tails_top)):] = True
+    out = list(centers)
+    for j in range(len(centers)):
+        if len(out) >= max_groups:
+            break
+        xj = x[near == j]
+        if len(xj) < 2:
+            continue
+        sub, _ = _kmeans(xj, 2, np.random.default_rng(SEED))
+        if sub is None or np.linalg.norm(sub[0] - sub[1]) < STRIPE_SPLIT_SEP:
+            continue
+        if np.bincount(_nearest(xj, sub), minlength=2).min() < STRIPE_MIN_SHARE * len(x):
+            continue
+        region = (labels == j) & tails
+        if not region.any():
+            continue
+        half = np.full(mask.shape, -1, np.int8)
+        half[region] = _nearest_chunked(feat_img[region], sub)
+        if np.bincount(half[region], minlength=2).min() < STRIPE_MIN_TAIL_SHARE * region.sum():
+            continue
+        along_rows = ((half[:, :-1] >= 0) & (half[:, 1:] >= 0) & (half[:, :-1] != half[:, 1:])).sum()
+        along_cols = ((half[:-1] >= 0) & (half[1:] >= 0) & (half[:-1] != half[1:])).sum()
+        if along_rows < STRIPE_MIN_HV * max(along_cols, 1):
+            continue
+        out[j] = sub[0].astype(centers.dtype)
+        out.append(sub[1].astype(centers.dtype))
+    return np.array(out)
+
+
 def _absorb_prints(labels: np.ndarray, mask: np.ndarray, tails_top: float, max_px: float,
                    ring_px: int) -> np.ndarray:
     """Relabel print blobs (text, logos, paw prints) on the tails with the stripe they
@@ -295,7 +347,9 @@ def pixel_groups(p: Prepared, max_groups: int = 6) -> tuple[np.ndarray, list[Col
     lab = _lab(p.rgb)
     feat_img = _features(lab, mask, p.scale)
     feat = feat_img[mask]
-    centers = _cluster(feat[_flat(feat_img, mask)], max_groups)
+    flat_feat = feat[_flat(feat_img, mask)]
+    centers = _cluster(flat_feat, max_groups)
+    centers = _split_stripes(centers, flat_feat, feat_img, mask, p.tails_top_y, max_groups)
 
     labels = np.full(mask.shape, -1, np.int32)
     labels[mask] = _nearest_chunked(feat, centers)
