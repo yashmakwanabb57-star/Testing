@@ -285,3 +285,86 @@ def test_stripe_changes_do_not_cross_the_background_between_tails():
     assert _changes(half, gap) == 0
     glitter = np.ones((4, 30), bool)  # a glitter stripe of another group in between
     assert _changes(half, glitter) == 4
+
+
+DARK, LIGHT, BEIGE, GOLD = (45, -30, 10), (85, -30, 50), (80, 2, 22), (70, 10, 60)
+
+
+def _badge_rosette(logo: str = "print", logo_r: float = 28.0, logo_at: tuple = (0.0, 0.0)) -> Prepared:
+    """Synthetic rosette: dark pleat disc (r 150) with a light inner layer (r 60..100) and
+    a dark badge (r < 60); a logo of radius logo_r sits on it at offset logo_at from the
+    head center. logo: 'print' (beige with print strokes: high texture), 'plain' (gold
+    satin: a ribbon color) or 'none'. Below the head two tails: dark | light | dark."""
+    h, w = 800, 500
+    cx, cy, r = 250.0, 200.0, 150.0
+    yy, xx = np.mgrid[:h, :w].astype(np.float32)
+    d = np.hypot(xx - cx, yy - cy)
+    lab = np.zeros((h, w, 3), np.float32)
+    lab[:] = DARK
+    lab[(d >= 60) & (d < 100)] = LIGHT
+    tails = (yy > cy + r - 10) & (np.abs(xx - cx) < 110)
+    lab[tails & (np.abs(xx - cx) < 40)] = LIGHT
+    if logo != "none":
+        dl = np.hypot(xx - cx - logo_at[0], yy - cy - logo_at[1])
+        spot = dl < logo_r
+        lab[spot] = BEIGE if logo == "print" else GOLD
+        if logo == "print":  # printed detail: short dark strokes (lettering, outlines)
+            xi, yi = xx.astype(int), yy.astype(int)
+            strokes = spot & (yi % 16 < 2) & ((xi + 8 * ((yi // 16) % 2)) % 16 < 10)
+            lab[strokes] = (30, 0, 5)
+    rgb = cv2.cvtColor(lab, cv2.COLOR_Lab2RGB)
+    rgb = (np.clip(rgb, 0, 1) * 255).round().astype(np.uint8)
+    mask = (d <= r) | (tails & (yy < h - 20))
+    rgb[~mask] = 255
+    return _noisy(Prepared(rgb=rgb, mask=mask, axis_x=cx, head=(cx, cy, r), tails_top_y=cy + r + 1,
+                           bottom_y=float(h - 21), scale=1.0), sigma=2.0)
+
+
+def _group_near(groups, lab_color) -> list:
+    want = cv2.cvtColor(np.array([[lab_color]], np.float32), cv2.COLOR_Lab2RGB)[0, 0] * 255
+    return [g for g in groups if np.abs(np.array(g.rgb) - want).sum() < 40]
+
+
+def test_print_on_the_center_badge_is_not_a_color_group():
+    p = _badge_rosette("print")
+    labels, groups = pixel_groups(p)
+    assert not _group_near(groups, BEIGE)
+    assert len(groups) == 2
+    dark = _group_near(groups, DARK)[0].id
+    assert _label_at(labels, 250, 200) == dark  # the logo counts for the badge
+
+
+def test_plain_small_center_color_stays_a_group():
+    # a gold satin center (a ribbon color, e.g. Color 4) is not print
+    labels, groups = pixel_groups(_badge_rosette("plain"))
+    gold = _group_near(groups, GOLD)
+    assert len(gold) == 1 and _label_at(labels, 250, 200) == gold[0].id
+
+
+def test_print_not_inside_the_badge_is_unchanged():
+    # the same print on the light inner layer (a ring, not the center badge) stays
+    labels, groups = pixel_groups(_badge_rosette("print", logo_r=18.0, logo_at=(0.0, -80.0)))
+    beige = _group_near(groups, BEIGE)
+    assert len(beige) == 1 and _label_at(labels, 250, 120) == beige[0].id
+
+
+def test_loosely_enclosed_badge_print_is_reported_not_merged():
+    from rosette.vision.colors import badge_print_unsure
+    h, w = 400, 400
+    yy, xx = np.mgrid[:h, :w]
+    d = np.hypot(xx - 200, yy - 200)
+    labels = np.zeros((h, w), np.int32)  # head disc and badge: group 0
+    labels[(d >= 60) & (d < 100)] = 1  # light inner layer
+    labels[d < 30] = 2  # the print
+    # a quarter of the circles just outside the print belongs to the light layer
+    labels[(d >= 30) & (d < 60) & (xx > 200) & (yy > 200)] = 1
+    mask = d <= 150
+    labels[~mask] = -1
+    p = Prepared(rgb=np.zeros((h, w, 3), np.uint8), mask=mask, axis_x=200.0, head=(200.0, 200.0, 150.0),
+                 tails_top_y=351.0, bottom_y=399.0, scale=1.0)
+    groups = [ColorGroup(id=i, rgb=(0, 0, 0), pattern=i == 2, texture=8.0 if i == 2 else 1.0,
+                         area=float((labels == i).sum() / mask.sum()), category=None, confidence=1.0)
+              for i in range(3)]
+    assert badge_print_unsure(p, labels, groups) == [2]
+    labels[(d >= 30) & (d < 60)] = 0  # fully enclosed: merged by pixel_groups, not reported
+    assert badge_print_unsure(p, labels, groups) == []

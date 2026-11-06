@@ -95,3 +95,13 @@ def test_every_reference_analysis_passes_check_params():
     for f in sorted(PHOTOS.iterdir()):
         model = analyze(f.read_bytes())
         RosetteModel.from_json(model.to_json())  # runs check_params on every part
+
+
+def test_unsure_badge_print_is_warned(monkeypatch):
+    # a group that may be print on the center badge but is not clearly enclosed is
+    # kept as a color and the user is asked to check it
+    import rosette.pipeline as pl
+    monkeypatch.setattr(pl, "badge_print_unsure", lambda p, labels, groups: [groups[0].id])
+    model = analyze(_photo("S46-15"))
+    assert any("center badge" in w for w in model.warnings)
+    assert is_flagged(model, render(model).issues)

@@ -4,7 +4,8 @@ analyze(data): prepare -> pixel_groups -> detect_parts -> RosetteModel -> assign
 Color groups no part uses are dropped before assignment (ids kept as they are);
 the rose is on iff a center part was found.
 A plain group that looks partly patterned on the tails (colors.mixed_texture_groups)
-is warned: a patterned ribbon may have been merged into it.
+is warned: a patterned ribbon may have been merged into it. A small patterned color on
+the center badge that is not clearly enclosed (colors.badge_print_unsure) is warned too.
 Head fit (head_fit): our head parts (every part but the tail stripes) are rendered and
 compared with the photo's color labels inside the head circle. The measurement is
 information for the UI (analyze_with_fit returns it; the API sends it as head_fit);
@@ -28,7 +29,7 @@ from .build import build
 from .model import RosetteModel
 from .roles import PAD_FRAC, render_categories
 from .validate import Issue, validate
-from .vision.colors import mixed_texture_groups, pixel_groups
+from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_groups
 from .vision.parts import detect_parts
 from .vision.parts_common import Frame
 from .vision.prepare import Prepared, prepare
@@ -173,6 +174,10 @@ def analyze_with_fit(data: bytes) -> tuple[RosetteModel, HeadFit | None]:
         if gid in used:
             out.warnings.append(f"Color {hex_rgb(by_id[gid].rgb)} is partly patterned - a patterned ribbon "
                                 "may have been merged into it; check the colors.")
+    for gid in badge_print_unsure(p, labels, groups):
+        if gid in used:
+            out.warnings.append(f"Color {hex_rgb(by_id[gid].rgb)} may be print on the center badge (a logo) "
+                                "rather than a ribbon color - check the colors and the center.")
     return out, fit
 
 
