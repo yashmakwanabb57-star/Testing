@@ -130,7 +130,7 @@ BADGE_IN_HEAD, BADGE_MAX_AREA = 0.95, 0.09
 # rim, so it is not reported (the designer draws it as the center).
 # Such a group is only reported, never merged: no print signal from its own pixels
 # separates the A7-15 logo from the center discs of the 76 photos (satin, roses: own
-# eroded texture 10.2 vs plain centers 1.8-23.4; second-tone share 0.086 vs 0.000-0.883;
+# eroded texture 10.2 vs plain centers 1.8-23.4; second-tone share 0.086 vs 0.002-0.883;
 # texture over the badge's own 0.71 vs 0.19-10.9).
 BADGE_BAND_UNITS, BADGE_EDGE, BADGE_UNSURE = 8.0, 0.8, 0.6
 
