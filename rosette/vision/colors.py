@@ -23,11 +23,11 @@ Pipeline:
 5. texture = median local L* standard deviation inside the group, measured on the
    tails (flat ribbon, unlike the pleated head) and away from absorbed print;
    pattern = texture > PATTERN_T.
-6. A small patterned group lying wholly inside the head and enclosed by a center
-   badge (one other group around it whose disc ends well inside the head) is print on
-   the badge (a logo), not a ribbon color: its pixels join the badge's group. A
-   near-miss (badge-shaped but less clearly enclosed) is left alone and reported by
-   badge_print_unsure for a warning.
+6. A small group lying wholly inside the head and enclosed by a center badge (one
+   other group around it whose disc ends well inside the head) may be print on the
+   badge (a logo) or a ribbon color (a Color 4 center). No measured signal tells the
+   two apart (see BADGE_*), so the group is kept and badge_print_unsure reports it for
+   a warning.
 """
 from __future__ import annotations
 
@@ -101,8 +101,11 @@ TEXTURE_EDGE_UNITS = 4.0
 # on the tails only; below it the whole group interior is used.
 TEXTURE_MIN_TAIL_UNITS2 = 1500.0
 # texture above this marks a pattern group. Tuned on S46-15 (glitter 20.1, satin <= 2.8)
-# and S35-19 (hearts 11.4, satin <= 1.2); over all 76 reference photos plain ribbon
-# groups measure <= 2.83 and patterned ones >= 8.47 (table: tools/color_report.py).
+# and S35-19 (hearts 11.4, satin <= 1.2). Over the 76 reference photos, groups measured
+# on the tails read <= 2.83 when plain and >= 8.47 when patterned (table:
+# tools/color_report.py). Groups with no tail pixels are measured on the pleated head,
+# whose folds read high on plain satin too (A1-15 gold badge 7.97, A7-15 logo 8.28):
+# for them the pattern flag is not evidence of print or glitter.
 PATTERN_T = 5.0
 # A plain group whose tail interior has local texture above PATTERN_T on at least
 # MIXED_PATTERN_SHARE of its pixels (std measured over the group's own pixels only, so
@@ -113,23 +116,23 @@ PATTERN_T = 5.0
 MIXED_PATTERN_SHARE = 0.42
 # Tail-interior pixels (canvas units^2) a group needs before it is checked.
 MIXED_MIN_UNITS2 = 2000.0
-# Print on a center badge (logos): a group is a candidate when at least BADGE_IN_HEAD of
-# its pixels lie inside the head circle, it holds at most BADGE_MAX_AREA of the mask and
-# it is patterned (texture > PATTERN_T). Over the 76 reference photos two groups lie
-# wholly in the head (A7-15 logo: in-head 1.000, area 0.022, texture 8.3; A1-15 gold
-# badge: 1.000, 0.071, 8.0); every other group has pixels on the tails too (in-head
-# share <= 0.56) and holds >= 0.11 of the mask, and plain ribbon groups measure texture
-# <= 2.83 (PATTERN_T). The bars sit in those gaps.
+# Groups on a center badge (logos, or a small Color 4 center): a group is a candidate
+# when at least BADGE_IN_HEAD of its pixels lie inside the head circle and it holds at
+# most BADGE_MAX_AREA of the mask. Over the 76 reference photos two groups lie wholly in
+# the head (A7-15 logo: in-head 1.000, area 0.022; A1-15 gold badge: 1.000, 0.071);
+# every other group has pixels on the tails too (in-head share <= 0.56) and holds
+# >= 0.11 of the mask. The bars sit in those gaps.
 BADGE_IN_HEAD, BADGE_MAX_AREA = 0.95, 0.09
-# It is print on a badge when one other group holds >= BADGE_ENCLOSED of the circles in
-# the BADGE_BAND_UNITS just outside the candidate (A7-15: 0.98) and that group's disc
-# ends (its circle coverage drops below one half) before BADGE_EDGE head radii: a badge,
-# not the head disc. The A1-15 gold badge is itself the candidate; around it the pink
-# head disc runs on to the rim, so it stays a color (the designer draws it as the center).
-BADGE_BAND_UNITS, BADGE_ENCLOSED, BADGE_EDGE = 8.0, 0.9, 0.8
-# A badge-shaped candidate enclosed by between BADGE_UNSURE and BADGE_ENCLOSED is not
-# merged but reported (assign.FLAG_BELOW: flag rather than guess).
-BADGE_UNSURE = 0.6
+# It sits on a badge when one other group holds >= BADGE_UNSURE of the circles in the
+# BADGE_BAND_UNITS just outside it (A7-15: 0.98) and that group's disc ends (circle
+# coverage below one half) before BADGE_EDGE head radii: a badge, not the head disc. The
+# A1-15 gold badge is itself the candidate; around it the pink head disc runs on to the
+# rim, so it is not reported (the designer draws it as the center).
+# Such a group is only reported, never merged: no print signal from its own pixels
+# separates the A7-15 logo from the center discs of the 76 photos (satin, roses: own
+# eroded texture 10.2 vs plain centers 1.8-23.4; second-tone share 0.086 vs 0.000-0.883;
+# texture over the badge's own 0.71 vs 0.19-10.9).
+BADGE_BAND_UNITS, BADGE_EDGE, BADGE_UNSURE = 8.0, 0.8, 0.6
 
 
 def _lab(rgb: np.ndarray) -> np.ndarray:
@@ -431,18 +434,7 @@ def pixel_groups(p: Prepared, max_groups: int = 6) -> tuple[np.ndarray, list[Col
     # print (text) is sparse and must not make its ribbon a pattern: keep every
     # window that sees print out of the texture measurement
     near_print = cv2.dilate(printed.astype(np.uint8), np.ones((win, win), np.uint8)) > 0
-    groups = _groups(p, labels, absorbed, std, near_print)
-    merged = False
-    for g, b, enclosed in _badge_prints(p, labels, groups):
-        if enclosed >= BADGE_ENCLOSED:  # print on the badge: its pixels count for the badge
-            region = labels == g
-            labels[region] = b
-            absorbed |= region
-            merged = True
-    if merged:
-        labels = _by_area(labels, mask)
-        groups = _groups(p, labels, absorbed, std, near_print)
-    return labels, groups
+    return labels, _groups(p, labels, absorbed, std, near_print)
 
 
 def _by_area(labels: np.ndarray, mask: np.ndarray) -> np.ndarray:
@@ -476,15 +468,15 @@ def _groups(p: Prepared, labels: np.ndarray, absorbed: np.ndarray, std: np.ndarr
 
 
 def _badge_prints(p: Prepared, labels: np.ndarray, groups: list[ColorGroup]) -> list[tuple[int, int, float]]:
-    """(group, badge group, enclosed share) for every print candidate (BADGE_IN_HEAD,
-    BADGE_MAX_AREA, patterned) sitting on a center badge: enclosed by >= BADGE_UNSURE
-    by one other group whose disc ends before BADGE_EDGE head radii."""
+    """(group, badge group, enclosed share) for every candidate (BADGE_IN_HEAD,
+    BADGE_MAX_AREA) sitting on a center badge: enclosed by >= BADGE_UNSURE by one other
+    group whose disc ends before BADGE_EDGE head radii."""
     cx, cy, r = p.head
     h, w = labels.shape
     out = []
     dist = None
     for g in groups:
-        if not (g.pattern and g.area <= BADGE_MAX_AREA):
+        if g.area > BADGE_MAX_AREA:
             continue
         if dist is None:
             yy, xx = np.ogrid[:h, :w]
@@ -512,9 +504,9 @@ def _badge_prints(p: Prepared, labels: np.ndarray, groups: list[ColorGroup]) -> 
 
 
 def badge_print_unsure(p: Prepared, labels: np.ndarray, groups: list[ColorGroup]) -> list[int]:
-    """Ids of groups that look like print on a center badge but are not enclosed
-    clearly enough to be merged (BADGE_UNSURE <= enclosed < BADGE_ENCLOSED)."""
-    return [g for g, _, enclosed in _badge_prints(p, labels, groups) if enclosed < BADGE_ENCLOSED]
+    """Ids of groups on a center badge: print (a logo) or a small ribbon color, which
+    the photo cannot tell apart (see BADGE_*); the user is asked to check them."""
+    return [g for g, _, _ in _badge_prints(p, labels, groups)]
 
 
 def mixed_texture_groups(p: Prepared, labels: np.ndarray, groups: list[ColorGroup]) -> list[int]:

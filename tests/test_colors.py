@@ -290,11 +290,14 @@ def test_stripe_changes_do_not_cross_the_background_between_tails():
 DARK, LIGHT, BEIGE, GOLD = (45, -30, 10), (85, -30, 50), (80, 2, 22), (70, 10, 60)
 
 
-def _badge_rosette(logo: str = "print", logo_r: float = 28.0, logo_at: tuple = (0.0, 0.0)) -> Prepared:
+def _badge_rosette(logo: str = "print", logo_r: float = 28.0, logo_at: tuple = (0.0, 0.0),
+                   pleats: bool = False) -> Prepared:
     """Synthetic rosette: dark pleat disc (r 150) with a light inner layer (r 60..100) and
     a dark badge (r < 60); a logo of radius logo_r sits on it at offset logo_at from the
     head center. logo: 'print' (beige with print strokes: high texture), 'plain' (gold
-    satin: a ribbon color) or 'none'. Below the head two tails: dark | light | dark."""
+    satin: a ribbon color) or 'none'. pleats: the pleated layers around the badge get
+    radial light/dark folds (as photographed pleats do). Below the head two tails:
+    dark | light | dark."""
     h, w = 800, 500
     cx, cy, r = 250.0, 200.0, 150.0
     yy, xx = np.mgrid[:h, :w].astype(np.float32)
@@ -302,6 +305,10 @@ def _badge_rosette(logo: str = "print", logo_r: float = 28.0, logo_at: tuple = (
     lab = np.zeros((h, w, 3), np.float32)
     lab[:] = DARK
     lab[(d >= 60) & (d < 100)] = LIGHT
+    if pleats:  # folds: L varies around the circle in the layers outside the badge
+        th = np.arctan2(yy - cy, xx - cx)
+        folds = (d >= 60) & (d <= r)
+        lab[folds, 0] += 12 * np.sin(24 * th[folds])
     tails = (yy > cy + r - 10) & (np.abs(xx - cx) < 110)
     lab[tails & (np.abs(xx - cx) < 40)] = LIGHT
     if logo != "none":
@@ -325,20 +332,26 @@ def _group_near(groups, lab_color) -> list:
     return [g for g in groups if np.abs(np.array(g.rgb) - want).sum() < 40]
 
 
-def test_print_on_the_center_badge_is_not_a_color_group():
+def test_print_on_the_center_badge_is_reported_not_merged():
+    # head-only texture cannot tell print from satin (the head's pleats add texture of
+    # their own), so a group on a center badge stays a color and is reported
+    from rosette.vision.colors import badge_print_unsure
     p = _badge_rosette("print")
     labels, groups = pixel_groups(p)
-    assert not _group_near(groups, BEIGE)
-    assert len(groups) == 2
-    dark = _group_near(groups, DARK)[0].id
-    assert _label_at(labels, 250, 200) == dark  # the logo counts for the badge
+    beige = _group_near(groups, BEIGE)
+    assert len(beige) == 1 and _label_at(labels, 250, 200) == beige[0].id
+    assert badge_print_unsure(p, labels, groups) == [beige[0].id]
 
 
 def test_plain_small_center_color_stays_a_group():
-    # a gold satin center (a ribbon color, e.g. Color 4) is not print
-    labels, groups = pixel_groups(_badge_rosette("plain"))
+    # a gold satin center (a ribbon color, e.g. Color 4) among pleated layers: it reads
+    # as textured like print does, so it must survive (and be flagged for a check)
+    from rosette.vision.colors import badge_print_unsure
+    p = _badge_rosette("plain", pleats=True)
+    labels, groups = pixel_groups(p)
     gold = _group_near(groups, GOLD)
     assert len(gold) == 1 and _label_at(labels, 250, 200) == gold[0].id
+    assert badge_print_unsure(p, labels, groups) == [gold[0].id]
 
 
 def test_print_not_inside_the_badge_is_unchanged():
@@ -348,7 +361,7 @@ def test_print_not_inside_the_badge_is_unchanged():
     assert len(beige) == 1 and _label_at(labels, 250, 120) == beige[0].id
 
 
-def test_loosely_enclosed_badge_print_is_reported_not_merged():
+def test_badge_candidates_are_reported_whatever_their_texture():
     from rosette.vision.colors import badge_print_unsure
     h, w = 400, 400
     yy, xx = np.mgrid[:h, :w]
@@ -362,9 +375,13 @@ def test_loosely_enclosed_badge_print_is_reported_not_merged():
     labels[~mask] = -1
     p = Prepared(rgb=np.zeros((h, w, 3), np.uint8), mask=mask, axis_x=200.0, head=(200.0, 200.0, 150.0),
                  tails_top_y=351.0, bottom_y=399.0, scale=1.0)
-    groups = [ColorGroup(id=i, rgb=(0, 0, 0), pattern=i == 2, texture=8.0 if i == 2 else 1.0,
+    groups = [ColorGroup(id=i, rgb=(0, 0, 0), pattern=False, texture=1.0,
                          area=float((labels == i).sum() / mask.sum()), category=None, confidence=1.0)
               for i in range(3)]
+    assert badge_print_unsure(p, labels, groups) == [2]  # plain, loosely enclosed
+    labels[(d >= 30) & (d < 60)] = 0  # fully enclosed by a badge ending at 60 < BADGE_EDGE
     assert badge_print_unsure(p, labels, groups) == [2]
-    labels[(d >= 30) & (d < 60)] = 0  # fully enclosed: merged by pixel_groups, not reported
-    assert badge_print_unsure(p, labels, groups) == []
+    groups[2].pattern, groups[2].texture = True, 8.0
+    assert badge_print_unsure(p, labels, groups) == [2]
+    labels[(d >= 30) & (d < 60) & (xx > 200)] = 1  # half the band is the light layer
+    assert badge_print_unsure(p, labels, groups) == []  # enclosed < BADGE_UNSURE
