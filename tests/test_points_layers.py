@@ -187,3 +187,26 @@ def test_a_trim_never_outlives_its_host(monkeypatch):
     loops = [p for role, g, s, p, ar, rb in layers if g == 1 and p.get("kind") == "bow" and "edge_width" not in p]
     assert loops, layers  # the host loop stays
     assert [p for role, g, s, p, ar, rb in layers if "edge_width" in p]  # B became A's strips
+
+
+def test_points_z_inner_layers_on_top_and_loops_over_stars():
+    # H5 stacking mined from the references: of the points pieces that overlap or are
+    # cut along each other, the one ending further in lies on top in 92 % (1292 of 1400
+    # pairs with distinct ends); loop over star holds 89 % (63 of 71 pairs, 10 files)
+    # whichever ends further out, so a star goes under every loop
+    from rosette.vision.parts_head import points_z
+    z = points_z([("points", "bow", 100), ("points", "diamond", 80)])
+    assert z[1] > z[0]  # kite ending further in is on top
+    z = points_z([("points", "bow", 100), ("points", "star", 80)])
+    assert z[0] > z[1]  # the loop stays over the star
+    z = points_z([("points", "bow", 100), ("points", "star", 120), ("points", "diamond", 70)])
+    assert z[2] > z[0] > z[1]
+    z = points_z([("points", "bow", 100), ("points", "star", 80), ("points", "diamond", 90)])
+    assert z[2] > z[0] > z[1]  # kite over loop (inner on top), loop over star
+    assert all(20 <= v <= 29 for v in z)
+
+
+def test_points_z_stars_keep_their_own_order_under_loops():
+    from rosette.vision.parts_head import points_z
+    z = points_z([("points", "bow", 100), ("points", "star", 80), ("points", "star", 90)])
+    assert z[0] > z[1] > z[2]  # both stars under the loop, the inner star over the outer

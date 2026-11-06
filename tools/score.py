@@ -22,6 +22,9 @@ to its non-white bounding box, resize the generated crop onto the designer crop
   tails_ok         detected tails count == designer tails count
   flagged          the UI asks the user to check something (pipeline.is_flagged)
   success          color_agreement >= SUCCESS_AGREEMENT and no validation issues
+  stack            reported only: kind pairs (above, below) whose order in our file
+                   reverses the designer file's (tools/stacking.py: overlapping or cut
+                   pieces), per ID and counted in the summary
   uni / uok        reported only, not the metric or the bar: color_agreement and
                    success with the generated crop scaled by the height ratio alone
                    (aspect kept, centered) instead of stretched per axis; shows where
@@ -50,6 +53,7 @@ from rosette.pipeline import analyze, is_flagged, render  # noqa: E402
 from rosette.roles import (category, classify_components, classify_masks, drawn_frame,  # noqa: E402
                            element_masks, render_categories)
 from tools.rasterize import DEFAULT_PALETTE, rasterize  # noqa: E402
+from tools.stacking import disagreements, model_pairs, reference_pairs  # noqa: E402
 from tools.truth import truth_from_svg  # noqa: E402
 
 REF = ROOT / "reference"
@@ -257,7 +261,8 @@ def _designer(sid: str) -> np.ndarray:
 ROW_KEYS = ("id", "color_agreement", "pixel_agreement", "iou", "uniform_agreement", "success_uniform",
             "elements", "points_ok", "tails_ok",
             "points", "points_truth", "tails", "tails_truth", "flagged", "issues", "success",
-            "seconds", "error", "shape_iou", "head_iou", "tail_iou", "layers", "layer_iou", "shape_ok")
+            "seconds", "error", "shape_iou", "head_iou", "tail_iou", "layers", "layer_iou", "shape_ok",
+            "stack")
 
 
 def score_one(sid: str) -> dict:
@@ -268,7 +273,8 @@ def score_one(sid: str) -> dict:
     scores = {**compare(designer, result.svg), **shape_compare(designer, result.svg)}
     truth = truth_from_svg(sid)
     points, tails = _detected_counts(model)
-    return dict(id=sid, **scores,
+    stack = disagreements([(a, b) for a, b, _, _ in reference_pairs(designer)], model_pairs(model))
+    return dict(id=sid, **scores, stack=stack,
                 points_ok=points == truth["points"], tails_ok=tails == truth["tails"],
                 points=points, points_truth=truth["points"], tails=tails, tails_truth=truth["tails"],
                 flagged=is_flagged(model, result.issues), issues=len(result.issues),
@@ -322,7 +328,8 @@ def main(argv: list[str]) -> int:
         argv = argv[:i] + argv[i + 2:]
     rows = score_all(argv or None)
     print(f"{'ID':10} {'agree':>6} {'pixel':>6} {'iou':>5} {'flag':>4} {'ok':>4} {'points':>7} {'tails':>6} "
-          f"{'iss':>3} {'sec':>5} {'uni':>6} {'uok':>4} {'shape':>5} {'headS':>5} {'tailS':>5} {'layer':>5} {'sok':>3}")
+          f"{'iss':>3} {'sec':>5} {'uni':>6} {'uok':>4} {'shape':>5} {'headS':>5} {'tailS':>5} {'layer':>5} {'sok':>3} "
+          f"stack (reversed vs designer: above>below)")
     for r in rows:
         if r["error"]:
             print(f"{r['id']:10} ERROR {r['error']}")
@@ -335,7 +342,7 @@ def main(argv: list[str]) -> int:
               f"{r['uniform_agreement']:6.3f} {_yn(r['success_uniform']):>4} "
               f"{r['shape_iou']:5.3f} {r['head_iou']:5.3f} {r['tail_iou']:5.3f} "
               f"{r['layer_iou'] if r['layer_iou'] is None else round(r['layer_iou'], 3)!s:>5} "
-              f"{_yn(r['shape_ok']):>3}")
+              f"{_yn(r['shape_ok']):>3} {len(r['stack'])} {' '.join(f'{a}>{b}' for a, b in r['stack'])}")
         if debug:  # per element: designer category, generated winner, winning share, area
             for e in r["elements"]:
                 print(f"    cat {e['category']} -> {e['winner']}  share {e['share']:.2f}  "
@@ -349,6 +356,8 @@ def main(argv: list[str]) -> int:
         print(f"shape: mean IoU {np.mean([r['shape_iou'] for r in done]):.3f}  head "
               f"{np.mean([r['head_iou'] for r in done]):.3f}  tail {np.mean([r['tail_iou'] for r in done]):.3f}  "
               f"shape_ok {sum(r['shape_ok'] for r in done)}/{len(done)} (IoU >= {SHAPE_OK_IOU})")
+        print(f"stacking: {sum(len(r['stack']) for r in done)} kind pairs reversed vs the designer in "
+              f"{sum(bool(r['stack']) for r in done)}/{len(done)} IDs (reported only)")
     uni = sum(bool(r["success_uniform"]) for r in rows if not r["error"])
     print(f"reported only (not the bar): success under uniform-scale alignment {uni}/{s['n']}")
     if sheet:

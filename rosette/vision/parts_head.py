@@ -465,14 +465,12 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
     layers, meta = fold_specks(layers, meta, bands, head_band, pleated, radii, fr, RING_MAX_GROWTH_UNITS)
     eaten = {id(m["eats"]) for m in meta if m["eats"] is not None}
 
-    # points: largest layer first; outer layers drawn underneath (lower z)
-    by_outer = sorted(range(len(layers)), key=lambda k: -layers[k][5])
-    z_of = {k: min(29, 20 + rank) for rank, k in enumerate(by_outer)}
+    z_of = dict(enumerate(points_z([(lay[0], lay[3].get("kind"), lay[5]) for lay in layers])))
     order = sorted(range(len(layers)), key=lambda k: -layers[k][4])
     trims: set[int] = set()  # ids of trim parts (edge strips, backings)
     for k in order:
         role, g, share, params, _, _ = layers[k]
-        z = z_of[k] if role == "points" else 20
+        z = z_of[k]
         parts.append(Part(f"{role}-{len(parts)}", role, params, g, z, r3(min(1.0, share))))
         if meta[k].get("trim"):
             trims.add(id(parts[-1]))
@@ -497,6 +495,23 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
                           label, min(49, 30 + depth), r3(conf)))
     _points_start_at_cover(parts)
     return parts
+
+
+def points_z(layers: list[tuple[str, str | None, float]]) -> list[int]:
+    """z (20-29) of the head layers [(role, kind, outer radius)] (H5, mined from the
+    reference files: tools/stacking.py). Outer layers are drawn underneath: of the
+    points pieces that overlap or are cut along each other, the one ending further in
+    lies on top in 92 % of the pairs with distinct ends (1292 of 1400). Loop over star is
+    the exception to it that the references keep consistently (89 %, 63 of 71 pairs in
+    10 files, whichever ends further out), so a star ranks as ending beyond every loop.
+    Ties keep the layers' order (a trim after its host). Non-points layers get 20."""
+    loops = [rb for role, kind, rb in layers if role == "points" and kind == "bow"]
+    stars = [rb for role, kind, rb in layers if role == "points" and kind == "star"]
+    lift = max(0.0, max(loops) + 0.5 - min(stars)) if loops and stars else 0.0  # stars keep their order
+    reach = [rb + lift if role == "points" and kind == "star" else rb for role, kind, rb in layers]
+    by_outer = sorted(range(len(layers)), key=lambda k: -reach[k])
+    rank = {k: i for i, k in enumerate(by_outer)}
+    return [min(29, 20 + rank[k]) if layers[k][0] == "points" else 20 for k in range(len(layers))]
 
 
 def _points_start_at_cover(parts: list[Part]) -> None:
