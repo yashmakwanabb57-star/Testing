@@ -19,6 +19,10 @@ straight below the center where the tails show:
   (geometry draws a bow as a block widening from that share to the full width).
   A same-label band just inside a layer whose lobes still cover most of the circle
   next to it is that layer's body: the layer becomes a star covering it.
+  A layer without rotational symmetry whose label still covers the full circle over
+  part of its zone (a band dropped as a bridge: hand-pleated edges make its coverage
+  ramp up and down slowly) is a concentric pleated layer: a ring (the designer draws
+  these as annuli), with a confidence from how well the ring explains the layer.
 - the head disc exists when the outline of the upper half is a closed circle
   (radius spread < HEAD_ROUND); its label is the majority just inside the outline,
   and it is pinked when the outline, freed of its slow trend, still varies by
@@ -355,8 +359,10 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
     dom, domc = cov.argmax(axis=1), cov.max(axis=1)
     bands = _bands(dom, domc, max(1, int(round(MIN_BAND_UNITS / RADIAL_STEP_UNITS))))
     head = _head_disc(p, labels, fr)
+    all_bands = bands
     bands = _drop_bridges(bands, cov, max(1, int(round(BRIDGE_REACH_UNITS / RADIAL_STEP_UNITS))),
                           head["label"] if head else -2)
+    bridges = [bd for bd in all_bands if not any(bd is k for k in bands)]
 
     ccx, ccy = fr.x(cx), fr.y(cy)
     unit = lambda i: fr.d(radii[min(i, len(radii) - 1)])  # noqa: E731 - radius index -> canvas units
@@ -377,6 +383,7 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
     zones = [(edges[k], edges[k + 1]) for k in range(0, len(edges), 2) if edges[k + 1] > edges[k]]
     eaten: set[int] = set()  # ids of bands that are a star's body
     layers = []
+    pleated: list[tuple[int, int, int, float]] = []  # (i0, i1, label, confidence) of plain layers
     for a, b in zones:
         if fr.d(radii[b - 1] - radii[a]) < MIN_ZONE_UNITS:
             continue
@@ -396,6 +403,10 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
                     params, conf, rb_blob = found
                     params.update(cx=r3(ccx), cy=r3(ccy))
                     layers.append(("points", g, conf, params, area, rb_blob))
+                    continue
+                ring = _pleated_ring(g, a, b, bridges, cov, radii)
+                if ring is not None:
+                    pleated.append(ring)
                     continue
                 ys, xs = np.nonzero(ind[:, win])
                 xs = np.flatnonzero(win)[xs]
@@ -434,11 +445,40 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
     if center_band is not None and id(center_band) not in eaten:
         parts.append(Part("center", "center", {"cx": r3(ccx), "cy": r3(ccy), "r": r3(unit(center_band.i1))},
                           center_band.label, 50, r3(center_band.cov)))
-    rings = [bd for bd in bands if bd is not head_band and bd is not center_band and id(bd) not in eaten]
-    for depth, bd in enumerate(reversed(rings)):  # outermost first, inner rings on top
-        i1 = _ring_outer(bd, bands, dom, cov, radii, fr, [
-            (float(q.params["r_inner"]), q.color_group) for q in parts if q.role == "points"])
+    rings = [(bd.i0, bd) for bd in bands
+             if bd is not head_band and bd is not center_band and id(bd) not in eaten]
+    rings += [(i0, (i0, i1, g, conf)) for i0, i1, g, conf in pleated]
+    rings.sort(key=lambda t: t[0])
+    for depth, (_, bd) in enumerate(reversed(rings)):  # outermost first, inner rings on top
+        if isinstance(bd, tuple):  # a pleated layer, already measured
+            i0, i1, label, conf = bd
+        else:
+            i0, label, conf = bd.i0, bd.label, bd.cov
+            i1 = _ring_outer(bd, bands, dom, cov, radii, fr, [
+                (float(q.params["r_inner"]), q.color_group) for q in parts if q.role == "points"])
         parts.append(Part(f"ring-{depth}", "ring", {"cx": r3(ccx), "cy": r3(ccy),
-                                                    "r_outer": r3(unit(i1)), "r_inner": r3(unit(bd.i0))},
-                          bd.label, min(49, 30 + depth), r3(bd.cov)))
+                                                    "r_outer": r3(unit(i1)), "r_inner": r3(unit(i0))},
+                          label, min(49, 30 + depth), r3(conf)))
     return parts
+
+
+def _pleated_ring(g: int, a: int, b: int, bridges: list[_Band], cov: np.ndarray,
+                  radii: np.ndarray) -> tuple[int, int, int, float] | None:
+    """(i0, i1, label, confidence) of a ring for label g in the zone a..b when g covers
+    the full circle there (a band of g dropped as a bridge lies in the zone), else None.
+    The ring runs out from that band, both ways, while g still holds RING_EXTEND_COV
+    of the circle (the pleats' teeth; the same share a ring band is grown by). Its
+    confidence is its fit: the share of the zone's g area inside the ring times g's
+    mean coverage between its radii."""
+    full = [bd for bd in bridges if bd.label == g and a <= bd.i0 and bd.i1 <= b]
+    if not full:
+        return None
+    bd = max(full, key=lambda q: q.i1 - q.i0)
+    i0, i1 = bd.i0, bd.i1
+    while i0 > a and cov[i0 - 1, g] >= RING_EXTEND_COV:
+        i0 -= 1
+    while i1 < b and cov[i1, g] >= RING_EXTEND_COV:
+        i1 += 1
+    area = cov[a:b, g] * radii[a:b]
+    inside = float(area[i0 - a:i1 - a].sum() / max(area.sum(), 1e-9))
+    return i0, i1, g, inside * float(cov[i0:i1, g].mean())

@@ -262,3 +262,34 @@ def test_ring_growth_stops_at_another_label_points_layer_that_shows_there():
 def test_ring_growth_is_capped():
     # coverage that stays high far out is not a pleated edge any more
     assert _grow(0.7) <= 20 + 8
+
+
+def _ragged(seed: int, amp: float, n: int = 720) -> np.ndarray:
+    """Smooth irregular radial offsets (px) around the circle: hand-pleated edges."""
+    from scipy import ndimage
+    v = ndimage.gaussian_filter1d(np.random.default_rng(seed).normal(0, 1, n), 3, mode="wrap")
+    return amp * v / np.abs(v).max()
+
+
+def test_pleated_inner_layer_without_symmetry_is_a_ring():
+    # A7-15: a light pleated layer between the badge and the outer pleats. Its middle
+    # covers the full circle, its edges are irregular (no rotational symmetry): it is a
+    # concentric layer, drawn by the designer as an annulus, not an 'unknown' disc.
+    from rosette.assign import FLAG_BELOW
+    h, w = 1200, 800
+    yy, xx = np.mgrid[:h, :w]
+    d = np.hypot(xx - 400, yy - 300)
+    th = (np.degrees(np.arctan2(yy - 300, xx - 400)) % 360 * 2).astype(int) % 720
+    labels = np.full((h, w), -1, np.int32)
+    labels[(d <= 250) | ((yy > 550) & (yy < 1150) & (np.abs(xx - 400) < 100 + (yy - 550) * 0.1))] = 0
+    labels[(d >= 100 + _ragged(1, 30)[th]) & (d < 165 + _ragged(2, 30)[th])] = 1
+    p = Prepared(rgb=np.zeros((h, w, 3), np.uint8), mask=labels >= 0, axis_x=400.0, head=(400.0, 300.0, 250.0),
+                 tails_top_y=551.0, bottom_y=1149.0, scale=(1149 - 50) / 800)
+    parts = detect_parts(p, labels)
+    assert not [q for q in parts if q.role == "unknown"]
+    rings = [q for q in parts if q.role == "ring" and q.color_group == 1]
+    assert len(rings) == 1
+    q = rings[0]
+    # true edges: 100 +- 30 px and 165 +- 30 px, i.e. about 73 and 120 units
+    assert 66 < q.params["r_inner"] < 80 and 110 < q.params["r_outer"] < 126
+    assert FLAG_BELOW <= q.confidence < 1.0
