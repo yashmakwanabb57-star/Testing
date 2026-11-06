@@ -252,71 +252,69 @@ Every generated file must satisfy section 3 of the [design spec](superpowers/spe
 
 `app/main.py` (FastAPI, started with `run.bat` or uvicorn on 127.0.0.1:8765) serves `app/static`. **Workbench** shows the photo, the detected model, the solid and pattern previews, edit controls and the flagged items on one screen. **Guided** walks through the same state one question at a time (`guided.js`); switching modes keeps the state. Edits go back through `render`, so the validator runs after every change.
 
-### Current scoreboard (`tools/score.py`, 34 IDs, run for Task 16)
+### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H2)
 
-| ID | agree (per-axis, official) | uni (uniform scale, reported only) | success | uni success |
-|---|---|---|---|---|
-| A10-15B | 0.906 | 0.906 | yes | yes |
-| A13-15B | 0.000 | 0.000 | no | no |
-| A14-17 | 0.968 | 0.968 | yes | yes |
-| A15-17 | 0.954 | 0.959 | yes | yes |
-| A16-17 | 0.837 | 0.837 | no | no |
-| A9-15B | 1.000 | 1.000 | yes | yes |
-| S10-19 | 0.904 | 0.904 | yes | yes |
-| S13-15 | 0.840 | 0.840 | no | no |
-| S17-15 | 0.633 | 0.743 | no | no |
-| S2-15B | 0.000 | 0.000 | no | no |
-| S26-15 | 0.800 | 0.985 | no | yes |
-| S28-15 | 0.967 | 0.967 | yes | yes |
-| S29-15 | 0.247 | 0.229 | no | no |
-| S30-15 | 0.972 | 0.972 | yes | yes |
-| S31-15 | 0.929 | 0.966 | yes | yes |
-| S33-15 | 0.905 | 0.905 | yes | yes |
-| S35-19 | 0.958 | 0.960 | yes | yes |
-| S37-15 | 1.000 | 1.000 | yes | yes |
-| S40-15 | 0.903 | 0.903 | yes | yes |
-| S41-15 | 0.925 | 0.939 | yes | yes |
-| S43-15 | 0.957 | 0.971 | yes | yes |
-| S45-15 | 0.933 | 0.935 | yes | yes |
-| S46-15 | 0.741 | 0.926 | no (silent) | yes |
-| S5-15 | 0.910 | 0.988 | yes | yes |
-| S53-19 | 0.513 | 0.513 | no | no |
-| S56-17B | 0.972 | 0.975 | yes | yes |
-| S58-17 | 1.000 | 1.000 | yes | yes |
-| S67-19 | 0.964 | 0.964 | yes | yes |
-| S68-19 | 0.600 | 0.433 | no | no |
-| S69-19 | 0.980 | 0.988 | yes | yes |
-| S70-19 | 0.956 | 0.956 | yes | yes |
-| S8-15 | 0.636 | 0.636 | no | no |
-| S80-22 | 0.979 | 0.989 | yes | yes |
-| s34-15 | 0.951 | 0.941 | yes | yes |
+Re-recorded after the H1 scorer fix (every solid color element is scored; old-layout files render as in the shop), which changed two rows at the old HEAD c8d35c1: A13-15B 0.000 -> 0.187, S37-15 1.000 -> 0.949 (counts unchanged: 23/34). The H2 changes are the out-to-in Color numbering (S2-15B 0.000 -> 0.687, S68-19 0.600 -> 0.966 success) and the head-fit flag.
 
-Official (per-axis): **success 23, flagged-not-success 10, silently wrong 1 (S46-15), errors 0 - `PASS 23/34`** against the bar of 28 (80 %). Reported only (uniform-scale alignment): 25/34. The per-axis column is the metric and the bar; the uniform column only explains misses.
-
-Flagged although correct: **20 of the 23 successes** (was 19 before the final fixes). The final fixes flag a part of any role below `FLAG_BELOW`, not only points rings; the one ID that changed is S31-15, whose six tail stripes are read at 0.545 and were not flagged before. Only S28-15, S43-15 and S56-17B succeed unflagged. Success, flagged-not-success and silent counts are unchanged (S46-15 has no part below 0.6, so it stays silent).
-
-| set | n | success | flagged-not-success | silently-wrong | flagged although correct |
+| ID | agree (per-axis, official) | uni (uniform scale, reported only) | success | uni success | before H2 (c8d35c1, re-recorded) |
 |---|---|---|---|---|---|
-| all | 34 | 23 | 10 | 1 (S46-15) | 20 (was 19) |
-| tune | 24 | 17 | 7 | 0 | 15 (was 14) |
-| holdout-remaining (not clean) | 8 | 5 | 3 | 0 | 4 |
-| inspected (S46-15, S80-22) | 2 | 1 | 0 | 1 | 1 |
+| A10-15B | 0.906 | 0.906 | yes | yes | 0.906 yes |
+| A13-15B | 0.187 | 0.187 | no | no | 0.187 no |
+| A14-17 | 0.968 | 0.968 | yes | yes | 0.968 yes |
+| A15-17 | 0.954 | 0.959 | yes | yes | 0.954 yes |
+| A16-17 | 0.837 | 0.837 | no | no | 0.837 no |
+| A9-15B | 1.000 | 1.000 | yes | yes | 1.000 yes |
+| S10-19 | 0.904 | 0.904 | yes | yes | 0.904 yes |
+| S13-15 | 0.840 | 0.840 | no | no | 0.840 no |
+| S17-15 | 0.633 | 0.743 | no | no | 0.633 no |
+| S2-15B | 0.687 | 0.687 | no | no | 0.000 no |
+| S26-15 | 0.800 | 0.985 | no | yes | 0.800 no |
+| S28-15 | 0.967 | 0.967 | yes | yes | 0.967 yes |
+| S29-15 | 0.247 | 0.229 | no | no | 0.247 no |
+| S30-15 | 0.972 | 0.972 | yes | yes | 0.972 yes |
+| S31-15 | 0.929 | 0.966 | yes | yes | 0.929 yes |
+| S33-15 | 0.905 | 0.905 | yes | yes | 0.905 yes |
+| S35-19 | 0.958 | 0.960 | yes | yes | 0.958 yes |
+| S37-15 | 0.949 | 0.936 | yes | yes | 0.949 yes |
+| S40-15 | 0.903 | 0.903 | yes | yes | 0.903 yes |
+| S41-15 | 0.925 | 0.939 | yes | yes | 0.925 yes |
+| S43-15 | 0.957 | 0.971 | yes | yes | 0.957 yes |
+| S45-15 | 0.933 | 0.935 | yes | yes | 0.933 yes |
+| S46-15 | 0.741 | 0.926 | no | yes | 0.741 no |
+| S5-15 | 0.910 | 0.988 | yes | yes | 0.910 yes |
+| S53-19 | 0.513 | 0.513 | no | no | 0.513 no |
+| S56-17B | 0.972 | 0.975 | yes | yes | 0.972 yes |
+| S58-17 | 1.000 | 1.000 | yes | yes | 1.000 yes |
+| S67-19 | 0.964 | 0.964 | yes | yes | 0.964 yes |
+| S68-19 | 0.966 | 0.620 | yes | no | 0.600 no |
+| S69-19 | 0.980 | 0.988 | yes | yes | 0.980 yes |
+| S70-19 | 0.956 | 0.956 | yes | yes | 0.956 yes |
+| S8-15 | 0.636 | 0.636 | no | no | 0.636 no |
+| S80-22 | 0.979 | 0.989 | yes | yes | 0.979 yes |
+| s34-15 | 0.951 | 0.941 | yes | yes | 0.951 yes |
+
+Official (per-axis): **success 24, flagged-not-success 10, silently wrong 0, errors 0 - `PASS 24/34`** against the bar of 28 (80 %). Reported only (uniform-scale alignment): 25/34. The per-axis column is the metric and the bar; the uniform column only explains misses.
+
+Flagged although correct: **all 24 successes**. The head-fit check flags every head below 0.9 layer agreement, which is all 34 canonical heads; before it, S28-15, S43-15 and S56-17B succeeded unflagged, and their heads are visibly wrong (H1 analysis). S46-15 is no longer silent: its head fit is 0.82.
+
+Over all 76 reference photos (scratch `compare_all.py`, match >= 0.9 and no issue): 36 -> 45 OK, mean color agreement 0.689 -> 0.832, silently wrong (not OK, not flagged) A13-15 and S46-15 -> A13-15 only (its photo is one red, the designer split it into two Colors).
 
 ### Sample outputs
 
-`output/s35-19.svg` and `output/s46-15.svg` were made from `S35-19.webp` and `S46-15.webp` (read from the Downloads folder, never written there) with `rosette.pipeline.analyze` + `render`, the same code path the UI uses, and checked with `rosette.validate.validate` (both return `[]`). They are the tool's unedited output, not confirmed by a person.
+`output/s35-19.svg` and `output/s46-15.svg` were regenerated for H2 from `reference/photos/S35-19.png` and `reference/photos/S46-15.png` with `rosette.pipeline.analyze` + `render`, the same code path the UI uses, and checked with `rosette.validate.validate` (both return `[]`). They are the tool's unedited output, not confirmed by a person.
 
 | Output | Flagged | Flagged items | Warnings |
 |---|---|---|---|
-| `output/s35-19.svg` | yes | two points layers with detector confidence 0.46 and 0.47 (below 0.6); three `unknown` parts (unknown-1, unknown-3, unknown-4) drawn as plain discs in the head. No color group below 0.6. | unknown-1, unknown-3 and unknown-4: unrecognised shape, drawn as a plain disc |
-| `output/s46-15.svg` | no | none (all color groups and both points layers at 0.64 or above) | none |
+| `output/s35-19.svg` | yes | two points layers with detector confidence 0.46 and 0.47 (below 0.6); three `unknown` parts (unknown-1, unknown-3, unknown-4) drawn as plain discs in the head; head fit 0.58. No color group below 0.6. | head fit (layers and outline); unknown-1, unknown-3 and unknown-4: unrecognised shape, drawn as a plain disc |
+| `output/s46-15.svg` | yes | head part (head fit 0.82, confidence capped at 0.5) | head fit (layers) |
 
-S46-15 is not flagged, yet it is the one ID that scores as silently wrong under per-axis scoring (see below); its colors are in the right layers. Before uploading either file to the shop, the user should open each photo in the UI, confirm the flags (S35-19) and compare the drawing with the photo (both). That confirmation has not been done; it is the user's step.
+Before uploading either file to the shop, the user should open each photo in the UI, confirm the flags and compare the drawing with the photo. That confirmation has not been done; it is the user's step.
 
 ### Known limitations
 
-- **The success bar is not met: 23/34 succeed against 28 needed (80 %).** `pytest -m slow` fails accordingly. Tuning stopped; it is not finished.
-- **S46-15 counts as silently wrong under per-axis scoring** (0.741, not flagged). It is a scorer alignment effect (the designer drew a larger head and narrower tails; uniform scale gives 0.926), but the tool gives no signal on it, so a user cannot tell it from a real silent error.
+- **The success bar is not met: 24/34 succeed against 28 needed (80 %).** `pytest -m slow` fails accordingly. Tuning stopped; it is not finished.
+- **S46-15 scores 0.741 under per-axis scoring** (a scorer alignment effect: the designer drew a larger head and narrower tails; uniform scale gives 0.926). It is now flagged by the head-fit check (0.82).
+- **The head-fit flag is near-universal**: 74 of 76 reference heads fall below `HEAD_FIT_MIN`, so it tells the user to compare the head with the photo on almost every rosette rather than singling out the bad ones.
 - The holdout is no longer clean (see Task 12 phase B), so the numbers on the tuned IDs overstate how the tool will do on new photos.
 - Most successes are still flagged (20 of 23: placeholder `unknown` discs, or a part read below 0.6, mostly points rings). The flag is warranted but means most results need a human look.
 - Remaining failure clusters:

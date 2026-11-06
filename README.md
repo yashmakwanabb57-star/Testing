@@ -58,7 +58,7 @@ The first command runs the fast suite: `pyproject.toml` already sets `-m "not sl
 
 Runs the pipeline on every photo in `reference/photos` that has a designer SVG listed in `reference/canonical.txt` (34) and compares the result against the designer's file, region by region. It takes a few minutes. `--sheet DIR` saves photo | generated | designer images; `--debug` prints each scored element.
 
-Current scoreboard: success 23 of 34 (the bar is 28), flagged-not-success 10, silently wrong 1 (S46-15), errors 0; 20 of the 23 successes are flagged although correct.
+Current scoreboard: success 24 of 34 (the bar is 28), flagged-not-success 10, silently wrong 0, errors 0; all 24 successes are flagged (the head-fit check asks for a head comparison on almost every rosette).
 
 ## How to test on the shop
 
