@@ -47,7 +47,8 @@ from PIL import Image  # noqa: E402
 
 from rosette.assign import part_area  # noqa: E402
 from rosette.pipeline import analyze, is_flagged, render  # noqa: E402
-from rosette.roles import category, classify_components, element_masks, render_categories  # noqa: E402
+from rosette.roles import (category, classify_components, classify_masks, drawn_frame,  # noqa: E402
+                           element_masks, render_categories)
 from tools.rasterize import DEFAULT_PALETTE, rasterize  # noqa: E402
 from tools.truth import truth_from_svg  # noqa: E402
 
@@ -172,11 +173,16 @@ def compare(designer_svg: str, generated_svg: str) -> dict:
                 uniform_agreement=right_uniform / total if total else 0.0, elements=elements)
 
 
-def _role_masks(svg: str, box: tuple[slice, slice], shape: tuple[int, int] | None):
+def _role_masks(svg: str, box: tuple[slice, slice], shape: tuple[int, int] | None, drawn: bool = False):
     """(frame, [(role, mask)]) per classified piece of every solid-configuration color
     element, cropped to `box` of the HEIGHT render and, when `shape` is given, resized
-    onto it."""
-    f, items = classify_components(svg, HEIGHT)
+    onto it. drawn: classify in `drawn_frame` (our files: the head center we drew)
+    instead of the frame `prepare` measures on the render."""
+    if drawn:
+        f = drawn_frame(svg, HEIGHT)
+        items = classify_masks(element_masks(svg, HEIGHT), f)
+    else:
+        f, items = classify_components(svg, HEIGHT)
     out = []
     for _, role, piece in items:
         crop = piece[box]
@@ -212,7 +218,7 @@ def shape_compare(designer_svg: str, generated_svg: str) -> dict:
     d = dm[box]
     g = cv2.resize(gm[gbox].astype(np.uint8), (d.shape[1], d.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
     f, dparts = _role_masks(designer_svg, box, None)
-    _, gparts = _role_masks(generated_svg, gbox, d.shape)
+    _, gparts = _role_masks(generated_svg, gbox, d.shape, drawn=True)
     split = int(np.clip(round(f.tails_top_y) - box[0].start, 0, d.shape[0]))
     layers, total, acc = [], 0.0, 0.0
     for role, m in dparts:

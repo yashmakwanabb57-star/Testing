@@ -168,3 +168,34 @@ def test_shape_layer_scores_each_designer_head_element_by_role():
 def test_shape_ok_uses_the_whole_iou_bar():
     assert score.shape_compare(_rosette(), _rosette())["shape_ok"]
     assert not score.shape_compare(_rosette(), _rosette(head_r=60, tail_w=60))["shape_ok"]
+
+
+def _ringed(cat: int = 1) -> str:
+    """Synthetic rosette: tail, head disc, a ring and a center disc."""
+    ring = ('<path class="st3_2" fill-rule="evenodd" '
+            'd="M300 100a90 90 0 1 0 0.01 0zM300 130a60 60 0 1 0 0.01 0z"/>')
+    return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 850"><g id="Layer_1">'
+            f'<polygon class="st0_{cat}" points="260,300 340,300 400,825 200,825"/>'
+            f'<circle class="st1_{cat}" cx="300" cy="190" r="130"/>{ring}'
+            '<circle class="st2_2" cx="300" cy="190" r="40"/></g></svg>')
+
+
+def test_layer_classifies_our_pieces_around_the_center_we_drew(monkeypatch):
+    # The head circle `prepare` finds on our render can be off (S35-19: 9 px high, so our
+    # ring and center were classed as points and scored 0). Our pieces are judged around
+    # the head center our own file draws (its circles and rings), not the measured one.
+    from dataclasses import replace
+    from rosette import roles
+    real = roles.frame_for
+
+    def shifted(svg, height=roles.RENDER_H):
+        f = real(svg, height)
+        if 'class="st1_3"' in svg:  # our file
+            cx, cy, r = f.head
+            f = replace(f, head=(cx, cy - 9, r - 9))
+        return f
+    monkeypatch.setattr(roles, "frame_for", shifted)
+    s = score.shape_compare(_ringed(), _ringed(cat=3))
+    by_role = {e["role"]: e["iou"] for e in s["layers"]}
+    assert by_role["ring"] == pytest.approx(1.0, abs=0.02)
+    assert by_role["center"] == pytest.approx(1.0, abs=0.02)

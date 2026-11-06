@@ -19,7 +19,7 @@ from __future__ import annotations
 import copy
 import io
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import resvg_py
@@ -164,6 +164,39 @@ def frame_for(svg: str, height: int = RENDER_H) -> Frame:
                  bottom_y=p.bottom_y * k, scale=p.scale * k, prepared=p)
 
 
+_RING_CENTER = re.compile(r"M(-?[\d.]+),(-?[\d.]+)a(-?[\d.]+),")
+
+
+def drawn_frame(svg: str, height: int = RENDER_H) -> Frame:
+    """`frame_for` with the head center taken from the file's own concentric shapes
+    (circles and ring paths, the median of their centers) when it has any: for files
+    whose head we drew, the center is exact, while `prepare` scores 90-degree symmetry
+    and can miss on a 6-fold head turned a few degrees (S35-19: 9 px high, its ring and
+    center classified as points). The radius stays center minus head top, as in
+    `prepare`, and the tails start below it."""
+    f = frame_for(svg, height)
+    root = etree.fromstring(svg.encode("utf-8"), etree.XMLParser(remove_comments=True, huge_tree=True))
+    centers = []
+    for el in _color_elements(root):
+        tag = _local(el)
+        if tag == "circle":
+            centers.append((float(el.get("cx", 0)), float(el.get("cy", 0))))
+        elif tag == "path":
+            for x, y, r in _RING_CENTER.findall(el.get("d", "")):
+                centers.append((float(x) - float(r), float(y)))
+    vb = [float(v) for v in (root.get("viewBox") or "").replace(",", " ").split()]
+    if not centers or len(vb) != 4:
+        return f
+    k = height / vb[3]
+    pad = int(round(PAD_FRAC * height))
+    cx = pad + (float(np.median([c[0] for c in centers])) - vb[0]) * k
+    cy = pad + (float(np.median([c[1] for c in centers])) - vb[1]) * k
+    top = f.head[1] - f.head[2]
+    if cy <= top:
+        return f
+    return replace(f, head=(cx, cy, cy - top), tails_top_y=min(f.bottom_y, float(np.floor(cy + cy - top) + 1)))
+
+
 def element_masks(svg: str, height: int = RENDER_H) -> list[tuple[object, np.ndarray]]:
     """(element, bool mask) per solid-configuration color element, each rendered alone
     in the padded frame of `render_categories`."""
@@ -264,13 +297,19 @@ def classify_components(svg: str, height: int = RENDER_H) -> tuple[Frame, list[t
     element is judged on its own. Masks and frame are in the padded render of
     `render_categories(svg, height, ...)`."""
     f = frame_for(svg, height)
+    return f, classify_masks(element_masks(svg, height), f)
+
+
+def classify_masks(masks: list[tuple[object, np.ndarray]], f: Frame) -> list[tuple[object, str, np.ndarray]]:
+    """[(element, role, component mask)] of element masks judged in the frame `f` (which
+    may come from another file the masks were aligned onto)."""
     min_px = max(1, int(MIN_COMPONENT_UNITS2 * f.scale ** 2))
     out = []
-    for el, m in element_masks(svg, height):
+    for el, m in masks:
         for comp in _components(m, min_px):
             for piece in _split_head(comp, f):
                 out.append((el, _classify(piece, f), piece))
-    return f, out
+    return out
 
 
 def classify_roles(svg: str) -> list[tuple[object, str]]:
