@@ -16,8 +16,12 @@ from .common import Pt, points_attr, polar
 #   widest point at 0.4 of the length (median peak; quartiles 0.3-0.5). The median of
 #   the profiles has rounded shoulders only because the peaks differ; each designer
 #   kite is a straight-sided polygon;
-# - petal (16 layers, 13 files): a wide inner end (mostly under the center), widest at
-#   half the length, a straight taper to a pointed tip.
+# - petal (14 layers, 13 files): a wide inner end (mostly under the center), widest at
+#   half the length, a straight taper to a pointed tip. The mined petals are not
+#   consistent (width/spacing quartiles 0.32-0.98 at t=0.1), so the profile was kept only
+#   because it beats the old sine lobe on the 14 photos whose model has a petal layer:
+#   head IoU mean 0.7702 vs 0.7606 (better on 6, worse on 2: S40-15 -0.004, S58-17
+#   -0.007, equal on 6), whole shape 0.8897 vs 0.8866, color 0.8291 vs 0.8265.
 _T = tuple(i / 10 for i in range(11))
 LOOP_PROFILE = (0.85, 0.85, 0.89, 0.92, 0.94, 0.96, 0.98, 1.0, 1.0, 1.0, 1.0)
 KITE_PEAK = 0.4
