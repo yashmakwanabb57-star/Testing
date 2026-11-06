@@ -133,3 +133,31 @@ def test_backing_showing_beyond_the_points_becomes_tips_behind_them():
     # the points' thin inner tips vanish in the ring's pleats: they start at the ring
     assert pp["r_inner"] == rings[0].params["r_outer"] == bp["r_inner"]
     assert not [q for q in parts if q.role == "unknown" and q.color_group == 0]
+
+
+def test_specks_of_a_band_are_folded_into_it_not_drawn_as_discs():
+    # S35-19: the pinked edges of the center and of the ring leave small pieces of both
+    # colors in the thin zone between them; they were drawn as two discs (unknown,
+    # confidence 0.06). They are the bands' own fringe: no disc, and the ring closes
+    # the gap down to the center.
+    p, labels = loops_photo(teeth=False)
+    h, w = labels.shape
+    yy, xx = np.mgrid[:h, :w].astype(float)
+    r = np.hypot(xx - 450.0, yy - 330.0)
+    bins = ((np.degrees(np.arctan2(yy - 330.0, xx - 450.0)) % 360) * 2).astype(int) % 720
+    rng = np.random.default_rng(2)
+    inner_reach = rng.uniform(0.29, 0.36, 720)[bins] * 300  # the center's pinked edge
+    outer_reach = rng.uniform(0.33, 0.40, 720)[bins] * 300  # the ring's pleats
+    seam = (r > 0.3 * 300) & (r < 0.4 * 300)
+    labels[seam] = -1
+    labels[seam & (r >= outer_reach)] = 0
+    labels[seam & (r < inner_reach)] = 2
+    labels[(r > 0.3 * 300) & (r <= 0.5 * 300) & ~seam] = 0
+    p = Prepared(rgb=p.rgb, mask=labels >= 0, axis_x=p.axis_x, head=p.head,
+                 tails_top_y=p.tails_top_y, bottom_y=p.bottom_y, scale=p.scale)
+    parts = [q for q in detect_parts(p, labels) if q.role != "tail_stripe"]
+    assert not [q for q in parts if q.role == "unknown"], parts
+    ring = [q for q in parts if q.role == "ring"]
+    center = [q for q in parts if q.role == "center"]
+    assert len(ring) == 1 and len(center) == 1
+    assert ring[0].params["r_inner"] <= center[0].params["r"] + 1

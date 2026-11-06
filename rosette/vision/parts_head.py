@@ -127,6 +127,18 @@ EXPLAIN_MAX_CONF = 0.6
 EDGE_MAX_SHARE, EDGE_MIN_RADII, EDGE_SHARE = 0.35, 0.5, 0.108
 BACK_TOL_DEG, BACK_MIN_UNITS, BACK_MAX_COV = 2.0, 3.0, 0.5
 EXPLAIN_MIN_LOBES, EXPLAIN_MIN_SHARE = 2 / 3, 0.5
+# An unknown head-zone layer in a seam - a zone between two bands at most SEAM_UNITS
+# wide (two pleat depths, RING_MAX_GROWTH_UNITS: the center's pinked edge meets a ring's
+# pleats) - whose label is one of those bands' labels and whose area is under
+# SPECK_MAX_UNITS2 is that band's fringe (H4): it is folded into the band instead of
+# being drawn as a disc, and a seam left empty is closed (the outer band, a ring,
+# starts where the inner one ends). Over the 76 photos 14 seams (11-16 units wide) hold
+# 22 such unknowns of 1525-5729 units^2 (S35-19: 1525 and 1943), all folded. The next
+# wider zones (S17-15 and S1-15B 21 units, S52-19 and S57-17 28) hold real layers in
+# the designer files (S17-15: a 4-point star) and are kept, as are unknowns of a third
+# color (a badge's print, a gold rim) and zones open on one side (S5-15's loops).
+SEAM_UNITS = 2 * RING_MAX_GROWTH_UNITS
+SPECK_MAX_UNITS2 = 6000.0
 # A points layer (not a loop or star) whose inner end lies within COVER_GAP_UNITS outside
 # a ring or the center started under it (one pleat depth, RING_MAX_GROWTH_UNITS).
 COVER_GAP_UNITS = 8.0
@@ -481,6 +493,7 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             meta.append(dict(zone=(a, b), rows=(ra, rb), eats=inner if has_core else None, inner=inner))
 
     layers, meta = _explain_trims(layers, meta, pol, radii, win, fr)
+    layers, meta = _fold_specks(layers, meta, bands, head_band, pleated, radii, fr)
     eaten = {id(m["eats"]) for m in meta if m["eats"] is not None}
 
     # points: largest layer first; outer layers drawn underneath (lower z)
@@ -701,4 +714,29 @@ def _explain_trims(layers: list, meta: list[dict], pol: np.ndarray, radii: np.nd
     for layer, mm in extra:
         out.append(layer)
         out_meta.append(mm)
+    return out, out_meta
+
+
+def _fold_specks(layers: list, meta: list[dict], bands: list[_Band], head_band: _Band | None,
+                 pleated: list, radii: np.ndarray, fr: Frame) -> tuple[list, list[dict]]:
+    """Fold unknown layers that are a seam band's fringe (SEAM_UNITS, SPECK_MAX_UNITS2)
+    into that band and close a seam they leave empty."""
+    out, out_meta, folded = [], [], set()
+    for k, (role, h, share, params, area, rb) in enumerate(layers):
+        a, b = meta[k]["zone"]
+        inner = next((bd for bd in bands if bd.i1 == a), None)
+        outer = next((bd for bd in bands if bd.i0 == b), None)
+        if (role == "unknown" and inner is not None and outer is not None
+                and fr.d(radii[b - 1] - radii[a]) <= SEAM_UNITS
+                and h in (inner.label, outer.label) and fr.d(fr.d(area)) < SPECK_MAX_UNITS2):
+            folded.add((a, b))
+            continue
+        out.append(layers[k])
+        out_meta.append(meta[k])
+    for a, b in folded:
+        if any(m["zone"] == (a, b) for m in out_meta) or any(a <= i0 < b for i0, *_ in pleated):
+            continue
+        outer = next(bd for bd in bands if bd.i0 == b)
+        if outer is not head_band:
+            outer.i0 = a
     return out, out_meta
