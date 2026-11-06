@@ -278,6 +278,22 @@ Started at e9ac42d. Full notes: `.superpowers/sdd/2026-11-05-rosette-svg-generat
 
 **Scoreboard** (34 IDs): `PASS 23/34` unchanged; shape 0.909 -> 0.913, head 0.809 -> 0.821 (after fix round 1); no ID loses more than 0.004 color or shape. Color gains: S28-15 0.965 -> 0.998 and S69-19 0.980 -> 0.993 (loops over stars).
 
+## H6: specks, tail slivers, glitter read as two tones, diagonal tails as a fan
+
+Started at db5d68f. Full notes: `.superpowers/sdd/2026-11-05-rosette-svg-generator/h6-report.md`. Seen on A13-15B (two rim specks drawn as discs, a navy glitter ribbon read as thin light/dark stripes, three diagonal ribbons drawn as one striped tail).
+
+**Specks** (`rosette/tidy.py` `drop_specks`, called by `analyze` after detection). An `unknown` part under `SPECK_MAX_HEAD_SHARE` = 0.005 of the photo's head circle (pi r^2 over pi R^2) is not drawn, wherever it lies, with one warning naming it. Over the 76 photos (67 unknowns) the rim specks measure 0.0022-0.0039 (S1-15, S13-15, S55-15, S51-19, A13-15B twice); the next unknowns are real structure drawn as placeholders: S9-19 bow loop tips 0.0059 and 0.0111, S58-17 badge print 0.0087, S29-15 loop tips 0.0100. The bar sits in that gap (x1.28 the largest speck, x0.85 the smallest kept piece: a thin margin). Real parts can be smaller (A1-15 center 0.0024), but only unknown parts are dropped. The H4 seam folding (`SPECK_MAX_UNITS2`) runs before and is unchanged.
+
+**Tail slivers** (`tidy.merge_tail_slivers`). A tail stripe under `SLIVER_SHARE` (0.35) of the median stripe width is merged into a neighbour: one of its own group, else both neighbours when they share a group (they join), else the wider one; stripes are renumbered and one warning names the merged stripes. Over the 76 photos 14 slivers on 7 photos (S31-15, S52-19, S15-15, S35-19, S30-15, S13-15 and, before the glitter rule, A13-15B) measure 0.05-0.21 of the median; the narrowest kept stripes 0.33-0.35 were A13-15B glitter fragments (gone with the glitter rule), then 0.50 and up. The numbering rule in `assign` still skips slivers in edited models.
+
+**Glitter read as two plain tones** (`rosette/vision/parts_tails.py` `_glitter`). The brief's premise (a pattern group split into two tones) does not occur in the data: every textured tail stretch of a pattern group is >= 0.77 that group, with 1.4-4 units of spill at its ends. What occurs is A13-15B: no pattern group at all, the navy glitter labelled as alternating light-blue and royal stripes. On each measured row the texture is the local L* spread (window `GLITTER_WIN_UNITS` 3.5, over `PATTERN_T` 5 after a `GLITTER_SMOOTH_UNITS` 2 median filter, stretches of `GLITTER_MIN_UNITS` 10 or more). A stretch whose labels, `GLITTER_EDGE_UNITS` 2 in from both ends, make two or more runs of `GLITTER_RUN_UNITS` 3 or more of two or more plain groups is glitter: with the color groups given (`detect_parts(p, labels, groups)`, as `analyze` does) it becomes a new pattern group (median color of those pixels) and one stripe of its full width. Satin stripes 10+ units wide read <= 1.8 on A13-15B, its glitter 9.3-21.6; the rule fires on A13-15B only (S2-15B's print is plain-tone spill at one end, never two interior runs). A13-15B rows at 25 % and 50 % read the glitter as 95 % royal (one tone), so the glitter stripe is measured on 5 of 11 rows and its shares fall back to the mean (no top/bottom fit).
+
+**Diagonal stripes as a fan** (`parts_tails.fan_asymmetry`, `_fan`, `fan_z`). Per stripe boundary of a single tail a straight line is fitted over the measured rows (rms residual in units, not R^2: a vertical boundary has no x variance), angles relative to the tail axis. The brief's divergence premise does not separate anything: every multi-stripe photo diverges (7-17 degrees between inner boundaries: outer tails fanning over a constant-width center ribbon), which the top and bottom stripe shares already draw. What separates A13-15B is that its fan is not mirror-symmetric: a boundary and its mirror partner differ by 8.0 degrees (fits within 0.4 units rms); every other measured tail reads <= 4.9 except S31-15 6.1 (a sliver at one side shifts the pairing; its colors repeat); 9 tails are unmeasurable (fewer than 4 rows or 3 stripes). Rule: asymmetry >= `FAN_ASYM_DEG` 7 with fits within `FAN_RMS_UNITS` 2 flags the tail (confidence <= 0.5); with `FAN_MIN_STRIPES` 3+ stripes of distinct colors it is drawn as that many separate tails (`spread_deg`), each one constant-width ribbon as wide as the axis spacing at the bottom, fanning from an apex set so the outer extent widens as measured, stacked as the boundaries show (a boundary is the side of the tail on top). Fires on A13-15B only. `geometry.tails` draws the fan with each tail's own sides and pinked bottom on one line, adjacent tails meeting at the bottom (no gap), and `validate` passes (synthetic tests).
+
+**A13-15B** (outline, photo | ours | reference): before, one tail with six stripes (two light slivers) and two rim discs; after, no discs, three tails: light left, glitter (its own pattern Color) in the middle, royal right, with a vertical and a diagonal inner line as in the reference. Shape 0.924 -> 0.926, head 0.962 -> 0.967, tail 0.898 -> 0.898; color 0.187 -> 0.187 (1.000 after the glitter rule alone, with one striped tail; as three flag tails the mined rules number royal Color 1 where the reference has light; the reference uses another color scheme).
+
+**Scoreboard** (34 IDs): `PASS 23/34` unchanged (24/34 between the glitter and fan commits); only A13-15B changes beyond 0.003 (S31-15 shape 0.932 -> 0.929, slivers merged). No ID loses more than 0.003 color or shape.
+
 ## Final state (Task 16)
 
 ### Stages, modules and tuning constants
@@ -290,7 +306,8 @@ Constants are module-level names; read their comments in the source before chang
 | color groups, stripe split, motif absorption, mixed-texture warning | `rosette/vision/colors.py` | `L_WEIGHT`, `SMOOTH_UNITS`, `FLAT_PCT`, `GRAIN_WEIGHT`, `SAMPLE_N`, `MIN_CENTER_SEP`, `PRINT_MAX_FRAC`, `TEXTURE_WIN_UNITS`, `PATTERN_T`, `MIXED_PATTERN_SHARE`, `BADGE_IN_HEAD`, `BADGE_MAX_AREA`, `BADGE_EDGE`, `BADGE_UNSURE`, `BADGE_ENCLOSED`, `BADGE_SHAPE_MIN`, `SEED` |
 | part detection driver, leftovers as `unknown` | `rosette/vision/parts.py` | `LEFTOVER_OPEN_UNITS`, `TAIL_TOUCH_PX`, `HEAD_MARGIN`, `UNKNOWN_CONFIDENCE` |
 | head: rings, points, bows, center, blob rings | `rosette/vision/parts_head.py`, `parts_common.py` | `RING_EXTEND_COV`, `FULL_COV`, `MIN_BAND_UNITS`, `MIN_LAYER_COV`, `MAX_COUNT`, `BOW_ENDS`, `PETAL_FULLNESS`, `BLOB_UNCONFIRMED_CONF`, `MIN_INNER_RATIO`, `HEAD_ROUND`, `PINKED_DEPTH`, `RING_MAX_GAP`, `PLEATED_FULL_MIN`, `PLEATED_REACH_UNITS` |
-| tail stripes | `rosette/vision/parts_tails.py` | `ROW_FRACS`, `COUNT_ROWS`, `DENSE_SPAN`, `GAP_UNITS`, `ROW_BAND_PX`, `TOP_INSET` |
+| tail stripes, glitter read as two tones, fans (H6) | `rosette/vision/parts_tails.py` | `ROW_FRACS`, `COUNT_ROWS`, `DENSE_SPAN`, `GAP_UNITS`, `ROW_BAND_PX`, `TOP_INSET`, `GLITTER_*`, `FAN_*` |
+| tidy: unknown specks, tail slivers (H6) | `rosette/tidy.py` | `SPECK_MAX_HEAD_SHARE` (and `SLIVER_SHARE` from assign) |
 | Color 1-4 assignment, confidence, warnings | `rosette/assign.py`, `rosette/roles.py`, rules in `rosette/data/assign_rules.json` (mined by `tools/mine_rules.py`) | `FLAG_BELOW`, `MAX_COLORS`, `PATTERN_MIN_RIBBON_SHARE`, `TAIL_POS_TOL`, `FLAGGED_CONF`, `PATTERN_MERGE_PENALTY`, `SLIVER_SHARE`, `RULE_LOGODDS` |
 | geometry, shapes, occlusion cuts | `rosette/geometry/`, `rosette/shapes.py`, `rosette/build.py`, `rosette/geometry/clip.py` | `QUAD_SEGS`, `SIMPLIFY`, `MIN_PIECE` |
 | SVG writer and contract validator | `rosette/writer.py`, `rosette/validate.py` | none (the contract is fixed) |
@@ -305,14 +322,14 @@ Every generated file must satisfy section 3 of the [design spec](superpowers/spe
 
 `app/main.py` (FastAPI, started with `run.bat` or uvicorn on 127.0.0.1:8765) serves `app/static`. **Workbench** shows the photo, the detected model, the solid and pattern previews, edit controls and the flagged items on one screen. **Guided** walks through the same state one question at a time (`guided.js`); switching modes keeps the state. Edits go back through `render`, so the validator runs after every change.
 
-### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H5)
+### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H6)
 
-Re-recorded after H5 fix round 1; the last column is the H5 start (e9ac42d). The H3-era table (agree before H3 at 476d07e) is in git history. `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only).
+Re-recorded after H6 (only A13-15B moved: agree 0.187, shape 0.924 -> 0.926, headS 0.962 -> 0.967; S31-15 shape 0.932 -> 0.929); the last column is the H5 start (e9ac42d). The H3-era table (agree before H3 at 476d07e) is in git history. `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only).
 
 | ID | agree | uni | success | uni success | shape | headS | stack reversed | before H5 (e9ac42d) agree / shape / headS |
 |---|---|---|---|---|---|---|---|---|
 | A10-15B | 0.906 | 0.942 | yes | yes | 0.870 | 0.684 | 0 | 0.906 / 0.870 / 0.684 |
-| A13-15B | 0.187 | 0.187 | no | no | 0.924 | 0.962 | 1 (head>center) | 0.187 / 0.924 / 0.962 |
+| A13-15B | 0.187 | 0.187 | no | no | 0.926 | 0.967 | 1 (head>center) | 0.187 / 0.924 / 0.962 |
 | A14-17 | 0.949 | 0.949 | yes | yes | 0.957 | 0.963 | 0 | 0.949 / 0.957 / 0.963 |
 | A15-17 | 0.968 | 0.963 | yes | yes | 0.965 | 0.957 | 0 | 0.968 / 0.965 / 0.957 |
 | A16-17 | 0.837 | 0.926 | no | yes | 0.895 | 0.830 | 0 | 0.837 / 0.895 / 0.830 |
@@ -325,7 +342,7 @@ Re-recorded after H5 fix round 1; the last column is the H5 start (e9ac42d). The
 | S28-15 | 0.998 | 0.995 | yes | yes | 0.980 | 0.964 | 1 (star>loop) | 0.965 / 0.980 / 0.964 |
 | S29-15 | 0.257 | 0.229 | no | no | 0.897 | 0.699 | 0 | 0.247 / 0.883 / 0.650 |
 | S30-15 | 0.975 | 0.986 | yes | yes | 0.900 | 0.759 | 0 | 0.974 / 0.888 / 0.731 |
-| S31-15 | 0.929 | 0.966 | yes | yes | 0.932 | 0.840 | 0 | 0.929 / 0.932 / 0.840 |
+| S31-15 | 0.929 | 0.966 | yes | yes | 0.929 | 0.838 | 0 | 0.929 / 0.932 / 0.840 |
 | S33-15 | 0.905 | 0.905 | yes | yes | 0.955 | 0.890 | 0 | 0.944 / 0.940 / 0.842 |
 | S35-19 | 0.959 | 0.954 | yes | yes | 0.900 | 0.768 | 0 | 0.959 / 0.895 / 0.752 |
 | S37-15 | 0.949 | 0.936 | yes | yes | 0.905 | 0.825 | 0 | 0.949 / 0.905 / 0.825 |
@@ -354,11 +371,11 @@ Over all 76 reference photos (scratch `compare_all.py`, match >= 0.9 and no issu
 
 ### Sample outputs
 
-`output/s35-19.svg` and `output/s46-15.svg` were regenerated for H2 (and regenerated again for H3: byte-identical, so unchanged) from `reference/photos/S35-19.png` and `reference/photos/S46-15.png` with `rosette.pipeline.analyze` + `render`, the same code path the UI uses, and checked with `rosette.validate.validate` (both return `[]`). Regenerated again for H5 (pointed tail tops, visible-edge line art; both validate to `[]`). They are the tool's unedited output, not confirmed by a person.
+`output/s35-19.svg` and `output/s46-15.svg` were regenerated for H2 (and regenerated again for H3: byte-identical, so unchanged) from `reference/photos/S35-19.png` and `reference/photos/S46-15.png` with `rosette.pipeline.analyze` + `render`, the same code path the UI uses, and checked with `rosette.validate.validate` (both return `[]`). Regenerated again for H5 (pointed tail tops, visible-edge line art; both validate to `[]`) and for H6 (`s35-19.svg` changed: its two tail slivers are merged; `s46-15.svg` byte-identical; both validate to `[]`). They are the tool's unedited output, not confirmed by a person.
 
 | Output | Flagged | Flagged items | Warnings |
 |---|---|---|---|
-| `output/s35-19.svg` | yes | four points layers (loops, their edge strips, kites, their backing) with detector confidence 0.46-0.47 (below 0.6); no `unknown` parts; no color group below 0.6. | 2 tail slivers not counted for numbering |
+| `output/s35-19.svg` | yes | four points layers (loops, their edge strips, kites, their backing) with detector confidence 0.46-0.47 (below 0.6); no `unknown` parts; no color group below 0.6. | 2 tail slivers merged into their neighbours (H6) |
 | `output/s46-15.svg` | no | none (head fit 0.82 / outline 0.94 is information only) | none |
 
 Before uploading either file to the shop, the user should open each photo in the UI, confirm the flags and compare the drawing with the photo. That confirmation has not been done; it is the user's step.
@@ -373,7 +390,7 @@ Before uploading either file to the shop, the user should open each photo in the
 - Remaining failure clusters:
   - Head structure not modeled: S17-15 (three layered stars, no head disc), S29-15 (glitter loops over a star, badge), S68-19 (stacked chevron points), A16-17 (irregular 8-point star in the head's own black), S13-15 (loops drawn as a star because the navy ruffle merged into the blue group).
   - Mask: S53-19 (pure white stripes on a pure white background are cut out; one tail reads as three).
-  - Color grouping: A13-15B (glitter navy merged with royal blue), S2-15B (snowflake print merged with white satin).
+  - Color grouping: S2-15B (snowflake print merged with white satin). A13-15B's glitter is its own group since H6; its colors now differ from the reference's other scheme (royal Color 1 by the mined rules).
   - Designer differs from the photo: S8-15 (centre stripe the same red as the outer), S26-15 (glitter stripe widths), S46-15 (proportions).
 - Photos need a single rosette on a plain background; a rosette whose colors match the background can fail the mask. The messages for no rosette and unreadable files come from `prepare`.
 - Classical CV only: unusual head constructions fall back to `unknown` placeholder discs that the user must fix in the UI.
