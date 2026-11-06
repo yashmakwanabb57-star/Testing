@@ -50,3 +50,10 @@ def test_real_small_parts_are_never_dropped():
     c = Part("center", "center", {"cx": 300, "cy": 190, "r": 5.0}, 0, 50, 0.9)
     out = tidy.drop_specks(RosetteModel(parts=[head(), c], groups=[group(0)]))
     assert [q.id for q in out.parts] == ["head", "center"]
+
+
+def test_photo_head_circle_is_used_without_a_head_part():
+    # headless models (loops or stars over a badge) still measure against the head circle
+    m = RosetteModel(parts=[unknown("unknown-0", 5.0)], groups=[group(0)])
+    assert tidy.drop_specks(m, head_r=150.0).parts == []
+    assert len(tidy.drop_specks(m, head_r=50.0).parts) == 1
