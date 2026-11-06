@@ -16,9 +16,10 @@ from .shapes import Shape
 # drawn at full width from top_y down as before, run on up their side lines into every
 # gap between the head shapes that opens onto the stripe's top and is closed above by
 # the head (a gap open upward, past the head's top, is not filled; one opening sideways
-# past the stripe's outer side line is filled up to that line), and cut to the outside of every head shape whatever the layers, as the reference tails
-# are: every top edge then lies on a head shape's outline, in the shop and on outline
-# pages that draw hidden edges too. Where the head does not close a stripe's top edge it
+# past the stripe's outer side line is filled up to that line), and cut to the outside
+# of every head shape whatever the layers, as the reference tails are: every top edge
+# then lies on a head shape's outline, in the shop and on outline pages that draw
+# hidden edges too. Where the head does not close a stripe's top edge it
 # stays flat at top_y and the model warns.
 TAIL_UNCOVERED_WARNING = "Tail top is not under any head shape - check the tail tops against the photo."
 # A stripe that lies wholly under the head is not drawn (never restored uncut).
