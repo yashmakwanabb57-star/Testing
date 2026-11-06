@@ -7,7 +7,7 @@ Photo in, configurator SVG out (`rosette/pipeline.py`):
 3. `detect_parts` (rosette/vision/parts.py) - head, rings (grown outward while their label still covers >= 60 % of the circle), points (from rotational symmetry, or from an even ring of blobs when that is weak; bows are loop blocks widening from `inner_ratio`), center, tail stripes (stripe shares fitted separately at the top and bottom edge: `stripes`, `stripes_bottom`), leftovers as `unknown`.
 4. Model - groups no part uses are dropped (ids kept); rose on iff a center part exists.
 5. `assign` (rosette/assign.py) - Color 1-4 per group, confidence, warnings (including a coloring no more plausible than a random guess). Primary rule (the designer's, exact on 73 of 79 designer SVGs): with mirror-symmetric tails the Colors are numbered by the tail stripes from the outer tail edge inward (sliver stripes under `SLIVER_SHARE` of the median width skipped; head-only colors next, larger area first). The mined P(Color | role) rules decide only for asymmetric or missing tails, and otherwise act as a check: a strong disagreement with the tail order lowers the group's confidence under `FLAG_BELOW`. A pattern group that is not Color 2 by the tail order is warned, not moved.
-5b. Head fit (`check_head` in rosette/pipeline.py) - the model's head parts (everything but tail stripes) are rendered and compared with the photo's color labels over the head circle (1.05 head radii, rows down to 0.55 radii below the center). Below `HEAD_FIT_MIN` = 0.9 layer agreement the head part is capped at `FLAGGED_CONF` and a warning names what to check (the outline too when silhouette IoU < 0.85). Over the 76 reference photos the agreement runs 0.33-0.96; the heads the H1 analysis reads as right are not separable by pixel overlap from the known-wrong ones (A6-15 0.91 right, S42-15 0.88 wrong, S11a-15 0.67 right), so the bar sits just above the best wrong head and flags 74 of 76 heads (all but A6-15, A13-15). That matches the analysis (68 of 76 heads have the wrong shape) but makes the head warning near-universal; see the H2 report.
+5b. Head fit (`head_fit` / `check_head` in rosette/pipeline.py) - the model's head parts (everything but tail stripes) are rendered and compared with the photo's color labels over the head circle (1.05 head radii, rows down to 0.55 radii below the center): layer agreement and silhouette IoU. It is a measurement first: `analyze_with_fit` returns it, `/api/analyze` sends it as `head_fit`, and the UI shows it as information next to the fixed checklist item "Compare the head with the photo" (Workbench and Guided; it must be ticked before download but is not a flag). The head is flagged only on a gross failure: agreement below `HEAD_FIT_MIN` = 0.6 (the heads the H1 analysis reads as right score 0.60-0.96) or silhouette below `HEAD_SILHOUETTE_MIN` = 0.78 (right heads 0.80-0.96; the bar sits in the gap 0.764-0.786 under them). That flags 24 of the 76 reference heads. Agreement cannot separate shape errors on heads whose layers overlap the photo well: right heads and wrong heads overlap from 0.60 to 0.88, a synthetic perfect head scores 0.95 (pinked rim) and a ring 5 units off 0.88. **S42-15, S43-15 and S28-15 (petals, loops or star layers drawn as blocks) are not caught by the flag** and stay unflagged until shape features (lobe count per color layer, outline profile) land; S61-19 and S56-17B are flagged (outline 0.76 and 0.69). Cost: one extra head render per analyze, about 0.15 s.
 6. `build` -> `write_svg` -> `validate` - shapes, SVG string, contract issues (`render` returns `RenderResult(svg, issues)`). `build` cuts every color shape where a part meant to lie above it would be hidden by the fixed layer order (Color 1 is always painted first; `rosette/geometry/clip.py`, shapely).
 
 A result is **flagged** (`pipeline.is_flagged`, mirrored by `flagItems` in `app/static/logic.js`) when a color group has confidence below `FLAG_BELOW` (0.6), any part (head, ring, points, center, tail stripe) has detector confidence below `FLAG_BELOW`, a part is `unknown` (drawn as a placeholder), the model has any warning, or validation reports an issue.
@@ -252,9 +252,9 @@ Every generated file must satisfy section 3 of the [design spec](superpowers/spe
 
 `app/main.py` (FastAPI, started with `run.bat` or uvicorn on 127.0.0.1:8765) serves `app/static`. **Workbench** shows the photo, the detected model, the solid and pattern previews, edit controls and the flagged items on one screen. **Guided** walks through the same state one question at a time (`guided.js`); switching modes keeps the state. Edits go back through `render`, so the validator runs after every change.
 
-### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H2)
+### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H2, fix round 1)
 
-Re-recorded after the H1 scorer fix (every solid color element is scored; old-layout files render as in the shop), which changed two rows at the old HEAD c8d35c1: A13-15B 0.000 -> 0.187, S37-15 1.000 -> 0.949 (counts unchanged: 23/34). The H2 changes are the out-to-in Color numbering (S2-15B 0.000 -> 0.687, S68-19 0.600 -> 0.966 success) and the head-fit flag.
+Re-recorded after the H1 scorer fix (every solid color element is scored; old-layout files render as in the shop), which changed two rows at the old HEAD c8d35c1: A13-15B 0.000 -> 0.187, S37-15 1.000 -> 0.949 (counts unchanged: 23/34). The H2 changes are the out-to-in Color numbering (S2-15B 0.000 -> 0.687, S68-19 0.600 -> 0.966 success) and the head-fit check (gross failures only after fix round 1).
 
 | ID | agree (per-axis, official) | uni (uniform scale, reported only) | success | uni success | before H2 (c8d35c1, re-recorded) |
 |---|---|---|---|---|---|
@@ -293,11 +293,11 @@ Re-recorded after the H1 scorer fix (every solid color element is scored; old-la
 | S80-22 | 0.979 | 0.989 | yes | yes | 0.979 yes |
 | s34-15 | 0.951 | 0.941 | yes | yes | 0.951 yes |
 
-Official (per-axis): **success 24, flagged-not-success 10, silently wrong 0, errors 0 - `PASS 24/34`** against the bar of 28 (80 %). Reported only (uniform-scale alignment): 25/34. The per-axis column is the metric and the bar; the uniform column only explains misses.
+Official (per-axis): **success 24, flagged-not-success 9, silently wrong 1 (S46-15), errors 0 - `PASS 24/34`** against the bar of 28 (80 %). Reported only (uniform-scale alignment): 25/34. The per-axis column is the metric and the bar; the uniform column only explains misses.
 
-Flagged although correct: **all 24 successes**. The head-fit check flags every head below 0.9 layer agreement, which is all 34 canonical heads; before it, S28-15, S43-15 and S56-17B succeeded unflagged, and their heads are visibly wrong (H1 analysis). S46-15 is no longer silent: its head fit is 0.82.
+Flagged although correct: 22 of the 24 successes; S28-15 and S43-15 are unflagged successes with visibly wrong heads (see 5b). S46-15 is silent again: its head fit (0.82 agreement, 0.94 outline) is not a gross failure; its miss is the scorer alignment effect described below.
 
-Over all 76 reference photos (scratch `compare_all.py`, match >= 0.9 and no issue): 36 -> 45 OK, mean color agreement 0.689 -> 0.832, silently wrong (not OK, not flagged) A13-15 and S46-15 -> A13-15 only (its photo is one red, the designer split it into two Colors).
+Over all 76 reference photos (scratch `compare_all.py`, match >= 0.9 and no issue): 36 -> 45 OK, mean color agreement 0.689 -> 0.832. Silently wrong (not OK, not flagged): A13-15 (designer differs from photo), S46-15 (scorer alignment), S48-17 (0.672, up from 0.382; the remaining miss is not re-diagnosed) and s44-15 (designer differs: much narrower outer tails). The every-head reminder is the UI checklist item, not a flag.
 
 ### Sample outputs
 
@@ -305,16 +305,16 @@ Over all 76 reference photos (scratch `compare_all.py`, match >= 0.9 and no issu
 
 | Output | Flagged | Flagged items | Warnings |
 |---|---|---|---|
-| `output/s35-19.svg` | yes | two points layers with detector confidence 0.46 and 0.47 (below 0.6); three `unknown` parts (unknown-1, unknown-3, unknown-4) drawn as plain discs in the head; head fit 0.58. No color group below 0.6. | head fit (layers and outline); unknown-1, unknown-3 and unknown-4: unrecognised shape, drawn as a plain disc |
-| `output/s46-15.svg` | yes | head part (head fit 0.82, confidence capped at 0.5) | head fit (layers) |
+| `output/s35-19.svg` | yes | two points layers with detector confidence 0.46 and 0.47 (below 0.6); three `unknown` parts (unknown-1, unknown-3, unknown-4) drawn as plain discs in the head; head fit 0.58, outline 0.69 (gross failure). No color group below 0.6. | 2 tail slivers not counted for numbering; head fit (layers and outline); unknown-1, unknown-3 and unknown-4: unrecognised shape, drawn as a plain disc |
+| `output/s46-15.svg` | no | none (head fit 0.82 / outline 0.94 is information only) | none |
 
 Before uploading either file to the shop, the user should open each photo in the UI, confirm the flags and compare the drawing with the photo. That confirmation has not been done; it is the user's step.
 
 ### Known limitations
 
 - **The success bar is not met: 24/34 succeed against 28 needed (80 %).** `pytest -m slow` fails accordingly. Tuning stopped; it is not finished.
-- **S46-15 scores 0.741 under per-axis scoring** (a scorer alignment effect: the designer drew a larger head and narrower tails; uniform scale gives 0.926). It is now flagged by the head-fit check (0.82).
-- **The head-fit flag is near-universal**: 74 of 76 reference heads fall below `HEAD_FIT_MIN`, so it tells the user to compare the head with the photo on almost every rosette rather than singling out the bad ones.
+- **S46-15 counts as silently wrong under per-axis scoring** (0.741, not flagged). It is a scorer alignment effect (the designer drew a larger head and narrower tails; uniform scale gives 0.926); its head fit (0.82) is not a gross failure.
+- **Head shape errors are mostly not flagged.** The head flag fires on gross failures only (24 of 76 reference heads). S42-15, S43-15 and S28-15 have wrong head shapes that pixel overlap cannot tell from right heads; the fixed UI checklist item "Compare the head with the photo" is the safeguard until shape features land.
 - The holdout is no longer clean (see Task 12 phase B), so the numbers on the tuned IDs overstate how the tool will do on new photos.
 - Most successes are still flagged (20 of 23: placeholder `unknown` discs, or a part read below 0.6, mostly points rings). The flag is warranted but means most results need a human look.
 - Remaining failure clusters:
