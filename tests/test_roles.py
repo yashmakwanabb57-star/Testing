@@ -57,13 +57,14 @@ def test_truth_shape():
     assert t["pinked"] is False  # no head disc: the head is made of bows
 
 
-def test_drawn_frame_takes_the_center_of_the_files_own_circles():
+def test_drawn_frame_takes_the_center_of_the_files_rings_not_of_loose_discs():
     from rosette.roles import PAD_FRAC, drawn_frame
     svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 850"><g id="Layer_1">'
            '<polygon class="st0_1" points="260,300 340,300 400,825 200,825"/>'
            '<circle class="st1_1" cx="300" cy="190" r="130"/>'
            '<path class="st3_2" fill-rule="evenodd" d="M390,190a90,90 0 1 0 -180,0a90,90 0 1 0 180,0z"/>'
-           '<circle class="st2_2" cx="300" cy="190" r="40"/></g></svg>')
+           '<circle class="st2_2" cx="300" cy="190" r="40"/>'
+           '<circle class="st1_1" cx="420" cy="90" r="20"/></g></svg>')  # an off-center unknown disc
     f = drawn_frame(svg, 850)
     pad = round(PAD_FRAC * 850)
     assert abs(f.head[0] - (pad + 300)) < 1e-6 and abs(f.head[1] - (pad + 190)) < 1e-6

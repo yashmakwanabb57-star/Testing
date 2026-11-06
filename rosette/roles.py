@@ -168,22 +168,21 @@ _RING_CENTER = re.compile(r"M(-?[\d.]+),(-?[\d.]+)a(-?[\d.]+),")
 
 
 def drawn_frame(svg: str, height: int = RENDER_H) -> Frame:
-    """`frame_for` with the head center taken from the file's own concentric shapes
-    (circles and ring paths, the median of their centers) when it has any: for files
-    whose head we drew, the center is exact, while `prepare` scores 90-degree symmetry
-    and can miss on a 6-fold head turned a few degrees (S35-19: 9 px high, its ring and
-    center classified as points). The radius stays center minus head top, as in
-    `prepare`, and the tails start below it."""
+    """`frame_for` with the head center taken from the file's own concentric shapes when
+    it has any: the rose's circle (`st_circel`, drawn on the center) or else the ring
+    paths (median of their centers). Plain color circles are not used: an unrecognised
+    part is drawn as an off-center disc. For files whose head we drew the center is then
+    exact, while `prepare` scores 90-degree symmetry and can miss on a 6-fold head turned
+    a few degrees (S35-19: 9 px high, its ring and center classified as points). The
+    radius stays center minus head top, as in `prepare`, and the tails start below it."""
     f = frame_for(svg, height)
     root = etree.fromstring(svg.encode("utf-8"), etree.XMLParser(remove_comments=True, huge_tree=True))
-    centers = []
-    for el in _color_elements(root):
-        tag = _local(el)
-        if tag == "circle":
-            centers.append((float(el.get("cx", 0)), float(el.get("cy", 0))))
-        elif tag == "path":
-            for x, y, r in _RING_CENTER.findall(el.get("d", "")):
-                centers.append((float(x) - float(r), float(y)))
+    centers = [(float(el.get("cx", 0)), float(el.get("cy", 0))) for el in root.iter()
+               if isinstance(el.tag, str) and _local(el) == "circle"
+               and "st_circel" in (el.get("class") or "").split()]
+    if not centers:
+        centers = [(float(x) - float(r), float(y)) for el in _color_elements(root) if _local(el) == "path"
+                   for x, y, r in _RING_CENTER.findall(el.get("d", ""))]
     vb = [float(v) for v in (root.get("viewBox") or "").replace(",", " ").split()]
     if not centers or len(vb) != 4:
         return f

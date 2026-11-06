@@ -171,9 +171,9 @@ def test_shape_ok_uses_the_whole_iou_bar():
 
 
 def _ringed(cat: int = 1) -> str:
-    """Synthetic rosette: tail, head disc, a ring and a center disc."""
+    """Synthetic rosette: tail, head disc, a ring (as geometry.ring writes it) and a center disc."""
     ring = ('<path class="st3_2" fill-rule="evenodd" '
-            'd="M300 100a90 90 0 1 0 0.01 0zM300 130a60 60 0 1 0 0.01 0z"/>')
+            'd="M390,190a90,90,0,1,0,-180,0a90,90,0,1,0,180,0zM360,190a60,60,0,1,0,-120,0a60,60,0,1,0,120,0z"/>')
     return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 850"><g id="Layer_1">'
             f'<polygon class="st0_{cat}" points="260,300 340,300 400,825 200,825"/>'
             f'<circle class="st1_{cat}" cx="300" cy="190" r="130"/>{ring}'
