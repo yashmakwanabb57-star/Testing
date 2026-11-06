@@ -15,8 +15,10 @@ straight below the center where the tails show:
   phase of the N-th harmonic over the valid angles, kind comes from
   the lobe width profile across the zone (bow: wide at both ends, star: widest near
   its inner end and narrowing to the tip, diamond/petal: widest in the middle, petal
-  the fuller of the two). inner_ratio is the inner quarter's width over the widest
-  (geometry draws a bow as a block widening from that share to the full width).
+  the fuller of the two; a petal that keeps its width over most of its length and
+  fills much of the spacing is the designer's loop block, a bow: LOOP_*). Geometry
+  draws each kind with the designer's mined width profile (rosette.geometry.points);
+  a bow running under a ring or the center starts where that cover ends.
   A same-label band just inside a layer whose lobes still cover most of the circle
   next to it is that layer's body: the layer becomes a star covering it.
   A layer without rotational symmetry whose label still covers the full circle over
@@ -95,14 +97,22 @@ TAIL_SECTOR_DEG = 35.0
 BOW_ENDS = 0.5
 STAR_PEAK, STAR_OUT = 0.35, 0.5
 PETAL_FULLNESS = 0.6
+# A petal-shaped lobe is the designer's loop block (H4) when it keeps >= LOOP_KEEP of
+# its widest width over >= LOOP_PLATEAU of the 9 radii at 0.1..0.9 of its extent and
+# covers >= LOOP_SHARE of the angular spacing at mid radius. Photo loops read as pointed
+# ovals: the pleated ring hides their base and the folded loop end narrows the tip,
+# but in between they keep their width (a sine lobe keeps 0.85 over 3 of 9 radii).
+# Over the 76 photos (petal layers matched to the designer layer of the same Color
+# and count): the 7 designer loops read as petals (S26-15, S31-15, S35-19, S38-15,
+# S46-15, S56-17, S70-19) have plateau 5-6 of 9 and share 0.52-0.71; of the 21 other
+# petal layers one passes (s39-15, a designer kite: 5 of 9, share 0.59).
+LOOP_KEEP, LOOP_PLATEAU, LOOP_SHARE = 0.85, 5 / 9, 0.45
 # Confidence of a points layer read from its blobs (below assign.FLAG_BELOW, so it is
 # flagged) unless the layer's zone pixels are also rotationally symmetric at the blob
 # count (score >= LOW_SYM) and no blob had to be assumed hidden behind the tails. The
 # blob reading is only tried when that symmetry is weak, so in practice every
 # blob-read layer is flagged.
 BLOB_UNCONFIRMED_CONF = 0.5
-# Lower bound of a bow's inner_ratio (inner end width / outer width).
-MIN_INNER_RATIO = 0.3
 # Head outline: angles sampled, search radius (head radii), inner start of the scan.
 RIM_THETA = 1440
 RIM_MAX, RIM_START = 1.2, 0.6
@@ -274,14 +284,10 @@ def _symmetry(ind: np.ndarray, win: np.ndarray) -> tuple[int, float, float]:
     return n, max(0.0, scores[n]), float(rot)
 
 
-def _inner_ratio(w: np.ndarray) -> float:
-    """Width of a lobe's inner quarter over its widest (a bow's inner end)."""
-    q = max(1, len(w) // 4)
-    return float(np.clip(w[:q].mean() / max(w.max(), 1e-9), MIN_INNER_RATIO, 1.0))
-
-
-def _kind(w: np.ndarray) -> str:
-    """Point kind from the lobe width profile w (inner -> outer radius)."""
+def _kind(w: np.ndarray, spacing: np.ndarray | None = None) -> str:
+    """Point kind from the lobe width profile w (inner -> outer radius). `spacing` is
+    the arc between neighbouring lobes at the same radii (2 pi r / count); with it, a
+    wide petal that keeps its width is a loop block (LOOP_*)."""
     wmax = w.max()
     q = max(1, len(w) // 4)
     w_in, w_out = w[:q].mean() / wmax, w[-q:].mean() / wmax
@@ -290,7 +296,15 @@ def _kind(w: np.ndarray) -> str:
         return "bow"
     if peak <= STAR_PEAK and w_out <= STAR_OUT:
         return "star"
-    return "petal" if w.mean() / wmax >= PETAL_FULLNESS else "diamond"
+    if w.mean() / wmax < PETAL_FULLNESS:
+        return "diamond"
+    if spacing is not None:
+        x = np.linspace(0, 1, len(w))
+        keep = np.interp(np.linspace(0.1, 0.9, 9), x, w) >= LOOP_KEEP * wmax
+        share = np.interp(0.5, x, w / spacing)
+        if keep.mean() >= LOOP_PLATEAU - 1e-9 and share >= LOOP_SHARE:
+            return "bow"
+    return "petal"
 
 
 def _ring_outer(bd: _Band, bands: list[_Band], dom: np.ndarray, cov: np.ndarray, radii: np.ndarray,
@@ -342,7 +356,7 @@ def _blob_layer(p: Prepared, labels: np.ndarray, fr: Frame, g: int, r0: float, r
         return None
     pol = polar_sample(ring.pixels.astype(np.int8), cx, cy, radii, RING_THETA, fill=0) > 0
     width = pol.mean(axis=1) * 2 * np.pi * radii / ring.visible
-    kind = _kind(width)
+    kind = _kind(width, 2 * np.pi * radii / ring.order)
     agree = _score_at(ind.astype(np.float32), win, ring.order) >= LOW_SYM
     conf = ring.evenness if agree and ring.order == ring.visible else BLOB_UNCONFIRMED_CONF
     r_in, r_out = fr.d(ra), fr.d(rb)
@@ -351,8 +365,6 @@ def _blob_layer(p: Prepared, labels: np.ndarray, fr: Frame, g: int, r0: float, r
     params = {"kind": kind, "count": int(ring.order), "r_inner": r3(r_in), "r_outer": r3(r_out),
               "rotation_deg": r3(ring.rotation_deg),
               "width_ratio": r3(fr.d(width.max()) / max(r_out - r_in, 1e-6))}
-    if kind == "bow":
-        params["inner_ratio"] = r3(_inner_ratio(width))
     return params, conf, int(np.searchsorted(np.arange(step / 2, p.head[2], step), rb))
 
 
@@ -432,7 +444,7 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             has_core = (inner is not None and inner.label == g and inner is not head_band
                         and cov[a:a + body, g].mean() >= BODY_COV)
             w = cov[ra:rb, g] * 2 * np.pi * radii[ra:rb] / n
-            kind = "star" if has_core else _kind(w)
+            kind = "star" if has_core else _kind(w, 2 * np.pi * radii[ra:rb] / n)
             if has_core:  # the band is this layer's body: a star polygon covers it
                 eaten.add(id(inner))
             r_in, r_out = unit(ra), unit(rb - 1)
@@ -441,8 +453,6 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             params = {"cx": r3(ccx), "cy": r3(ccy), "kind": kind, "count": int(n),
                       "r_inner": r3(r_in), "r_outer": r3(r_out), "rotation_deg": r3(rot),
                       "width_ratio": r3(fr.d(w.max()) / max(r_out - r_in, 1e-6))}
-            if kind == "bow":
-                params["inner_ratio"] = r3(_inner_ratio(w))
             layers.append(("points", g, share, params, area, rb))
 
     # points: largest layer first; outer layers drawn underneath (lower z)
@@ -471,7 +481,26 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
         parts.append(Part(f"ring-{depth}", "ring", {"cx": r3(ccx), "cy": r3(ccy),
                                                     "r_outer": r3(unit(i1)), "r_inner": r3(unit(i0))},
                           label, min(49, 30 + depth), r3(conf)))
+    _loops_start_at_cover(parts)
     return parts
+
+
+def _loops_start_at_cover(parts: list[Part]) -> None:
+    """A loop block (bow) that runs under a ring or the center drawn above it starts
+    where that cover ends: its visible base is what the designer draws (H4: the loop
+    profile is measured from there), the hidden part is guessed. The width stays."""
+    covers = [(0.0 if q.role == "center" else float(q.params["r_inner"]),
+               float(q.params["r" if q.role == "center" else "r_outer"]))
+              for q in parts if q.role in ("ring", "center")]
+    for q in parts:
+        if q.role != "points" or q.params.get("kind") != "bow":
+            continue
+        ri, ro = float(q.params["r_inner"]), float(q.params["r_outer"])
+        top = max((b for a, b in covers if a <= ri < b), default=ri)
+        if ri < top < ro - MIN_ZONE_UNITS:
+            w = float(q.params["width_ratio"]) * (ro - ri)
+            q.params["r_inner"] = r3(top)
+            q.params["width_ratio"] = r3(w / (ro - top))
 
 
 def _pleated_ring(g: int, a: int, b: int, bridges: list[_Band], cov: np.ndarray,

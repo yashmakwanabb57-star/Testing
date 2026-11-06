@@ -145,6 +145,73 @@ def test_tails_stripes_bottom_fractions():
     assert validate(write_svg([Shape(s.tag, s.attrs, 1) for s in (left, mid, right)])) == []
 
 
+def width_along_x(p, x):
+    """Width across y of the polygon p at abscissa x (a lobe pointing along +x)."""
+    ys = []
+    for (x0, y0), (x1, y1) in zip(p, p[1:] + p[:1]):
+        if min(x0, x1) <= x <= max(x0, x1) and x0 != x1:
+            ys.append(y0 + (y1 - y0) * (x - x0) / (x1 - x0))
+    return max(ys) - min(ys)
+
+
+def test_bow_is_the_designer_loop_block():
+    # Designer loops (H4 mining, 10 loop layers whose base is visible): the base at the
+    # ring is 0.85 of the widest width, the block widens slowly to full width by 0.7
+    # of its length and ends in a shallow convex curve: its corners lie 0.6 of a
+    # straight cut's sag further from the head center than its axis end (21 layers).
+    p = pts_of(points_ring(300, 167, "bow", 6, 50, 90, 0, 0.5)[0])
+    w = 0.5 * 40
+    assert abs(width_along_x(p, 350.01) - 0.85 * w) < 0.3
+    assert abs(width_along_x(p, 370) - 0.96 * w) < 0.3
+    assert abs(width_along_x(p, 380) - w) < 0.3
+    assert max(x for x, _ in p) == 90 + 300  # the axis end at r_outer
+    sag = math.hypot(90, 10) - 90
+    corner = max(math.dist(q, (300, 167)) for q in p)
+    assert abs(corner - (90 + 0.6 * sag)) < 1e-3
+    outer = [(x, y) for x, y in p if x > 386]
+    assert len(outer) >= 7  # a curve, not a straight cut
+
+
+def test_diamond_is_the_designer_kite():
+    # Designer kites (43 layers, 22 files): straight sides from pointed ends to the
+    # widest point at 0.4 of the length.
+    p = pts_of(points_ring(300, 167, "diamond", 6, 50, 90, 0, 0.5)[0])
+    w = 0.5 * 40
+    assert abs(width_along_x(p, 366) - w) < 0.3
+    assert abs(width_along_x(p, 358) - 0.5 * w) < 0.3
+    assert abs(width_along_x(p, 382) - w / 3) < 0.3
+    xs = [x for x, _ in p]
+    assert min(xs) == 350 and max(xs) == 390
+
+
+def test_petal_is_the_designer_petal():
+    # Designer petals (16 layers, 13 files): a wide inner end (usually under the center),
+    # widest at half the length, then a straight taper to a pointed tip.
+    p = pts_of(points_ring(300, 167, "petal", 6, 50, 90, 0, 0.5)[0])
+    w = 0.5 * 40
+    assert abs(width_along_x(p, 350.01) - 0.75 * w) < 0.3
+    assert abs(width_along_x(p, 370) - w) < 0.3
+    assert abs(width_along_x(p, 386) - 0.23 * w) < 0.5
+    assert max(x for x, _ in p) == 390
+
+
+def test_edge_strips_follow_the_loop_sides():
+    # Two-tone loops (designer: 14 strip layers on loops in 13 files): a strip along each
+    # side of every loop, edge_width wide, its center 0.19 strip widths outside the edge.
+    host = pts_of(points_ring(300, 167, "bow", 6, 50, 90, 0, 0.5)[0])
+    strips = points_ring(300, 167, "bow", 6, 50, 90, 0, 0.5, edge_width=2.0)
+    assert len(strips) == 12
+    a, b = (pts_of(s) for s in strips[:2])
+    half = width_along_x(host, 370) / 2
+    for p in (a, b):
+        assert abs(width_along_x(p, 370) - 2.0) < 0.05
+        ys = [y - 167 for x, y in p if abs(x - 370) < 3]
+        assert ys
+    lo = min(abs(y - 167) for x, y in a + b if abs(x - 370) < 1e-6)
+    hi = max(abs(y - 167) for x, y in a + b if abs(x - 370) < 1e-6)
+    assert abs(lo - (half - 0.31 * 2)) < 0.05 and abs(hi - (half + 0.69 * 2)) < 0.05
+
+
 def test_bow_is_a_block_widening_from_its_inner_width():
     # The designer's bows (S35-19, S5-15, S30-15, S56-17B) are ribbon loops: blocks
     # about as wide in the middle as at the ends, often widening outward. The old
@@ -166,6 +233,3 @@ def test_bow_is_a_block_widening_from_its_inner_width():
     assert abs(width_at(351) - 0.8 * w) < 0.5
     assert abs(width_at(370) - 0.9 * w) < 0.5
     assert abs(width_at(389) - w) < 0.5
-    # without inner_ratio: a block of constant width
-    p = pts_of(points_ring(300, 167, "bow", 6, 50, 90, 0, 0.5)[0])
-    assert abs(width_at(370) - w) < 0.5

@@ -64,8 +64,9 @@ def test_parts_well_formed(sid):
     ids = {g.id for g in groups}
     assert len({q.id for q in parts}) == len(parts)
     for q in parts:
-        bow = q.role == "points" and q.params["kind"] == "bow"
-        assert set(q.params) == KEYS[q.role] | ({"inner_ratio"} if bow else set()), q
+        # edge strips of two-tone loops carry their strip width (H4)
+        extra = {"edge_width"} if q.role == "points" else set()
+        assert KEYS[q.role] <= set(q.params) <= KEYS[q.role] | extra, q
         assert q.color_group in ids
         assert 0.0 <= q.confidence <= 1.0
         lo, hi = Z[q.role]
