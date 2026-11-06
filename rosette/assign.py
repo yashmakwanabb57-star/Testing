@@ -321,8 +321,10 @@ def assign(model: RosetteModel, rules: dict | None = None) -> RosetteModel:
                                 "ribbon (head print or small regions), so the pattern was ignored - "
                                 "check its Color.")
     demoted = [i for i in pattern if i not in real]
+    order = outer_in_order([q for q in out.parts if q.color_group in col])
     forced = max(real, key=lambda i: (ribbon[i], -used[i])) if real else None
-    losers = [i for i in real if i != forced]
+    # with a tail order the pattern rule only checks the result (below): no area-based losers
+    losers = [i for i in real if i != forced] if order is None else []
     for i in losers:
         out.warnings.append(f"Color {hex_rgb(by_id[used[i]].rgb)} also looks like a pattern, but only one "
                             "color can be the Color 2 pattern - check its Color.")
@@ -331,7 +333,6 @@ def assign(model: RosetteModel, rules: dict | None = None) -> RosetteModel:
                             "rosette has a single color - it stays Color 1.")
         forced = None
 
-    order = outer_in_order([q for q in out.parts if q.color_group in col])
     rule = None
     if order is not None:
         area = {gid: 0.0 for gid in used}

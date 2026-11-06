@@ -400,3 +400,17 @@ def test_pattern_off_color2_by_tail_order_is_flagged_not_moved():
     assert cats(out) == {1: 1, 0: 2, 2: 3}
     assert conf(out)[1] < A.FLAG_BELOW
     assert any("#1e1ec8" in w and "tail order" in w for w in out.warnings), out.warnings
+
+
+def test_two_patterns_by_tail_order_warn_only_the_one_off_color2():
+    # tail order makes the smaller pattern group (1, centre stripe) Color 2 and the
+    # larger one (2, outer stripes) Color 1: only group 2 is warned and capped
+    groups = [group(0, (200, 30, 30)), group(1, (30, 30, 200), pattern=True),
+              group(2, (240, 200, 40), pattern=True)]
+    parts = [head(0), *tails([2, 1, 2])]
+    out = A.assign(RosetteModel(parts=parts, groups=groups))
+    assert cats(out) == {2: 1, 1: 2, 0: 3}
+    assert not any("#1e1ec8" in w for w in out.warnings), out.warnings
+    assert conf(out)[1] >= A.FLAG_BELOW
+    assert conf(out)[2] < A.FLAG_BELOW
+    assert any("#f0c828" in w and "tail order" in w for w in out.warnings), out.warnings
