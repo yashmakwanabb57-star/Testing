@@ -47,8 +47,7 @@ from PIL import Image  # noqa: E402
 
 from rosette.assign import part_area  # noqa: E402
 from rosette.pipeline import analyze, is_flagged, render  # noqa: E402
-from rosette.roles import (_classify, _components, _split_head, category, element_masks,  # noqa: E402
-                           frame_for, render_categories)
+from rosette.roles import category, classify_components, element_masks, render_categories  # noqa: E402
 from tools.rasterize import DEFAULT_PALETTE, rasterize  # noqa: E402
 from tools.truth import truth_from_svg  # noqa: E402
 
@@ -174,19 +173,16 @@ def compare(designer_svg: str, generated_svg: str) -> dict:
 
 
 def _role_masks(svg: str, box: tuple[slice, slice], shape: tuple[int, int] | None):
-    """[(role, mask)] per classified piece of every solid-configuration color element,
-    cropped to `box` of the HEIGHT render and, when `shape` is given, resized onto it."""
-    f = frame_for(svg, HEIGHT)
-    min_px = max(1, int(20.0 * f.scale ** 2))
+    """(frame, [(role, mask)]) per classified piece of every solid-configuration color
+    element, cropped to `box` of the HEIGHT render and, when `shape` is given, resized
+    onto it."""
+    f, items = classify_components(svg, HEIGHT)
     out = []
-    for _, m in element_masks(svg, HEIGHT):
-        for comp in _components(m, min_px):
-            for piece in _split_head(comp, f):
-                crop = piece[box]
-                if shape is not None:
-                    crop = cv2.resize(crop.astype(np.uint8), (shape[1], shape[0]),
-                                      interpolation=cv2.INTER_NEAREST) > 0
-                out.append((_classify(piece, f), crop))
+    for _, role, piece in items:
+        crop = piece[box]
+        if shape is not None:
+            crop = cv2.resize(crop.astype(np.uint8), (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST) > 0
+        out.append((role, crop))
     return f, out
 
 

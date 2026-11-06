@@ -258,14 +258,15 @@ def _split_head(comp: np.ndarray, f: Frame) -> list[np.ndarray]:
     return [comp]
 
 
-def classify_components(svg: str) -> tuple[Frame, list[tuple[object, str, np.ndarray]]]:
+def classify_components(svg: str, height: int = RENDER_H) -> tuple[Frame, list[tuple[object, str, np.ndarray]]]:
     """(frame, [(element, role, component mask)]) - designers often merge parts into
     one path (e.g. the head disc and the tails), so each connected piece of an
-    element is judged on its own."""
-    f = frame_for(svg)
+    element is judged on its own. Masks and frame are in the padded render of
+    `render_categories(svg, height, ...)`."""
+    f = frame_for(svg, height)
     min_px = max(1, int(MIN_COMPONENT_UNITS2 * f.scale ** 2))
     out = []
-    for el, m in element_masks(svg):
+    for el, m in element_masks(svg, height):
         for comp in _components(m, min_px):
             for piece in _split_head(comp, f):
                 out.append((el, _classify(piece, f), piece))
