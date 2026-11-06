@@ -717,7 +717,7 @@ export const views = {
   checklist() {
     const items = checklistItems(state);
     $('checklist-block').hidden = !items.length;
-    $('checklist').replaceChildren(...items.map((c) => el('div', { class: 'card', 'data-flag': c.key },
+    $('checklist').replaceChildren(...items.map((c) => el('div', { class: 'card checklist', 'data-flag': c.key },
       el('p', { class: 'check-text', text: c.text }),
       el('p', { class: 'muted', text: c.info }),
       confirmBox(c.key))));

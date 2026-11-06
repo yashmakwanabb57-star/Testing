@@ -102,6 +102,10 @@ h2:first-child { margin-top: 0; }
 .card.flagged.confirmed .flag-text { color: var(--ok); }
 .card.flagged.confirmed .flag-text::before { content: "\2713  "; }
 .warn-text { margin: 0 0 4px; }
+/* Checklist cards are never flagged, but their confirm box must show. */
+.card.checklist .confirm { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.card.checklist .check-text { margin: 0 0 2px; font-weight: 600; }
+.card.checklist.checked { border-color: #c9d6c3; background: #f6faf4; }
 
 .checks { list-style: none; margin: 0; padding: 0; font-size: 12px; }
 .checks > li { padding: 2px 0; }
