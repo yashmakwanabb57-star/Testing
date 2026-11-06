@@ -61,15 +61,18 @@ def _leftovers(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
 
 def detect_parts(p: Prepared, labels: np.ndarray, groups: list[ColorGroup] | None = None) -> list[Part]:
     """Parts of the rosette: head-side parts, tail stripes, then unexplained regions.
-    With the color groups given, the tails may append a glitter group to them
-    (parts_tails, H6)."""
+    With the color groups given, a glitter group found on the tails (parts_tails, H6) is
+    added to them once (detect_tails gives it the same id on every call)."""
     fr = Frame.of(p)
     head = detect_head(p, labels, fr)
     pts = [q for q in head if q.role == "points"]
     if pts:  # re-center on the points' symmetry and measure again
         p = refine_center(p, labels, fr, int(pts[0].params["count"]))
         head = detect_head(p, labels, fr)
-    parts = head + detect_tails(p, labels, fr, groups) + _leftovers(p, labels, fr)
+    tails, glitter = detect_tails(p, labels, fr, groups)
+    if glitter is not None and groups is not None and all(g.id != glitter.id for g in groups):
+        groups.append(glitter)
+    parts = head + tails + _leftovers(p, labels, fr)
     seen: dict[str, int] = {}
     for q in parts:  # unique ids
         n = seen.get(q.id, 0)

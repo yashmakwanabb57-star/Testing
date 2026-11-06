@@ -25,6 +25,9 @@ from .model import Part, RosetteModel
 # margin (x1.28 above the largest speck, x0.85 of the smallest kept piece). Real parts can
 # be this small (A1-15 center 0.0024), but only unknown parts are dropped.
 SPECK_MAX_HEAD_SHARE = 0.005
+# Id prefix of the placeholder parts_tails makes for a tail stripe without a color group:
+# part of the tail, never a speck (leaving it out would leave a hole in the tail).
+TAIL_PLACEHOLDER = "unknown-tail-"
 
 
 def drop_specks(model: RosetteModel, head_r: float | None = None) -> RosetteModel:
@@ -40,7 +43,8 @@ def drop_specks(model: RosetteModel, head_r: float | None = None) -> RosetteMode
     head_area = math.pi * head_r ** 2
     kept = []
     for q in out.parts:
-        share = math.pi * float(q.params.get("r", 0.0)) ** 2 / head_area if q.role == "unknown" else 1.0
+        speck = q.role == "unknown" and not q.id.startswith(TAIL_PLACEHOLDER)
+        share = math.pi * float(q.params.get("r", 0.0)) ** 2 / head_area if speck else 1.0
         if share < SPECK_MAX_HEAD_SHARE:
             out.warnings.append(f"Part {q.id} ({share:.1%} of the head) is too small to draw and was "
                                 "left out - check that spot against the photo.")

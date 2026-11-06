@@ -43,6 +43,15 @@ def test_larger_unknown_is_kept():
     assert out.warnings == []
 
 
+def test_tail_placeholder_is_never_dropped():
+    # a narrow tail stripe without a color group is a placeholder of the tail, not a speck:
+    # leaving it out would leave a hole in the tail
+    tail = unknown("unknown-tail-0-2", 3.0, cx=300.0, cy=600.0)
+    out = tidy.drop_specks(RosetteModel(parts=[head(), tail], groups=[group(0)]))
+    assert [q.id for q in out.parts] == ["head", "unknown-tail-0-2"]
+    assert out.warnings == []
+
+
 def test_without_a_head_nothing_is_dropped():
     m = RosetteModel(parts=[unknown("unknown-0", 2.0)], groups=[group(0)])
     assert [q.id for q in tidy.drop_specks(m).parts] == ["unknown-0"]

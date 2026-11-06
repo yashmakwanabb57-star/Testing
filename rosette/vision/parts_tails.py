@@ -14,8 +14,8 @@ inside the head so the tails' top corners stay hidden behind it.
 Glitter read as two plain tones (H6): on a measured row, a stretch of the tail whose
 photo is textured (local L* spread over PATTERN_T) and whose labels alternate between
 plain groups is one glitter ribbon. With the color groups given, it is relabeled to a new
-pattern group (appended to `groups`, median color of those pixels) before the stripes
-are read, so it becomes one stripe of its full width.
+pattern group (median color of those pixels; detect_tails returns it next to the parts)
+before the stripes are read, so it becomes one stripe of its full width.
 """
 from __future__ import annotations
 
@@ -73,7 +73,9 @@ GLITTER_EDGE_UNITS, GLITTER_RUN_UNITS = 2.0, 3.0
 # differ in angle by FAN_ASYM_DEG or more, both fitted to within FAN_RMS_UNITS rms) is
 # flagged (confidence capped at FAN_FLAG_CONF). When, in addition, it has at least
 # FAN_MIN_STRIPES stripes and no color repeats (each stripe is a ribbon of its own) it is
-# drawn as that many separate tails fanning out (spread_deg), each one ribbon. Over the
+# drawn as that many separate tails fanning out, each one constant-width ribbon with its
+# own width (the measured bottom share) and its own spread_deg placing its axis: bottoms
+# edge to edge, the middle tail (or middle boundary) on the axis. Over the
 # 76 photos (H6, docs/pipeline.md) the asymmetry is <= 4.9 degrees on every tail with
 # clean fits except S31-15 (6.1, a sliver at one side shifts the pairing; its colors
 # repeat) and A13-15B (8.0, three different ribbons).
@@ -203,20 +205,27 @@ def _edge_fracs(rows, fr: Frame, top_y: float, bottom_y: float, w_at):
     return out[0], out[1]
 
 
-def boundary_angles(rows, fr: Frame) -> tuple[list[float], list[float]]:
-    """(angle in degrees relative to the tail axis, fit rms in canvas units) of every
-    stripe boundary of one tail, sides included, left to right: straight lines x(y)
-    fitted over the rows; the axis is the mean of the two side angles."""
+def boundary_lines(rows, fr: Frame) -> list[tuple[float, float, float]]:
+    """(slope, intercept, rms) of a straight line x(y) (canvas units) fitted over the
+    rows through every stripe boundary of one tail, sides included, left to right."""
     ys = np.array([y for y, _ in rows])
     xs = np.array([[fr.x(s + v) for v in np.concatenate([[0], np.cumsum([ln for _, ln in st])])]
                    for _, (s, _, st) in rows])
-    ang, rms = [], []
+    out = []
     for j in range(xs.shape[1]):
         b, a = _line(ys, xs[:, j])
-        rms.append(float(np.sqrt(((xs[:, j] - (a + b * ys)) ** 2).mean())))
-        ang.append(math.degrees(math.atan(b)))
+        out.append((b, a, float(np.sqrt(((xs[:, j] - (a + b * ys)) ** 2).mean()))))
+    return out
+
+
+def boundary_angles(rows, fr: Frame) -> tuple[list[float], list[float]]:
+    """(angle in degrees relative to the tail axis, fit rms in canvas units) of every
+    stripe boundary of one tail (boundary_lines); the axis is the mean of the two side
+    angles."""
+    lines = boundary_lines(rows, fr)
+    ang = [math.degrees(math.atan(b)) for b, _, _ in lines]
     axis = (ang[0] + ang[-1]) / 2
-    return [a - axis for a in ang], rms
+    return [a - axis for a in ang], [r for _, _, r in lines]
 
 
 def fan_asymmetry(rows, fr: Frame) -> float | None:
@@ -233,12 +242,10 @@ def fan_asymmetry(rows, fr: Frame) -> float | None:
     return max(pairs) if pairs else None
 
 
-def fan_z(boundaries: list[float], spread: float) -> list[int]:
+def fan_z(boundaries: list[float], axes: list[float]) -> list[int]:
     """Paint order (z, 0-9) of the tails of a fan: a boundary between two tails is the
-    side of the one on top, the tail whose axis angle (evenly spread over `spread`) is
-    nearer the boundary's angle (inner boundaries, degrees relative to the axis)."""
-    n = len(boundaries) + 1
-    axes = [-spread / 2 + k * spread / (n - 1) for k in range(n)]
+    side of the one on top, the tail whose axis angle (`axes`, degrees) is nearer the
+    boundary's angle (inner boundaries, degrees relative to the axis)."""
     z = [0]
     for j, a in enumerate(boundaries):  # between tail j and tail j + 1
         z.append(z[-1] + (1 if abs(a - axes[j + 1]) < abs(a - axes[j]) else -1))
@@ -251,32 +258,43 @@ def _at(xs: np.ndarray, ys: np.ndarray, x: float) -> float:
     return a + b * x
 
 
-def _fan(m: int, top_y: float, bottom_y: float, w_at, head_top: float):
-    """(count, top_y, spread_deg, width) of m constant-width tails fanning out from
-    one apex over the measured outer extent w_at(y): each tail as wide as the axis
-    spacing at the bottom (every tail shows the same width there), the fan's spread
-    widening the extent as measured. The apex stays between head_top and top_y."""
-    wb = w_at(bottom_y)
-    d = wb / m
-    slope = (wb - w_at(top_y)) / max(bottom_y - top_y, 1e-6)  # extent widening per unit
-    length = (m - 1) * d / slope if slope > 1e-6 else bottom_y - top_y
+def _fan(widths: list[float], top_y: float, bottom_y: float, w_at, head_top: float):
+    """(apex y, [(width, spread_deg)], axis angles in degrees) of len(widths)
+    constant-width tails fanning out from one apex: tail k is widths[k] wide (its
+    measured bottom share), the bottoms lie edge to edge with the middle tail (or the
+    middle boundary) on the axis, and the apex is set so the outer extent widens as
+    w_at measures (kept between head_top and top_y). Each tail gets its own spread_deg
+    so that geometry.tails, drawing tail k of len(widths), puts its axis there."""
+    m = len(widths)
+    edges = np.concatenate([[0.0], np.cumsum(widths)])
+    centers = (edges[:-1] + edges[1:]) / 2
+    mid = centers[m // 2] if m % 2 else edges[m // 2]
+    centers = centers - mid
+    slope = (w_at(bottom_y) - w_at(top_y)) / max(bottom_y - top_y, 1e-6)  # extent widening
+    span = float(centers[-1] - centers[0])
+    length = span / slope if slope > 1e-6 else bottom_y - top_y
     apex = min(max(bottom_y - length, head_top), top_y)
-    half = math.degrees(math.atan((m - 1) / 2 * d / (bottom_y - apex)))
-    return m, apex, 2 * half, (lambda y: d)
+    axes, geo = [], []
+    for k, (w, c) in enumerate(zip(widths, centers)):
+        ang = math.degrees(math.atan(float(c) / (bottom_y - apex)))
+        share = k / (m - 1) - 0.5  # geometry.tails: angle = spread * share
+        geo.append((float(w), ang / share if abs(share) > 1e-9 else 0.0))
+        axes.append(ang)
+    return apex, geo, axes
 
 
 def detect_tails(p: Prepared, labels: np.ndarray, fr: Frame,
-                 groups: list[ColorGroup] | None = None) -> list[Part]:
-    """Tail stripes. With the color groups given, glitter read as alternating plain tones
-    becomes a new pattern group appended to `groups` (see the module docstring)."""
+                 color_groups: list[ColorGroup] | None = None) -> tuple[list[Part], ColorGroup | None]:
+    """(tail stripes, new glitter group or None). With the color groups given (read
+    only), glitter read as alternating plain tones becomes a new pattern group with id
+    labels.max() + 1 (the same id on every call), which the parts use and the caller
+    adds to its groups (see the module docstring)."""
     top, bot = p.tails_top_y, p.bottom_y
-    color_groups = groups  # `groups` is reused below for the stripe labels
     glitter, found = None, []
-    if groups is not None:
+    if color_groups is not None:
         win = max(3, int(round(GLITTER_WIN_UNITS * fr.scale)) | 1)
         sd = _local_std(_lab(p.rgb)[..., 0].astype(np.float32), win)
-        new_id = max([g.id for g in groups] + [int(labels.max())]) + 1
-        glitter = (sd, {g.id for g in groups if g.pattern}, new_id, found)
+        glitter = (sd, {g.id for g in color_groups if g.pattern}, int(labels.max()) + 1, found)
     cuts = []
     for f in ROW_FRACS:
         y = int(round(top + f * (bot - top)))
@@ -284,7 +302,7 @@ def detect_tails(p: Prepared, labels: np.ndarray, fr: Frame,
     low = [len(c) for _, c in cuts[-COUNT_ROWS:]]
     n = max(set(low), key=lambda v: (low.count(v), v))  # tails part only toward the bottom
     if n == 0:
-        return []
+        return [], None
     ok = [(y, c) for y, c in cuts if len(c) == n]
     count_conf = 1.0 if len(set(low)) == 1 else 0.6
 
@@ -337,7 +355,7 @@ def detect_tails(p: Prepared, labels: np.ndarray, fr: Frame,
     # stripes per tail: rows agreeing on the most common stripe count; shares at the
     # top and at the bottom edge from straight fits of the stripe boundaries
     fracs, fracs_b, groups, confs = [], [], [], []
-    asym, fan_rows, zs = None, None, None
+    asym, fan_rows, zs, fan_geo = None, None, None, None
     for k in range(n):
         seqs = [c[k][2] for _, c in ok]
         lens = [len(s) for s in seqs]
@@ -362,9 +380,13 @@ def detect_tails(p: Prepared, labels: np.ndarray, fr: Frame,
     if asym is not None and asym >= FAN_ASYM_DEG:
         lab = groups[0]
         if len(lab) >= FAN_MIN_STRIPES and len(set(lab)) == len(lab) and min(lab) >= 0:
-            n, top_y, spread, w_at = _fan(len(lab), top_y, bottom_y, w_at, fr.y(p.head[1] - p.head[2]))
+            lines = boundary_lines(fan_rows, fr)
+            xb = [a + b * bottom_y for b, a, _ in lines]  # boundaries at the bottom edge
+            top_y, fan_geo, axes = _fan(list(np.diff(xb)), top_y, bottom_y, w_at,
+                                        fr.y(p.head[1] - p.head[2]))
+            n = len(lab)
             groups, confs = [[g] for g in lab], [confs[0]] * n
-            zs = fan_z(boundary_angles(fan_rows, fr)[0][1:-1], spread)
+            zs = fan_z(boundary_angles(fan_rows, fr)[0][1:-1], axes)
             fracs = fracs_b = [np.array([1.0])] * n
         else:
             confs = [min(c, FAN_FLAG_CONF) for c in confs]
@@ -377,9 +399,13 @@ def detect_tails(p: Prepared, labels: np.ndarray, fr: Frame,
         f = fracs[k] / fracs[k].sum()
         fb = fracs_b[k] / fracs_b[k].sum()
         stripes = ",".join(f"{v:.4f}" for v in f)
+        tw, bw, sp = w_at(top_y), w_at(bottom_y), spread
+        if fan_geo is not None:  # a fan read from one tail: every tail its own ribbon
+            tw = bw = fan_geo[k][0]
+            sp = fan_geo[k][1]
         params_common = {"tails_count": n, "top_y": r3(top_y), "bottom_y": r3(bottom_y),
-                         "top_width": r3(w_at(top_y)), "bottom_width": r3(w_at(bottom_y)),
-                         "spread_deg": r3(spread), "stripes": stripes,
+                         "top_width": r3(tw), "bottom_width": r3(bw),
+                         "spread_deg": r3(sp), "stripes": stripes,
                          "stripes_bottom": ",".join(f"{v:.4f}" for v in fb)}
         for i, g in enumerate(groups[k]):
             if g < 0:  # no color group along this stripe: keep it, as a flagged placeholder
@@ -393,12 +419,12 @@ def detect_tails(p: Prepared, labels: np.ndarray, fr: Frame,
             parts.append(Part(f"tail-{k}-{i}", "tail_stripe",
                               {"tail_index": k, "stripe_index": i, **params_common},
                               g, z, r3(confs[k])))
+    new = None
     if glitter is not None and any(q.color_group == glitter[2] for q in parts):
         px = np.concatenate([p.rgb[y, a:b] for y, a, b in found])
         tex = np.concatenate([glitter[0][y, a:b] for y, a, b in found])
         area = len(px) / len(ROW_FRACS) * (bot - top) / max(1, int(p.mask.sum()))
         rgb = tuple(int(v) for v in np.median(px, axis=0))
-        color_groups.append(ColorGroup(id=glitter[2], rgb=rgb, pattern=True,
-                                       texture=round(float(np.median(tex)), 3), area=float(area),
-                                       category=None, confidence=0.0))
-    return parts
+        new = ColorGroup(id=glitter[2], rgb=rgb, pattern=True, texture=round(float(np.median(tex)), 3),
+                         area=float(area), category=None, confidence=0.0)
+    return parts, new

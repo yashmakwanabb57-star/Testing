@@ -77,3 +77,22 @@ def test_without_groups_detection_is_unchanged():
     p, labels, groups = tail_photo(sparkle=True)
     cg, _ = stripes(detect_parts(p, labels))
     assert 2 not in cg
+
+
+def test_detect_tails_returns_the_glitter_group_and_leaves_groups_alone():
+    from rosette.vision.parts_common import Frame
+    from rosette.vision.parts_tails import detect_tails
+    p, labels, groups = tail_photo(sparkle=True)
+    parts, glitter = detect_tails(p, labels, Frame.of(p), groups)
+    assert len(groups) == 2  # not an output channel
+    assert glitter is not None and glitter.pattern and glitter.id == 2
+    assert any(q.color_group == 2 for q in parts)
+    assert detect_tails(p, labels, Frame.of(p))[1] is None  # no groups, no glitter rule
+
+
+def test_detecting_twice_adds_the_glitter_group_once():
+    p, labels, groups = tail_photo(sparkle=True)
+    a = detect_parts(p, labels, groups)
+    b = detect_parts(p, labels, groups)
+    assert [g.id for g in groups] == [0, 1, 2]
+    assert stripes(a)[0] == stripes(b)[0] == [1, 2, 0]

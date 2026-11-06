@@ -99,6 +99,46 @@ def test_fan_stacking_follows_the_boundaries():
 
 def test_fan_z_from_boundary_angles():
     from rosette.vision.parts_tails import fan_z
-    assert fan_z([0.0, 8.0], 17.0) == [0, 1, 2]
-    assert fan_z([-1.0, 1.0], 17.0) == [0, 1, 0]  # middle on top
-    assert fan_z([-8.0, 8.0], 17.0) == [1, 0, 1]  # middle under both
+    axes = [-8.5, 0.0, 8.5]  # the tails' axis angles
+    assert fan_z([0.0, 8.0], axes) == [0, 1, 2]
+    assert fan_z([-1.0, 1.0], axes) == [0, 1, 0]  # middle on top
+    assert fan_z([-8.0, 8.0], axes) == [1, 0, 1]  # middle under both
+
+
+def bottom_spans(t):
+    """(left, right) x of each tail's bottom edge, from its own params as geometry.tails
+    places it (axes fan out from (300, top_y))."""
+    import math
+    out = []
+    for q in t:
+        p = q.params
+        n, k, s = int(p["tails_count"]), int(p["tail_index"]), float(p["spread_deg"])
+        ang = 0.0 if n == 1 else -s / 2 + k * s / (n - 1)
+        c = 300 + (p["bottom_y"] - p["top_y"]) * math.tan(math.radians(ang))
+        out.append((c - p["bottom_width"] / 2, c + p["bottom_width"] / 2))
+    return out
+
+
+def test_fan_tails_take_the_measured_bottom_shares():
+    # unequal ribbons (bottom shares 0.40 / 0.33 / 0.27): each tail its own width, the
+    # middle one centered on the axis, bottoms edge to edge (no gap, no overlap)
+    b = [(250, -0.16), (350, 0.0), (430, 0.14), (550, 0.16)]
+    p, labels, groups = photo(b, [1, 2, 3])
+    t = tails_of(detect_parts(p, labels, groups))
+    assert [q.color_group for q in t] == [1, 2, 3]
+    spans = bottom_spans(t)
+    widths = [r - l for l, r in spans]
+    xs = [154.3, 350.0, 513.7, 645.7]  # photo px at the bottom row
+    shares = [(b - a) / (xs[-1] - xs[0]) for a, b in zip(xs, xs[1:])]
+    assert [w / sum(widths) for w in widths] == [pytest.approx(v, abs=0.03) for v in shares]
+    assert (spans[1][0] + spans[1][1]) / 2 == pytest.approx(300, abs=0.5)
+    assert spans[0][1] == pytest.approx(spans[1][0], abs=0.01)
+    assert spans[1][1] == pytest.approx(spans[2][0], abs=0.01)
+    keys = {(q.params["top_width"], q.params["bottom_width"], q.params["spread_deg"]) for q in t}
+    assert len(keys) == 3  # build draws every tail with its own geometry
+    assert all(q.params["top_width"] == q.params["bottom_width"] for q in t)  # ribbons
+    for i, g in enumerate(groups):
+        g.category = 1 + i % 4
+    shapes = build(RosetteModel(parts=detect_parts(p, labels, groups), groups=groups))
+    fills = [s for s in shapes if s.role == "tail_stripe" and s.kind == "color"]
+    assert len(fills) == 3 and validate(write_svg(shapes)) == []
