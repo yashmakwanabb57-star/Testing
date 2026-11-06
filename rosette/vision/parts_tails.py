@@ -64,6 +64,20 @@ TOP_INSET = 0.9
 # S2-15B's print (plain tones, 15-33 % second tone) is spill at one end only.
 GLITTER_WIN_UNITS, GLITTER_SMOOTH_UNITS, GLITTER_MIN_UNITS = 3.5, 2.0, 10.0
 GLITTER_EDGE_UNITS, GLITTER_RUN_UNITS = 2.0, 3.0
+# Diagonal stripes as a fan (H6). Per stripe boundary of a single tail, a straight line
+# x(y) is fitted over the measured rows; its angle is taken relative to the tail's axis
+# (the mean of the two side angles). Every multi-stripe photo diverges (outer tails fan
+# out over a constant-width center ribbon, 7-17 degrees between inner boundaries), which
+# the top and bottom stripe shares already draw; that fan is mirror-symmetric. A tail
+# whose inner boundaries are NOT mirror-symmetric (a boundary and its mirror partner
+# differ in angle by FAN_ASYM_DEG or more, both fitted to within FAN_RMS_UNITS rms) is
+# flagged (confidence capped at FAN_FLAG_CONF). When, in addition, it has at least
+# FAN_MIN_STRIPES stripes and no color repeats (each stripe is a ribbon of its own) it is
+# drawn as that many separate tails fanning out (spread_deg), each one ribbon. Over the
+# 76 photos (H6, docs/pipeline.md) the asymmetry is <= 4.9 degrees on every tail with
+# clean fits except S31-15 (6.1, a sliver at one side shifts the pairing; its colors
+# repeat) and A13-15B (8.0, three different ribbons).
+FAN_ASYM_DEG, FAN_RMS_UNITS, FAN_MIN_STRIPES, FAN_FLAG_CONF = 7.0, 2.0, 3, 0.5
 
 
 def _runs(row: np.ndarray) -> list[tuple[int, int]]:
@@ -189,9 +203,66 @@ def _edge_fracs(rows, fr: Frame, top_y: float, bottom_y: float, w_at):
     return out[0], out[1]
 
 
+def boundary_angles(rows, fr: Frame) -> tuple[list[float], list[float]]:
+    """(angle in degrees relative to the tail axis, fit rms in canvas units) of every
+    stripe boundary of one tail, sides included, left to right: straight lines x(y)
+    fitted over the rows; the axis is the mean of the two side angles."""
+    ys = np.array([y for y, _ in rows])
+    xs = np.array([[fr.x(s + v) for v in np.concatenate([[0], np.cumsum([ln for _, ln in st])])]
+                   for _, (s, _, st) in rows])
+    ang, rms = [], []
+    for j in range(xs.shape[1]):
+        b, a = _line(ys, xs[:, j])
+        rms.append(float(np.sqrt(((xs[:, j] - (a + b * ys)) ** 2).mean())))
+        ang.append(math.degrees(math.atan(b)))
+    axis = (ang[0] + ang[-1]) / 2
+    return [a - axis for a in ang], rms
+
+
+def fan_asymmetry(rows, fr: Frame) -> float | None:
+    """Largest angle difference (degrees) between an inner stripe boundary of one tail
+    and its mirror partner (a + a_mirror, relative to the tail axis), over the pairs both
+    fitted to within FAN_RMS_UNITS rms; None when no pair qualifies (fewer than two
+    inner boundaries or MIN_FIT_ROWS rows)."""
+    if len(rows) < MIN_FIT_ROWS or len(rows[0][1][2]) < 3:
+        return None
+    ang, rms = boundary_angles(rows, fr)
+    nb = len(ang)
+    pairs = [abs(ang[j] + ang[nb - 1 - j]) for j in range(1, nb // 2)
+             if rms[j] <= FAN_RMS_UNITS and rms[nb - 1 - j] <= FAN_RMS_UNITS]
+    return max(pairs) if pairs else None
+
+
+def fan_z(boundaries: list[float], spread: float) -> list[int]:
+    """Paint order (z, 0-9) of the tails of a fan: a boundary between two tails is the
+    side of the one on top, the tail whose axis angle (evenly spread over `spread`) is
+    nearer the boundary's angle (inner boundaries, degrees relative to the axis)."""
+    n = len(boundaries) + 1
+    axes = [-spread / 2 + k * spread / (n - 1) for k in range(n)]
+    z = [0]
+    for j, a in enumerate(boundaries):  # between tail j and tail j + 1
+        z.append(z[-1] + (1 if abs(a - axes[j + 1]) < abs(a - axes[j]) else -1))
+    lo = min(z)
+    return [min(9, v - lo) for v in z]
+
+
 def _at(xs: np.ndarray, ys: np.ndarray, x: float) -> float:
     b, a = _line(xs, ys)
     return a + b * x
+
+
+def _fan(m: int, top_y: float, bottom_y: float, w_at, head_top: float):
+    """(count, top_y, spread_deg, width) of m constant-width tails fanning out from
+    one apex over the measured outer extent w_at(y): each tail as wide as the axis
+    spacing at the bottom (every tail shows the same width there), the fan's spread
+    widening the extent as measured. The apex stays between head_top and top_y."""
+    wb = w_at(bottom_y)
+    d = wb / m
+    slope = (wb - w_at(top_y)) / max(bottom_y - top_y, 1e-6)  # extent widening per unit
+    length = (m - 1) * d / slope if slope > 1e-6 else bottom_y - top_y
+    apex = min(max(bottom_y - length, head_top), top_y)
+    half = math.degrees(math.atan((m - 1) / 2 * d / (bottom_y - apex)))
+    return m, apex, 2 * half, (lambda y: d)
 
 
 def detect_tails(p: Prepared, labels: np.ndarray, fr: Frame,
@@ -266,6 +337,7 @@ def detect_tails(p: Prepared, labels: np.ndarray, fr: Frame,
     # stripes per tail: rows agreeing on the most common stripe count; shares at the
     # top and at the bottom edge from straight fits of the stripe boundaries
     fracs, fracs_b, groups, confs = [], [], [], []
+    asym, fan_rows, zs = None, None, None
     for k in range(n):
         seqs = [c[k][2] for _, c in ok]
         lens = [len(s) for s in seqs]
@@ -279,16 +351,29 @@ def detect_tails(p: Prepared, labels: np.ndarray, fr: Frame,
         fracs_b.append(bot_k if bot_k is not None else fr_k)
         groups.append(lab_k)
         confs.append(count_conf * len(use) / len(seqs))
+        if n == 1:
+            asym, fan_rows = fan_asymmetry(rows, fr), rows
     for k in range(n):  # mirror-symmetric stripes where the colors mirror
         j = n - 1 - k
         if k <= j and groups[k] == groups[j][::-1]:
             for f_list in (fracs, fracs_b):
                 f = (f_list[k] + f_list[j][::-1]) / 2
                 f_list[k], f_list[j] = f, f[::-1]
+    if asym is not None and asym >= FAN_ASYM_DEG:
+        lab = groups[0]
+        if len(lab) >= FAN_MIN_STRIPES and len(set(lab)) == len(lab) and min(lab) >= 0:
+            n, top_y, spread, w_at = _fan(len(lab), top_y, bottom_y, w_at, fr.y(p.head[1] - p.head[2]))
+            groups, confs = [[g] for g in lab], [confs[0]] * n
+            zs = fan_z(boundary_angles(fan_rows, fr)[0][1:-1], spread)
+            fracs = fracs_b = [np.array([1.0])] * n
+        else:
+            confs = [min(c, FAN_FLAG_CONF) for c in confs]
 
     parts = []
     for k in range(n):
         z = 9 - min(9, int(round(abs(k - (n - 1) / 2) * 2)))  # middle tail on top
+        if zs is not None:  # a fan read from one tail: the order its boundaries show
+            z = zs[k]
         f = fracs[k] / fracs[k].sum()
         fb = fracs_b[k] / fracs_b[k].sum()
         stripes = ",".join(f"{v:.4f}" for v in f)
