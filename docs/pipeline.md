@@ -268,15 +268,15 @@ Started at 1bba1f2. Full notes: `.superpowers/sdd/2026-11-05-rosette-svg-generat
 
 Started at e9ac42d. Full notes: `.superpowers/sdd/2026-11-05-rosette-svg-generator/h5-report.md`.
 
-**Tail tops** (`rosette/build.py` `_tail_tips`, `rosette/geometry/tails.py` `tip_y`). Measured on the 511 tail stripe pieces of the 78 reference files with tails: no reference draws a flat tail top (top row under 0.06 R wide in every stripe of 60 files, median 0.015 R); 213 tops are a point, 298 a slope that follows the head's lower outline (the high end on the outer side in 224 of them). Our stripes keep full width down from `top_y` (its meaning is unchanged) and close in one apex per tail on the tail axis, `TAIL_TIP_DEPTH` 0.88 head radii below the head center (median top of the sloped reference stripes, quartiles 0.68-0.97), at least `TAIL_TIP_MIN` 0.2 R above `top_y`. The apex must lie inside the drawn head; if the head does not reach that depth it moves to the nearest covered depth and the model warns; an apex under no head shape (no covered depth, or no head) stays and warns too (6 of the 76 photos: S15-15, S17-15, S36-15B, S40-15, S48-17, S57-17); all 76 apexes lie inside the drawn head.
+**Tail tops** (`rosette/build.py` `_under_head`). Measured on the 511 tail stripe pieces of the 78 reference files with tails: no reference draws a free tail top (top row under 0.06 R wide in every stripe of 60 files, median 0.015 R); 298 tops follow the lower outline of the head shapes over them (the high end on the outer side in 224) and 213 end in a point under one. Our stripes are drawn at full width from `top_y` down (its meaning is unchanged), run on up their side lines into every gap between head shapes that opens onto the stripe's top and is closed above by the head, and are cut to the outside of every head shape whatever the layers, as the reference tails are. Every top edge then lies on a head shape's outline, in the shop and on outline pages that draw hidden edges. Where the head does not close a stripe's top edge it stays flat at `top_y` and the model warns. (The first H5 version closed each tail in an apex 0.88 R below the head center; on S35-19 its taper lines showed beside the bottom kite, so fix round 1 replaced it.) Free top edges above `top_y` (near-horizontal tail outline segments off the head outline): A7-15, S35-19, S30-15 all 0.
 
 **Line art** (`rosette/geometry/outline.py`). The shop draws Layer_6 over everything, so st6 outlines now trace only the edges no later-painted shape hides (Layer_1 first, then Layer_2_1, each in document order). Before, the full polygon of a Color 1 tail stripe under a Color 1 head showed its top inside the head (A7-15). Shop-style render at 1700 px: tail pixels inside the head A7-15 0, S35-19 1, S30-15 4 (antialiasing; 601 before on S30-15).
 
-**Stacking order** (`tools/stacking.py`, reported by `tools/score.py`). Every pair of head pieces of the 79 references that overlap (paint order decides) or are cut along each other (the cut piece lies under; local convex hulls) was ordered by kind. Among points pieces with distinct ends the one ending further in lies on top in 92 % (1292 of 1400), which is our z rule; the one consistent kind exception is loop over star, 89 % (63 of 71 pairs, 10 files), so stars now rank under every loop (`parts_head.points_z`). Also consistent and already ours: center over ring 0.95, loop/kite/star/petal/backing over head 0.96-1.00, ring over loop 1.00, backing under its host 0.92 (by radius). Inconsistent, ours kept: kite vs star 0.55 (explained by radius), star vs ring 0.56, center vs star 0.71, head vs tail 0.54. The scoreboard prints, per ID, the kind pairs our file stacks the other way round: 8 pairs in 7 of 34 IDs, mostly tail>head where the cut heuristic cannot tell which side was cut.
+**Stacking order** (`tools/stacking.py`, reported by `tools/score.py`). Every pair of head pieces of the 79 references that overlap (paint order decides) or are cut along each other (the cut piece lies under; local convex hulls) was ordered by kind. Among points pieces with distinct ends the one ending further in lies on top in 92 % (1292 of 1400), which is our z rule; the one consistent kind exception is loop over star, 89 % (63 of 71 pairs, 10 files), so stars now rank under every loop (`parts_head.points_z`). Also consistent and already ours: center over ring 0.95, loop/kite/star/petal/backing over head 0.96-1.00, ring over loop 1.00, backing under its host 0.92 (by radius). Inconsistent, ours kept: kite vs star 0.55 (explained by radius), star vs ring 0.56, center vs star 0.71, head vs tail 0.54. The scoreboard prints, per ID, the kind pairs our file stacks the other way round: 4 pairs in 4 of 34 IDs after fix round 1 (8 in 7 before the tails were cut to the head's outside).
 
 **Edge-plus-tip trims** (`rosette/vision/parts_trims.py`). The brief's premise for S30-15 did not hold: its reference draws 12 pink edge strips along the loops, not a larger kite behind each kite. Same-kind backings exist elsewhere (17 files; kite behind kite in 7, out 0.10 R and sides 0.035 R median), so a low-confidence points layer of the host's count and axes running along both sides of a kite, petal or star layer and ending beyond its tips becomes a backing of the host's kind, wider and longer by the measured margins (`EDGETIP_AXIS_DEG` 4; fires on none of the 76 photos). S30-15 itself is fixed through the edge-strip rule: a band may lie up to `EDGE_SEAM_UNITS` 3 off the loop side (an antialiased lilac seam), a band layer of the loops' count counts 2/3 of the loop sides instead of both sides of 2/3 of the loops (6 of 8 sides; an unknown band still needs both sides, S5-15 lost 0.04 color otherwise), and `EXPLAIN_MIN_SHARE` is 0.45 (S30-15 0.49). Only S30-15 and S56-17 change: S30-15 head 0.743 -> 0.748 (0.731 at the H5 start), layer 0.138 -> 0.146, color 0.974 -> 0.973 (a loss of 0.001); S56-17 (not on the scoreboard) color 0.951 -> 0.984.
 
-**Scoreboard** (34 IDs): `PASS 23/34` unchanged; shape 0.909 -> 0.911, head 0.809 -> 0.815; no ID loses color or shape. Color gains: S28-15 0.965 -> 0.998 and S69-19 0.980 -> 0.993 (loops over stars).
+**Scoreboard** (34 IDs): `PASS 23/34` unchanged; shape 0.909 -> 0.913, head 0.809 -> 0.821 (after fix round 1); no ID loses more than 0.004 color or shape. Color gains: S28-15 0.965 -> 0.998 and S69-19 0.980 -> 0.993 (loops over stars).
 
 ## Final state (Task 16)
 
@@ -307,7 +307,7 @@ Every generated file must satisfy section 3 of the [design spec](superpowers/spe
 
 ### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H5)
 
-Re-recorded at the end of H5; the last column is the H5 start (e9ac42d). The H3-era table (agree before H3 at 476d07e) is in git history. `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only).
+Re-recorded after H5 fix round 1; the last column is the H5 start (e9ac42d). The H3-era table (agree before H3 at 476d07e) is in git history. `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only).
 
 | ID | agree | uni | success | uni success | shape | headS | stack reversed | before H5 (e9ac42d) agree / shape / headS |
 |---|---|---|---|---|---|---|---|---|
@@ -317,36 +317,36 @@ Re-recorded at the end of H5; the last column is the H5 start (e9ac42d). The H3-
 | A15-17 | 0.968 | 0.963 | yes | yes | 0.965 | 0.957 | 0 | 0.968 / 0.965 / 0.957 |
 | A16-17 | 0.837 | 0.926 | no | yes | 0.895 | 0.830 | 0 | 0.837 / 0.895 / 0.830 |
 | A9-15B | 1.000 | 1.000 | yes | yes | 0.939 | 0.828 | 0 | 1.000 / 0.939 / 0.828 |
-| S10-19 | 0.904 | 0.904 | yes | yes | 0.886 | 0.701 | 0 | 0.904 / 0.881 / 0.683 |
+| S10-19 | 0.904 | 0.904 | yes | yes | 0.893 | 0.726 | 0 | 0.904 / 0.881 / 0.683 |
 | S13-15 | 0.894 | 0.894 | no | no | 0.961 | 0.926 | 0 | 0.894 / 0.961 / 0.926 |
-| S17-15 | 0.633 | 0.743 | no | no | 0.849 | 0.545 | 0 | 0.633 / 0.839 / 0.510 |
-| S2-15B | 0.687 | 0.687 | no | no | 0.923 | 0.779 | 0 | 0.687 / 0.917 / 0.760 |
+| S17-15 | 0.687 | 0.743 | no | no | 0.863 | 0.599 | 0 | 0.633 / 0.839 / 0.510 |
+| S2-15B | 0.687 | 0.687 | no | no | 0.934 | 0.815 | 0 | 0.687 / 0.917 / 0.760 |
 | S26-15 | 0.800 | 0.985 | no | yes | 0.933 | 0.856 | 0 | 0.800 / 0.933 / 0.856 |
-| S28-15 | 0.998 | 0.995 | yes | yes | 0.980 | 0.964 | 2 (tail>head star>loop) | 0.965 / 0.980 / 0.964 |
-| S29-15 | 0.247 | 0.229 | no | no | 0.889 | 0.672 | 0 | 0.247 / 0.883 / 0.650 |
-| S30-15 | 0.973 | 0.983 | yes | yes | 0.896 | 0.748 | 0 | 0.974 / 0.888 / 0.731 |
+| S28-15 | 0.998 | 0.995 | yes | yes | 0.980 | 0.964 | 1 (star>loop) | 0.965 / 0.980 / 0.964 |
+| S29-15 | 0.257 | 0.229 | no | no | 0.897 | 0.699 | 0 | 0.247 / 0.883 / 0.650 |
+| S30-15 | 0.975 | 0.986 | yes | yes | 0.900 | 0.759 | 0 | 0.974 / 0.888 / 0.731 |
 | S31-15 | 0.929 | 0.966 | yes | yes | 0.932 | 0.840 | 0 | 0.929 / 0.932 / 0.840 |
-| S33-15 | 0.944 | 0.905 | yes | yes | 0.949 | 0.872 | 0 | 0.944 / 0.940 / 0.842 |
-| S35-19 | 0.959 | 0.954 | yes | yes | 0.897 | 0.761 | 0 | 0.959 / 0.895 / 0.752 |
+| S33-15 | 0.905 | 0.905 | yes | yes | 0.955 | 0.890 | 0 | 0.944 / 0.940 / 0.842 |
+| S35-19 | 0.959 | 0.954 | yes | yes | 0.900 | 0.768 | 0 | 0.959 / 0.895 / 0.752 |
 | S37-15 | 0.949 | 0.936 | yes | yes | 0.905 | 0.825 | 0 | 0.949 / 0.905 / 0.825 |
-| S40-15 | 0.890 | 0.882 | no | no | 0.887 | 0.771 | 0 | 0.890 / 0.883 / 0.763 |
+| S40-15 | 0.890 | 0.882 | no | no | 0.883 | 0.763 | 0 | 0.890 / 0.883 / 0.763 |
 | S41-15 | 0.925 | 0.932 | yes | yes | 0.906 | 0.914 | 0 | 0.925 / 0.906 / 0.914 |
 | S43-15 | 1.000 | 1.000 | yes | yes | 0.953 | 0.926 | 0 | 1.000 / 0.953 / 0.926 |
-| S45-15 | 0.935 | 0.935 | yes | yes | 0.926 | 0.809 | 1 (tail>head) | 0.935 / 0.926 / 0.809 |
+| S45-15 | 0.935 | 0.935 | yes | yes | 0.926 | 0.809 | 0 | 0.935 / 0.926 / 0.809 |
 | S46-15 | 0.751 | 0.936 | no | yes | 0.835 | 0.660 | 0 | 0.751 / 0.835 / 0.660 |
-| S5-15 | 0.910 | 0.988 | yes | yes | 0.850 | 0.732 | 0 | 0.910 / 0.850 / 0.732 |
-| S53-19 | 0.513 | 0.513 | no | no | 0.762 | 0.811 | 0 | 0.513 / 0.762 / 0.809 |
-| S56-17B | 0.975 | 0.978 | yes | yes | 0.875 | 0.743 | 0 | 0.972 / 0.874 / 0.740 |
+| S5-15 | 0.910 | 0.988 | yes | yes | 0.852 | 0.734 | 0 | 0.910 / 0.850 / 0.732 |
+| S53-19 | 0.513 | 0.513 | no | no | 0.763 | 0.814 | 0 | 0.513 / 0.762 / 0.809 |
+| S56-17B | 0.979 | 0.978 | yes | yes | 0.879 | 0.755 | 0 | 0.972 / 0.874 / 0.740 |
 | S58-17 | 1.000 | 1.000 | yes | yes | 0.931 | 0.839 | 1 (loop>petal) | 1.000 / 0.930 / 0.837 |
-| S67-19 | 0.964 | 0.964 | yes | yes | 0.947 | 0.861 | 1 (tail>head) | 0.964 / 0.947 / 0.861 |
+| S67-19 | 0.964 | 0.964 | yes | yes | 0.947 | 0.861 | 0 | 0.964 / 0.947 / 0.861 |
 | S68-19 | 0.966 | 0.620 | yes | no | 0.885 | 0.676 | 0 | 0.966 / 0.885 / 0.676 |
-| S69-19 | 0.993 | 0.988 | yes | yes | 0.921 | 0.759 | 0 | 0.980 / 0.920 / 0.759 |
-| S70-19 | 0.956 | 0.956 | yes | yes | 0.957 | 0.939 | 1 (tail>head) | 0.956 / 0.957 / 0.939 |
+| S69-19 | 0.993 | 0.988 | yes | yes | 0.920 | 0.759 | 0 | 0.980 / 0.920 / 0.759 |
+| S70-19 | 0.956 | 0.956 | yes | yes | 0.957 | 0.939 | 0 | 0.956 / 0.957 / 0.939 |
 | S8-15 | 0.640 | 0.640 | no | no | 0.936 | 0.841 | 0 | 0.640 / 0.936 / 0.841 |
-| S80-22 | 0.989 | 1.000 | yes | yes | 0.935 | 0.881 | 0 | 0.989 / 0.931 / 0.869 |
-| s34-15 | 0.956 | 0.951 | yes | yes | 0.924 | 0.832 | 1 (backing>star) | 0.956 / 0.918 / 0.814 |
+| S80-22 | 0.989 | 1.000 | yes | yes | 0.934 | 0.878 | 0 | 0.989 / 0.931 / 0.869 |
+| s34-15 | 0.956 | 0.951 | yes | yes | 0.928 | 0.844 | 1 (backing>star) | 0.956 / 0.918 / 0.814 |
 
-Official (per-axis): **success 23, flagged-not-success 10, silently wrong 1 (S46-15), errors 0 - `PASS 23/34`** against the bar of 28 (80 %). Reported only (uniform-scale alignment): 25/34; shape: mean whole IoU 0.911 (head 0.815, tail 0.955), shape_ok 21/34; stacking: 8 pairs reversed in 7/34 IDs. The per-axis column is the metric and the bar; the uniform column only explains misses.
+Official (per-axis): **success 23, flagged-not-success 10, silently wrong 1 (S46-15), errors 0 - `PASS 23/34`** against the bar of 28 (80 %). Reported only (uniform-scale alignment): 25/34; shape: mean whole IoU 0.913 (head 0.821, tail 0.955), shape_ok 21/34; stacking: 4 pairs reversed in 4/34 IDs. The per-axis column is the metric and the bar; the uniform column only explains misses.
 
 Flagged although correct: 21 of the 23 successes; S28-15 and S43-15 are unflagged successes with visibly wrong heads (see 5b). S46-15 is silent again: its head fit (0.82 agreement, 0.94 outline) is not a gross failure; its miss is the scorer alignment effect described below.
 

@@ -58,7 +58,7 @@ The first command runs the fast suite: `pyproject.toml` already sets `-m "not sl
 
 Runs the pipeline on every photo in `reference/photos` that has a designer SVG listed in `reference/canonical.txt` (34) and compares the result against the designer's file, region by region. It takes a few minutes. `--sheet DIR` saves photo | generated | designer images; `--debug` prints each scored element.
 
-Current scoreboard: success 23 of 34 (the bar is 28), flagged-not-success 10, silently wrong 1 (S46-15), errors 0; 21 of the 23 successes are flagged although correct. Each row also reports a shape score (silhouette IoU, whole / head / tail, and a per-layer score); mean whole IoU 0.911, 21 of 34 at or above 0.90. The UI always asks you to compare the head with the photo (a checklist item, not a flag): the head flag only catches gross head failures.
+Current scoreboard: success 23 of 34 (the bar is 28), flagged-not-success 10, silently wrong 1 (S46-15), errors 0; 21 of the 23 successes are flagged although correct. Each row also reports a shape score (silhouette IoU, whole / head / tail, and a per-layer score); mean whole IoU 0.913, 21 of 34 at or above 0.90. The UI always asks you to compare the head with the photo (a checklist item, not a flag): the head flag only catches gross head failures.
 
 ## How to test on the shop
 

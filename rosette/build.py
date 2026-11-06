@@ -1,27 +1,23 @@
 """RosetteModel -> list[Shape] for the SVG writer."""
 from __future__ import annotations
 
+from shapely import LineString, Polygon, make_valid, set_precision, unary_union
+
 from .geometry import disc, outlines, pinked_circle, place_rose, points_ring, ring, tails
-import math
-
-from shapely import Point, unary_union
-
-from .geometry.clip import clip_occluded, to_geom
-from .geometry.tails import CX as TAIL_CX
+from .geometry.clip import SIMPLIFY, clip_occluded, from_geom, to_geom
 from .model import Part, RosetteModel
 from .shapes import Shape
 
-# Tail tops (H5). The reference files never draw a flat tail top: in 60 of 78 files every
-# stripe's top row is under 0.06 head radii wide (median 0.015 R over 511 stripes); the top
-# is either a point (213) or a slope (298). Our stripes keep full width down from top_y and
-# close in one apex per tail on the tail axis, TAIL_TIP_DEPTH head radii below the head
-# center (median top of the sloped reference stripes 0.88 R, quartiles 0.68-0.97). The apex
-# stays at least TAIL_TIP_MIN head radii above top_y (median reference taper 0.05 R) and
-# must lie inside the drawn head (any head shape covers it); when the head does not reach
-# that depth the apex moves to the nearest covered depth (TAIL_TIP_STEP steps) and warns;
-# when no depth is covered, or there is no head, it stays and warns that it shows.
-TAIL_TIP_DEPTH, TAIL_TIP_MIN, TAIL_TIP_STEP = 0.88, 0.2, 0.01
-TAIL_TIP_WARNING = "Tail top moved to stay under the head - check the tail tops against the photo."
+# Tail tops (H5). The reference files never draw a free tail top: in 60 of 78 files every
+# stripe's top row is under 0.06 head radii wide; of 511 stripe tops 298 follow the lower
+# outline of the head shapes over them and 213 end in a point under one. Our stripes are
+# drawn at full width from top_y down as before, run on up their side lines into every
+# gap between the head shapes that opens onto the stripe's top and is closed above by
+# the head (a hole inside the head stays empty, a gap open to the outside is not filled),
+# and cut to the outside of every head shape whatever the layers, as the reference tails
+# are: every top edge then lies on a head shape's outline, in the shop and on outline
+# pages that draw hidden edges too. Where the head does not close a stripe's top edge it
+# stays flat at top_y and the model warns.
 TAIL_UNCOVERED_WARNING = "Tail top is not under any head shape - check the tail tops against the photo."
 _HEAD_ROLES = ("head", "ring", "points", "center")
 
@@ -33,44 +29,31 @@ def _parse_stripes(s) -> list[float]:
     return [float(x) for x in str(s).split(",") if x.strip()]
 
 
-def _tail_tips(model: RosetteModel, head: list[Shape], key: tuple) -> list[float]:
-    """Apex height per tail (see TAIL_TIP_DEPTH); warns on the model when one moved
-    (TAIL_TIP_WARNING) or lies under no head shape (TAIL_UNCOVERED_WARNING). Depths are
-    in head radii: the drawn head's largest distance from its center; without a head
-    half the tail's top width stands in for it."""
-    count, top_y, tw, spread = int(key[0]), float(key[1]), float(key[3]), float(key[5])
-    slopes = [0.0 if count == 1 else math.tan(math.radians(-spread / 2 + k * spread / (count - 1)))
-              for k in range(count)]
-    hp = next((q.params for r in ("center", "ring", "head", "points") for q in model.parts if q.role == r), None)
-
-    def warn(msg: str) -> None:
-        if msg not in model.warnings:
-            model.warnings.append(msg)
-
-    if not head or hp is None:
-        warn(TAIL_UNCOVERED_WARNING)
-        return [top_y - TAIL_TIP_MIN * tw / 2] * count
-    sil = unary_union([to_geom(s) for s in head])
-    cx, cy = float(hp["cx"]), float(hp["cy"])
-    r = max(math.hypot(x - cx, y - cy) for g in getattr(sil, "geoms", [sil]) for x, y in g.exterior.coords)
-    y_max = top_y - TAIL_TIP_MIN * r
-    want = min(cy + TAIL_TIP_DEPTH * r, y_max)
-    y_lo = min(cy, y_max)
-    out = []
-    for slope in slopes:
-        cands = [want]
-        for i in range(1, int(math.ceil(2 / TAIL_TIP_STEP)) + 1):
-            for y in (want - i * TAIL_TIP_STEP * r, want + i * TAIL_TIP_STEP * r):
-                if y_lo <= y <= y_max:
-                    cands.append(y)
-        y = next((y for y in cands if sil.contains(Point(TAIL_CX + (y - top_y) * slope, y))), None)
-        if y is None:
-            warn(TAIL_UNCOVERED_WARNING)
-            y = want
-        elif y != want:
-            warn(TAIL_TIP_WARNING)
-        out.append(y)
-    return out
+def _under_head(stripe: Shape, top_y: float, bottom_y: float, head) -> tuple[Shape, bool]:
+    """The stripe run up its side lines into every gap between the head shapes that opens
+    onto its top edge and is closed above by the head, and cut to the outside of the head
+    (see the tail tops note). (shape, True when its top edge at top_y lies wholly under
+    the head or in such gaps)."""
+    pts = [tuple(float(v) for v in p.split(",")) for p in stripe.attrs["points"].split()]
+    tl, tr, br, bl = pts[0], pts[1], pts[2], pts[-1]
+    if head is None or head.is_empty:
+        return stripe, False
+    up = min(head.bounds[1], top_y) - 1.0
+    # side lines x = a + b * t (t = 0 at top_y, 1 at bottom_y); they may meet above top_y
+    dl, dr = bl[0] - tl[0], br[0] - tr[0]
+    t = (up - top_y) / (bottom_y - top_y)
+    if dl != dr and t < (tl[0] - tr[0]) / (dr - dl) < 0:  # they meet between `up` and top_y
+        tm = (tl[0] - tr[0]) / (dr - dl)
+        ring_ = [(tl[0] + dl * tm, top_y + tm * (bottom_y - top_y)), tr, tl]
+    else:
+        ring_ = [(tl[0] + dl * t, up), (tr[0] + dr * t, up), tr, tl]
+    ext = set_precision(Polygon(ring_), 1e-3)
+    top = LineString([tl, tr])
+    gaps = [g for g in getattr(ext.difference(head), "geoms", [ext.difference(head)])
+            if isinstance(g, Polygon) and g.distance(top) < 1e-6 and g.bounds[1] > up + 1e-6]
+    covered = top.difference(unary_union([head, *gaps]).buffer(0.01)).length < 0.5
+    shape = from_geom(unary_union([Polygon(pts), *gaps]).difference(head).simplify(SIMPLIFY), stripe)
+    return (shape or stripe), covered
 
 
 def build(model: RosetteModel) -> list[Shape]:
@@ -134,17 +117,21 @@ def color_shapes(model: RosetteModel) -> list[tuple[Shape, Part]]:
             finish(p, [disc(q["cx"], q["cy"], q["r"])])
 
     head = [s for s, _ in colors if s.role in _HEAD_ROLES or (s.role == "unknown" and s.z < 60)]
+    # on a 0.001 grid: unions of pinked and cut shapes can trip GEOS on near-coincident edges
+    head_geom = set_precision(unary_union([make_valid(to_geom(s)) for s in head]), 1e-3) if head else None
     for key, parts in tail_groups.items():
         top_y, bottom_y, tw, bw, spread = key[1], key[2], key[3], key[4], key[5]
         polys = tails(top_y, bottom_y, int(key[0]), tw, bw, spread, _parse_stripes(key[6]),
-                      stripes_bottom=_parse_stripes(key[7]) or None,
-                      tip_y=_tail_tips(model, head, key))
+                      stripes_bottom=_parse_stripes(key[7]) or None)
         for p in parts:
             ti, si = int(p.params["tail_index"]), int(p.params["stripe_index"])
             try:
                 shape = polys[ti][si]
             except IndexError:
                 raise ValueError(f"part {p.id}: tail {ti} stripe {si} out of range") from None
+            shape, covered = _under_head(shape, float(top_y), float(bottom_y), head_geom)
+            if not covered and TAIL_UNCOVERED_WARNING not in model.warnings:
+                model.warnings.append(TAIL_UNCOVERED_WARNING)
             finish(p, [shape])
 
     colors.sort(key=lambda t: t[0].z)

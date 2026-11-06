@@ -229,27 +229,6 @@ def test_edited_inner_ratio_changes_only_the_loop_base():
     assert width_along_x(q, 360) > width_along_x(p, 360) > 0.6 * w
 
 
-def test_tail_stripes_converge_to_a_point_above_top_y():
-    # H5: every stripe's top ends in the tail's apex (no flat top edge); the stripes
-    # still reach full width at top_y and keep their side lines and pinked bottom
-    t = tails(200, 820, 3, 60, 90, 30, [0.3, 0.4, 0.3], tip_y=170)
-    for k, row in enumerate(t):
-        apexes = set()
-        for s in row:
-            p = pts_of(s)
-            top = min(y for _, y in p)
-            assert abs(top - 170) < 1e-6
-            assert sum(abs(y - top) < 1e-6 for _, y in p) == 1  # one top point, no edge
-            apexes.add(next((round(x, 3), round(y, 3)) for x, y in p if abs(y - top) < 1e-6))
-            assert sum(abs(y - 200) < 1e-6 for _, y in p) == 2  # full width at top_y
-        assert len(apexes) == 1  # the stripes of a tail share the apex: no gaps between them
-    (mid,) = {next((x, y) for x, y in pts_of(s) if abs(y - 170) < 1e-6) for s in t[1]}
-    assert abs(mid[0] - 300) < 1e-6
-    total = sum(area(pts_of(s)) for s in t[1])
-    trap = (60 + 90) / 2 * 620 + 60 * 30 / 2
-    assert abs(total - trap) / trap < 0.01
-
-
 def _outline_points(o):
     pts = [tuple(map(float, p.split(","))) for p in o.attrs["points"].split()]
     mids = [((a[0] + b[0]) / 2, (a[1] + b[1]) / 2) for a, b in zip(pts, pts[1:])]
@@ -286,7 +265,7 @@ def test_stripe_outline_stops_at_a_pinked_head_painted_later():
     from rosette.geometry.clip import to_geom
     head = pinked_circle(300, 200, 120)
     head.category, head.kind, head.role = 1, "color", "head"
-    t = tails(250, 800, 1, 120, 160, 0, [1, 1, 1], tip_y=230)
+    t = tails(250, 800, 1, 120, 160, 0, [1, 1, 1])
     stripes = [s for s in t[0]]
     for s in stripes:
         s.category, s.kind, s.role = 1, "color", "tail_stripe"

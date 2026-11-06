@@ -131,38 +131,6 @@ def ringed(top_y, ring_out=150.0):
     return RosetteModel(parts, groups)
 
 
-def test_tail_top_is_a_point_inside_the_head_at_the_mined_depth():
-    from rosette.build import TAIL_TIP_DEPTH, TAIL_TIP_MIN
-    for top_y in (400, 340):  # apex at the mined depth, or TAIL_TIP_MIN above a shallow top_y
-        m = ringed(top_y=top_y)
-        shapes = [t for t, _ in color_shapes(m)]  # before the cuts
-        x, y = _tail_tops(shapes)[0]
-        assert abs(x - 300) < 1e-6 and abs(y - min(200 + TAIL_TIP_DEPTH * 150, top_y - TAIL_TIP_MIN * 150)) < 0.5
-    m = ringed(top_y=400)
-    shapes = [t for t, _ in color_shapes(m)]  # before the cuts
-    tops = _tail_tops(shapes)
-    assert len(tops) == 2 and len({(round(x, 2), round(y, 2)) for x, y in tops}) == 1
-    x, y = tops[0]
-    assert abs(x - 300) < 1e-6 and abs(y - (200 + TAIL_TIP_DEPTH * 150)) < 0.5
-    assert y < 400 - TAIL_TIP_MIN * 150 + 1e-6
-    assert not m.warnings
-    assert validate(write_svg(build(m))) == []
-
-
-def test_tail_top_moves_to_the_nearest_covered_depth_and_warns():
-    # kites on the diagonals leave the bottom of the head open below the center disc:
-    # the mined depth is not covered, so the apex moves up to the disc and the model warns
-    from rosette.build import TAIL_TIP_DEPTH
-    m = ringed(top_y=340)
-    m.parts[0] = Part("pts", "points", {"cx": 300, "cy": 200, "kind": "diamond", "count": 4, "r_inner": 50,
-                                        "r_outer": 150, "rotation_deg": 45, "width_ratio": 0.5}, 2, 20, 1.0)
-    shapes = [t for t, _ in color_shapes(m)]  # before the cuts
-    x, y = _tail_tops(shapes)[0]
-    assert abs(x - 300) < 1e-6 and 250 < y <= 260 + 1e-6 < 200 + TAIL_TIP_DEPTH * 150
-    assert any("tail top" in w.lower() for w in m.warnings)
-    assert validate(write_svg(build(m))) == []
-
-
 @pytest.mark.parametrize("tail_color, head_color", [(2, 1), (1, 2), (1, 1)])
 def test_tail_stripes_never_show_inside_the_head(tail_color, head_color):
     # H5 (A7-15): the shop paints Layer_1 first and draws the st6 line art over
@@ -192,23 +160,102 @@ def test_tail_stripes_never_show_inside_the_head(tail_color, head_color):
     assert validate(write_svg(shapes)) == []
 
 
-def test_tail_top_left_uncovered_warns():
-    # a head off the tail axis covers no depth on it: the apex cannot be hidden and the
-    # model says so
-    from rosette.build import TAIL_UNCOVERED_WARNING
-    m = ringed(top_y=340)
-    for q in m.parts[:2]:
-        q.params["cx"] = 100
+def _union_above(shapes, top_y):
+    from shapely import box, unary_union
+    from rosette.geometry.clip import to_geom
+    head = unary_union([to_geom(s) for s in shapes if s.kind == "color" and s.role != "tail_stripe"])
+    return head, box(0, 0, 600, top_y)
+
+
+def kites_and_loops(top_y, stripe_color=1):
+    """A center disc, four loops on the diagonals and four kites on the axes (one
+    pointing down at the tail), all Color 2; one tail of three stripes."""
+    groups = [ColorGroup(1, (200, 30, 30), False, 0.1, 0.3, 1, 0.9),
+              ColorGroup(2, (30, 30, 200), False, 0.9, 0.3, 2, 0.9)]
+    parts = [Part("ctr", "center", {"cx": 300, "cy": 200, "r": 60}, 2, 50, 1.0),
+             Part("loops", "points", {"cx": 300, "cy": 200, "kind": "bow", "count": 4, "r_inner": 60,
+                                      "r_outer": 140, "rotation_deg": 45, "width_ratio": 0.9}, 2, 21, 1.0),
+             Part("kites", "points", {"cx": 300, "cy": 200, "kind": "diamond", "count": 4, "r_inner": 60,
+                                      "r_outer": 150, "rotation_deg": 90, "width_ratio": 0.3}, 2, 22, 1.0)]
+    for i in range(3):
+        parts.append(Part(f"t{i}", "tail_stripe", {
+            "tail_index": 0, "stripe_index": i, "tails_count": 1, "top_y": top_y, "bottom_y": 800,
+            "top_width": 120, "bottom_width": 160, "spread_deg": 0, "stripes": "1,1,1"}, stripe_color, 0, 1.0))
+    return RosetteModel(parts, groups)
+
+
+def _on_side(p, top_y=320):
+    """On one of the stripe side lines of kites_and_loops' tail (x at top_y / at 800)."""
+    t = (p[1] - top_y) / (800 - top_y)
+    return any(abs(p[0] - (xt + (xb - xt) * t)) < 0.5
+               for xt, xb in ((240, 220), (280, 300 - 80 / 3), (320, 300 + 80 / 3), (360, 380)))
+
+
+def test_tail_top_follows_the_heads_lower_outline():
+    # H5 fix round 1 (S35-19): above top_y a stripe runs up its side lines into the head's
+    # shadow (everything at or below some head shape), so in the gaps between the kite and
+    # the loops it reaches the shapes' lower edges; no free top edge, no flat edge at top_y
+    from shapely import Point
+    m = kites_and_loops(top_y=320)
     shapes = build(m)
-    assert TAIL_UNCOVERED_WARNING in m.warnings
+    head, above = _union_above(shapes, 320)
+    lines = [s for s in shapes if s.role == "tail_stripe" and s.kind == "outline"]
+    edge = head.boundary
+    for s in lines:
+        v = [tuple(map(float, p.split(","))) for p in s.attrs["points"].split()]
+        for a, b in zip(v, v[1:]):
+            mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+            if mid[1] < 319.5:  # above top_y: on the head's outline or a side line
+                assert edge.distance(Point(mid)) < 0.5 or (_on_side(a) and _on_side(b)), (a, b)
+            assert not (abs(a[1] - 320) < 1e-6 and abs(b[1] - 320) < 1e-6), (a, b)  # no flat top
+    from rosette.geometry.clip import to_geom
+    fills = [to_geom(s) for s in shapes if s.role == "tail_stripe" and s.kind == "color"]
+    gap = sum(f.intersection(above).difference(head).area for f in fills)
+    assert gap > 10  # the stripes fill the gaps below the head's lower outline
+    # and stop at the head's outline, as the reference tails do: nothing of a stripe lies
+    # under a head shape (outline pages draw every edge, hidden or not)
+    assert sum(f.intersection(head).area for f in fills) < 1.0  # simplify slivers
+    assert not m.warnings
     assert validate(write_svg(shapes)) == []
 
 
-def test_tail_top_without_a_head_warns():
-    from rosette.build import TAIL_UNCOVERED_WARNING, TAIL_TIP_MIN
+def test_color2_stripe_ends_along_a_color1_pinked_disc():
+    # A7-15: a Color 2 stripe under a Color 1 pinked head disc painted before it ends
+    # along the disc's scallop, also when top_y lies below the disc
+    from rosette.geometry.clip import to_geom
+    for top_y in (300, 345):
+        m = ringed(top_y=top_y)
+        m.parts[0] = Part("head", "head", {"cx": 300, "cy": 200, "r": 130, "pinked": 1}, 1, 10, 1.0)
+        for q in m.parts[2:]:
+            q.color_group = 2
+        shapes = build(m)
+        disc = to_geom(next(s for s in shapes if s.kind == "color" and s.role == "head"))
+        fills = [to_geom(s) for s in shapes if s.role == "tail_stripe" and s.kind == "color"]
+        assert all(f.intersection(disc).area < 1e-3 for f in fills)
+        assert min(f.bounds[1] for f in fills) < 330  # reaches up to the scallop
+        assert all(f.distance(disc) < 1e-3 for f in fills)
+        assert not m.warnings
+
+
+def test_tail_with_nothing_over_it_keeps_a_flat_top_and_warns():
+    from rosette.build import TAIL_UNCOVERED_WARNING
     m = ringed(top_y=340)
     m.parts = m.parts[2:]
-    shapes = [t for t, _ in color_shapes(m)]
-    x, y = _tail_tops(shapes)[0]
-    assert abs(y - (340 - TAIL_TIP_MIN * 120 / 2)) < 1e-6  # half the top width stands in for R
+    shapes = build(m)
+    tops = [min(float(p.split(",")[1]) for p in s.attrs["points"].split())
+            for s in shapes if s.role == "tail_stripe" and s.kind == "color"]
+    assert tops == [340, 340]
     assert TAIL_UNCOVERED_WARNING in m.warnings
+
+
+
+def test_a_stripe_narrowing_downward_keeps_its_bottom():
+    # a constant-width ribbon on a widening tail takes a smaller share at the bottom: its
+    # side lines meet below the tail, and the stripe must still end at bottom_y
+    from rosette.geometry.clip import to_geom
+    m = kites_and_loops(top_y=320)
+    for q in m.parts[3:]:
+        q.params["stripes_bottom"] = "2,1,2"
+    shapes = build(m)
+    fills = [to_geom(s) for s in shapes if s.role == "tail_stripe" and s.kind == "color"]
+    assert max(f.bounds[3] for f in fills) <= 800 + 1e-6
