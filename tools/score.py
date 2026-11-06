@@ -47,7 +47,8 @@ from PIL import Image  # noqa: E402
 
 from rosette.assign import part_area  # noqa: E402
 from rosette.pipeline import analyze, is_flagged, render  # noqa: E402
-from rosette.roles import category, element_masks, render_categories  # noqa: E402
+from rosette.roles import (_classify, _components, _split_head, category, element_masks,  # noqa: E402
+                           frame_for, render_categories)
 from tools.rasterize import DEFAULT_PALETTE, rasterize  # noqa: E402
 from tools.truth import truth_from_svg  # noqa: E402
 
@@ -62,6 +63,11 @@ DEFAULT_COLORS = dict(DEFAULT_PALETTE)
 # Elements smaller than this share of the rosette area are not scored.
 MIN_ELEMENT_SHARE = 0.002
 _WHITE = (255, 255, 255)
+# Shape: whole-silhouette IoU at or above which the outline counts as right. Set in the
+# gap of the 76-photo distribution (docs/pipeline.md, shape score).
+SHAPE_OK_IOU = 0.85
+# Head roles scored per designer element in the shape layer score.
+SHAPE_HEAD_ROLES = ("head", "ring", "points", "center")
 
 
 def score_ids() -> list[str]:
@@ -161,6 +167,68 @@ def compare(designer_svg: str, generated_svg: str) -> dict:
                 uniform_agreement=right_uniform / total if total else 0.0, elements=elements)
 
 
+def _role_masks(svg: str, box: tuple[slice, slice], shape: tuple[int, int] | None):
+    """[(role, mask)] per classified piece of every solid-configuration color element,
+    cropped to `box` of the HEIGHT render and, when `shape` is given, resized onto it."""
+    f = frame_for(svg, HEIGHT)
+    min_px = max(1, int(20.0 * f.scale ** 2))
+    out = []
+    for _, m in element_masks(svg, HEIGHT):
+        for comp in _components(m, min_px):
+            for piece in _split_head(comp, f):
+                crop = piece[box]
+                if shape is not None:
+                    crop = cv2.resize(crop.astype(np.uint8), (shape[1], shape[0]),
+                                      interpolation=cv2.INTER_NEAREST) > 0
+                out.append((_classify(piece, f), crop))
+    return f, out
+
+
+def _iou(a: np.ndarray, b: np.ndarray) -> float:
+    union = (a | b).sum()
+    return float((a & b).sum() / union) if union else 1.0
+
+
+def shape_compare(designer_svg: str, generated_svg: str) -> dict:
+    """Outline agreement, colors ignored: both SVGs rendered as silhouettes (every
+    color class one fill, the shop's hidden pattern layer hidden) and aligned like
+    compare() (bbox crop, generated resized onto the designer crop).
+
+      shape_iou  whole-rosette silhouette IoU
+      head_iou   IoU over the rows above the designer's tail top (first row below the head)
+      tail_iou   IoU over the rows from the tail top down
+      layers     per designer head element piece (head, ring, points, center): IoU of
+                 its region with the union of our pieces of the same role class
+                 (rosette.roles classifier on both files)
+      layer_iou  area-weighted mean of those IoUs (None without head pieces)
+      shape_ok   shape_iou >= SHAPE_OK_IOU
+    """
+    colors = {k: "#000000" for k in DEFAULT_COLORS}
+    dm = render_categories(designer_svg, HEIGHT, colors).min(axis=2) < 128
+    gm = render_categories(generated_svg, HEIGHT, colors).min(axis=2) < 128
+    box, gbox = _bbox(dm), _bbox(gm)
+    d = dm[box]
+    g = cv2.resize(gm[gbox].astype(np.uint8), (d.shape[1], d.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
+    f, dparts = _role_masks(designer_svg, box, None)
+    _, gparts = _role_masks(generated_svg, gbox, d.shape)
+    split = int(np.clip(round(f.tails_top_y) - box[0].start, 0, d.shape[0]))
+    layers, total, acc = [], 0.0, 0.0
+    for role, m in dparts:
+        if role not in SHAPE_HEAD_ROLES:
+            continue
+        ours = np.zeros(d.shape, bool)
+        for r, q in gparts:
+            if r == role:
+                ours |= q
+        iou, area = _iou(m, ours), float(m.sum())
+        layers.append(dict(role=role, iou=iou, area=area))
+        total += area
+        acc += iou * area
+    whole = _iou(d, g)
+    return dict(shape_iou=whole, head_iou=_iou(d[:split], g[:split]), tail_iou=_iou(d[split:], g[split:]),
+                layers=layers, layer_iou=acc / total if total else None, shape_ok=whole >= SHAPE_OK_IOU)
+
+
 def _detected_counts(model) -> tuple[int, int]:
     pts = [q for q in model.parts if q.role == "points"]
     points = int(max(pts, key=lambda q: part_area(q, model.parts)).params["count"]) if pts else 0
@@ -181,14 +249,15 @@ def _designer(sid: str) -> np.ndarray:
 ROW_KEYS = ("id", "color_agreement", "pixel_agreement", "iou", "uniform_agreement", "success_uniform",
             "elements", "points_ok", "tails_ok",
             "points", "points_truth", "tails", "tails_truth", "flagged", "issues", "success",
-            "seconds", "error")
+            "seconds", "error", "shape_iou", "head_iou", "tail_iou", "layers", "layer_iou", "shape_ok")
 
 
 def score_one(sid: str) -> dict:
     t = time.perf_counter()
     model, result = _generate(sid)
     seconds = time.perf_counter() - t
-    scores = compare((REF / "svg" / f"{sid}.svg").read_text(encoding="utf-8"), result.svg)
+    designer = (REF / "svg" / f"{sid}.svg").read_text(encoding="utf-8")
+    scores = {**compare(designer, result.svg), **shape_compare(designer, result.svg)}
     truth = truth_from_svg(sid)
     points, tails = _detected_counts(model)
     return dict(id=sid, **scores,
@@ -245,7 +314,7 @@ def main(argv: list[str]) -> int:
         argv = argv[:i] + argv[i + 2:]
     rows = score_all(argv or None)
     print(f"{'ID':10} {'agree':>6} {'pixel':>6} {'iou':>5} {'flag':>4} {'ok':>4} {'points':>7} {'tails':>6} "
-          f"{'iss':>3} {'sec':>5} {'uni':>6} {'uok':>4}")
+          f"{'iss':>3} {'sec':>5} {'uni':>6} {'uok':>4} {'shape':>5} {'headS':>5} {'tailS':>5} {'layer':>5} {'sok':>3}")
     for r in rows:
         if r["error"]:
             print(f"{r['id']:10} ERROR {r['error']}")
@@ -255,7 +324,10 @@ def main(argv: list[str]) -> int:
         print(f"{r['id']:10} {r['color_agreement']:6.3f} {r['pixel_agreement']:6.3f} {r['iou']:5.2f} "
               f"{_yn(r['flagged']):>4} "
               f"{_yn(r['success']):>4} {pts:>7} {tl:>6} {r['issues']:3d} {r['seconds']:5.1f} "
-              f"{r['uniform_agreement']:6.3f} {_yn(r['success_uniform']):>4}")
+              f"{r['uniform_agreement']:6.3f} {_yn(r['success_uniform']):>4} "
+              f"{r['shape_iou']:5.3f} {r['head_iou']:5.3f} {r['tail_iou']:5.3f} "
+              f"{r['layer_iou'] if r['layer_iou'] is None else round(r['layer_iou'], 3)!s:>5} "
+              f"{_yn(r['shape_ok']):>3}")
         if debug:  # per element: designer category, generated winner, winning share, area
             for e in r["elements"]:
                 print(f"    cat {e['category']} -> {e['winner']}  share {e['share']:.2f}  "
@@ -264,6 +336,11 @@ def main(argv: list[str]) -> int:
     print(f"success {s['success']}  flagged-not-success {s['flagged']}  "
           f"silently-wrong {s['silent']}  errors {s['errors']}")
     print(f"PASS {s['success']}/{s['n']} (target >= {TARGET:.0%})")
+    done = [r for r in rows if not r["error"]]
+    if done:
+        print(f"shape: mean IoU {np.mean([r['shape_iou'] for r in done]):.3f}  head "
+              f"{np.mean([r['head_iou'] for r in done]):.3f}  tail {np.mean([r['tail_iou'] for r in done]):.3f}  "
+              f"shape_ok {sum(r['shape_ok'] for r in done)}/{len(done)} (IoU >= {SHAPE_OK_IOU})")
     uni = sum(bool(r["success_uniform"]) for r in rows if not r["error"])
     print(f"reported only (not the bar): success under uniform-scale alignment {uni}/{s['n']}")
     if sheet:

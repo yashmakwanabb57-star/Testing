@@ -127,3 +127,44 @@ def test_compare_identical_old_layout_svg_agrees_fully(sid):
     assert r["color_agreement"] == pytest.approx(1.0)
     used = {int(m) for m in re.findall(r'class="st\d+_([1-4])"', svg)}
     assert {e["category"] for e in r["elements"]} == used
+
+
+def _rosette(head_r: int = 130, center: str = "disc", tail_w: int = 200, cat: int = 1) -> str:
+    """Synthetic rosette: one tail under a head disc with a center (disc or ring)."""
+    c = ('<circle class="st2_2" cx="300" cy="190" r="40"/>' if center == "disc" else
+         '<path class="st2_2" fill-rule="evenodd" d="M300 130a60 60 0 1 0 0.01 0zM300 160a30 30 0 1 0 0.01 0z"/>')
+    return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 850"><g id="Layer_1">'
+            f'<polygon class="st0_{cat}" points="260,300 340,300 {300 + tail_w / 2},825 {300 - tail_w / 2},825"/>'
+            f'<circle class="st1_{cat}" cx="300" cy="190" r="{head_r}"/>{c}</g></svg>')
+
+
+def test_shape_identical_is_one_and_ignores_color():
+    s = score.shape_compare(_rosette(), _rosette(cat=3))
+    assert s["shape_iou"] == pytest.approx(1.0)
+    assert s["head_iou"] == pytest.approx(1.0)
+    assert s["tail_iou"] == pytest.approx(1.0)
+    assert s["layer_iou"] == pytest.approx(1.0)
+    assert compare(_rosette(), _rosette(cat=3))["color_agreement"] < 0.5
+
+
+def test_shape_wider_tails_hurt_the_tail_region_only():
+    # still narrower than the head, so the bbox alignment is unchanged
+    s = score.shape_compare(_rosette(), _rosette(tail_w=255))
+    assert s["tail_iou"] < 0.95
+    assert s["head_iou"] > 0.97
+    assert s["tail_iou"] < s["shape_iou"] < 1.0
+
+
+def test_shape_layer_scores_each_designer_head_element_by_role():
+    # the designer's center disc is drawn as a ring: same color, other role class
+    s = score.shape_compare(_rosette(), _rosette(center="ring"))
+    by_role = {e["role"]: e["iou"] for e in s["layers"]}
+    assert by_role["head"] == pytest.approx(1.0, abs=0.01)
+    assert by_role["center"] == 0.0
+    assert s["layer_iou"] < 1.0
+    assert s["shape_iou"] == pytest.approx(1.0)  # same silhouette
+
+
+def test_shape_ok_uses_the_whole_iou_bar():
+    assert score.shape_compare(_rosette(), _rosette())["shape_ok"]
+    assert not score.shape_compare(_rosette(), _rosette(head_r=60, tail_w=60))["shape_ok"]
