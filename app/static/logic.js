@@ -74,6 +74,23 @@ export function flagItems(model, issues, serverFlagged) {
 
 const NEEDS_CONVERT = 'Convert the photo to SVG first.';
 
+// The fixed checklist: always present once a model exists, confirmed like a flag but
+// not a flag (is_flagged knows nothing of it). The head fit cannot tell a petal from a
+// block (rosette/pipeline.py), so the user compares every head with the photo.
+export const HEAD_CHECK = { key: 'check:head', text: 'Compare the head with the photo' };
+
+// Head fit measured on the photo at conversion (api/analyze head_fit): information only.
+export function headFitText(fit) {
+  if (!fit) return 'No head match measured for this model.';
+  const pct = (v) => `${Math.round(v * 100)}%`;
+  return `Head match ${pct(fit.agreement)}, outline ${pct(fit.silhouette)} - measured on the photo when converted; information, not a flag.`;
+}
+
+export function checklistItems(s) {
+  if (!s.model) return [];
+  return [{ ...HEAD_CHECK, info: headFitText(s.headFit) }];
+}
+
 // Why "Convert to SVG" is disabled; null means it may run. s.pendingFile is the chosen
 // photo (choosing or dropping a file only previews it; Convert calls /api/analyze).
 export function convertBlocker(s) {
@@ -90,7 +107,7 @@ export function resetForFile(s) {
   s.analyzeSeq++;
   s.render.seq++;
   Object.assign(s.render, { dirty: false, inFlight: false, error: null });
-  Object.assign(s, { filename: null, model: null, svg: null, issues: [], flagged: false, analyzing: false, photoFrame: null });
+  Object.assign(s, { filename: null, model: null, svg: null, issues: [], flagged: false, analyzing: false, photoFrame: null, headFit: null });
   s.confirmed.clear();
   s.invalid.clear();
   s.sim.tried.clear();
@@ -109,6 +126,9 @@ export function downloadBlockers(s) {
   const flags = flagItems(s.model, s.issues, s.flagged);
   const open = flags.filter((f) => !s.confirmed.has(f.key)).length;
   if (open) out.push(`${open} of ${flags.length} flagged item(s) still to confirm.`);
+  for (const c of checklistItems(s)) {
+    if (!s.confirmed.has(c.key)) out.push(`${c.text} and tick it in the checklist.`);
+  }
   return out;
 }
 
@@ -208,6 +228,7 @@ export function advanceBlocker(step, s) {
     const checks = partChecks(s.model);
     const open = checks.filter((c) => !s.confirmed.has(c.key)).length;
     if (open) return `Mark every part "Looks right" first (${open} of ${checks.length} left).`;
+    if (!s.confirmed.has(HEAD_CHECK.key)) return `${HEAD_CHECK.text} and tick it first.`;
   }
   if (step === 3) {
     // Every color question needs an answer (Yes), flagged or not: a wrong color in a wrong

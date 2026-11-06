@@ -13,12 +13,12 @@ const LAST = GUIDED_STEPS.length;
 const $ = (id) => document.getElementById(id);
 
 // Workbench nodes a step may borrow; each gets a placeholder so it can go back home.
-const MOVABLE = ['drop-zone', 'stage', 'sim-controls', 'svg-source', 'parts', 'model-rose-row', 'warnings-block', 'checks', 'download-box'];
+const MOVABLE = ['drop-zone', 'stage', 'sim-controls', 'svg-source', 'parts', 'model-rose-row', 'checklist-block', 'warnings-block', 'checks', 'download-box'];
 const home = new Map();
 
 const INTRO = {
   1: 'Choose a photo of the rosette (drop it on the photo area or use Choose photo...), then press Convert to SVG.',
-  2: 'Compare every part with the photo. Fix any value that is off, then tick "Looks right" on each card.',
+  2: 'Compare every part with the photo. Fix any value that is off, then tick "Looks right" on each card and on the head check.',
   3: 'One question per color, flagged colors first. Answer Yes, or use Change... to pick the right color.',
   4: 'Try the shop options on the preview: switch Color 2 between Solid and Pattern, and the Rose on and off.',
   5: 'Last checks. Download is enabled once every check passes and every flagged item is confirmed.',
@@ -155,7 +155,7 @@ function layout(step) {
           })), uploadStatus()],
       };
     case 2:
-      return { visual: ['drop-zone', 'stage'], task: [intro, 'parts', 'model-rose-row'] };
+      return { visual: ['drop-zone', 'stage'], task: [intro, 'parts', 'model-rose-row', 'checklist-block'] };
     case 3:
       return { visual: ['drop-zone', 'stage'], task: [intro, el('div', { class: 'list', id: 'g-questions' }), 'warnings-block'] };
     case 4:

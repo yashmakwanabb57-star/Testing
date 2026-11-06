@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  GUIDED_STEPS, advanceBlocker, canAdvance, canJump, clampStep, colorQuestions, partChecks, tailCheckKey,
+  GUIDED_STEPS, HEAD_CHECK, advanceBlocker, canAdvance, canJump, clampStep, colorQuestions, partChecks, tailCheckKey,
 } from '../../app/static/logic.js';
 
 // ------------------------------------------------------------ fixtures
@@ -43,7 +43,9 @@ function st(overrides = {}) {
   };
 }
 
-const ALL_PARTS = ['part:head', 'part:points-1', tailCheckKey(0)];
+const PART_KEYS = ['part:head', 'part:points-1', tailCheckKey(0)];
+// step 2 also needs the fixed head checklist item
+const ALL_PARTS = [...PART_KEYS, HEAD_CHECK.key];
 
 // ------------------------------------------------------------ steps
 
@@ -55,7 +57,7 @@ test('five steps in order', () => {
 // ------------------------------------------------------------ partChecks
 
 test('one check per non-tail part and one per tail group', () => {
-  assert.deepEqual(partChecks(model()).map((c) => c.key), ALL_PARTS);
+  assert.deepEqual(partChecks(model()).map((c) => c.key), PART_KEYS);
   assert.deepEqual(partChecks(null), []);
 });
 
@@ -72,6 +74,11 @@ test('step 1 needs an analyzed photo', () => {
 test('step 2 is blocked until every part looks right', () => {
   assert.match(advanceBlocker(2, st()), /Looks right.*3 of 3 left/);
   assert.match(advanceBlocker(2, st({ confirmed: new Set(['part:head']) })), /2 of 3 left/);
+  assert.equal(canAdvance(2, st({ confirmed: new Set(ALL_PARTS) })), true);
+});
+
+test('step 2 needs the head compared with the photo, always', () => {
+  assert.match(advanceBlocker(2, st({ confirmed: new Set(PART_KEYS) })), /Compare the head with the photo/);
   assert.equal(canAdvance(2, st({ confirmed: new Set(ALL_PARTS) })), true);
 });
 

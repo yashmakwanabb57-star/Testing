@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  SOURCE_NOT_READY, convertBlocker, downloadBlockers, errorText, flagItems, parseValue, resetForFile, sourceNotice,
+  HEAD_CHECK, SOURCE_NOT_READY, checklistItems, convertBlocker, headFitText, downloadBlockers, errorText, flagItems, parseValue, resetForFile, sourceNotice,
 } from '../../app/static/logic.js';
 import { applyConfig } from '../../app/static/simulator.js';
 
@@ -27,7 +27,7 @@ function model() {
 function ready(overrides = {}) {
   return {
     analyzing: false, model: model(), svg: '<svg/>', issues: [], flagged: true,
-    invalid: new Set(), confirmed: new Set(['group:1']),
+    invalid: new Set(), confirmed: new Set(['group:1', 'check:head']),
     render: { dirty: false, inFlight: false, error: null },
     ...overrides,
   };
@@ -39,8 +39,29 @@ test('ready state has no blockers', () => {
   assert.deepEqual(downloadBlockers(ready()), []);
 });
 
+test('the head checklist item is always present and blocks download until ticked', () => {
+  const items = checklistItems(ready());
+  assert.deepEqual(items.map((c) => c.key), [HEAD_CHECK.key]);
+  assert.equal(items[0].text, 'Compare the head with the photo');
+  assert.deepEqual(checklistItems(ready({ model: null })), []);
+  const b = downloadBlockers(ready({ confirmed: new Set(['group:1']) }));
+  assert.equal(b.length, 1);
+  assert.match(b[0], /Compare the head with the photo/);
+  assert.equal(flagItems(model(), [], false).some((f) => f.key === HEAD_CHECK.key), false); // not a flag
+});
+
+test('head fit is shown as information, plain hyphens', () => {
+  const t = headFitText({ agreement: 0.823, silhouette: 0.94 });
+  assert.match(t, /82%/);
+  assert.match(t, /94%/);
+  assert.match(t, /not a flag/);
+  assert.ok(!/[–—]/.test(t));
+  assert.match(headFitText(null), /No head match/);
+  assert.match(checklistItems(ready({ headFit: { agreement: 0.5, silhouette: 0.7 } }))[0].info, /50%/);
+});
+
 test('an unconfirmed flag blocks download', () => {
-  const b = downloadBlockers(ready({ confirmed: new Set() }));
+  const b = downloadBlockers(ready({ confirmed: new Set(['check:head']) }));
   assert.equal(b.length, 1);
   assert.match(b[0], /1 of 1 flagged/);
 });
@@ -246,7 +267,7 @@ test('low-confidence tail stripes give one flag for their tails card', () => {
   // confirming the tails card clears the blocker
   const s = ready({ model: m, confirmed: new Set() });
   assert.match(downloadBlockers(s)[0], /1 of 1 flagged/);
-  assert.deepEqual(downloadBlockers(ready({ model: m, confirmed: new Set(['tails:0']) })), []);
+  assert.deepEqual(downloadBlockers(ready({ model: m, confirmed: new Set(['tails:0', 'check:head']) })), []);
 });
 
 test('confident tail stripes are not flagged', () => {
@@ -288,7 +309,7 @@ test('Convert is disabled until a file is chosen, and while converting', () => {
 
 test('choosing a new file clears the old model so it cannot be downloaded under the new name', () => {
   const s = fullState({ invalid: new Set(['head.r']) });
-  assert.equal(s.confirmed.size, 1);
+  assert.equal(s.confirmed.size, 2);
   resetForFile(s);
   assert.equal(s.model, null);
   assert.equal(s.svg, null);
@@ -296,6 +317,7 @@ test('choosing a new file clears the old model so it cannot be downloaded under 
   assert.deepEqual(s.issues, []);
   assert.equal(s.flagged, false);
   assert.equal(s.photoFrame, null);
+  assert.equal(s.headFit, null);
   assert.equal(s.confirmed.size, 0);
   assert.equal(s.invalid.size, 0);
   assert.equal(s.sim.tried.size, 0);

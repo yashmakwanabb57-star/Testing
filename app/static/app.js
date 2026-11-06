@@ -6,7 +6,7 @@ import { applyConfig, glitterPattern, COLOR_INDICES } from './simulator.js';
 import {
   MAX_COUNT, POINT_KINDS, errorText, hex, flagItems,
   downloadBlockers as blockersFor, groupColor, tailGroups, parseValue, tailCheckKey, sourceNotice,
-  convertBlocker, resetForFile,
+  convertBlocker, resetForFile, checklistItems,
 } from './logic.js';
 
 export { errorText, flagItems, parseValue, tailGroups, hex };
@@ -74,6 +74,7 @@ export const state = {
   svg: null, // clean SVG text from the last successful render
   issues: [],
   flagged: false, // server is_flagged of the last render
+  headFit: null, // head fit measured at conversion (information, not a flag)
   confirmed: new Set(), // flag keys the user confirmed
   invalid: new Set(), // input field keys holding an invalid value
   analyzing: false,
@@ -159,7 +160,7 @@ export const actions = {
       if (token !== state.analyzeSeq) return;
       Object.assign(state, {
         model: res.model, svg: res.svg, issues: res.issues || [], flagged: !!res.flagged,
-        filename: res.filename,
+        filename: res.filename, headFit: res.head_fit || null,
       });
       state.sim.touched.clear();
       state.sim.pattern = false;
@@ -564,6 +565,7 @@ export const views = {
 
   afterRender() {
     views.preview();
+    views.checklist();
     views.warnings();
     views.flagsMarked();
     views.checks();
@@ -708,6 +710,17 @@ export const views = {
         confirmBox(key));
     }));
     views.flagsMarked();
+  },
+
+  // The fixed checklist (logic.js checklistItems): always shown with a model, confirmed
+  // like a flag, never counted as one.
+  checklist() {
+    const items = checklistItems(state);
+    $('checklist-block').hidden = !items.length;
+    $('checklist').replaceChildren(...items.map((c) => el('div', { class: 'card', 'data-flag': c.key },
+      el('p', { class: 'check-text', text: c.text }),
+      el('p', { class: 'muted', text: c.info }),
+      confirmBox(c.key))));
   },
 
   warnings() {
