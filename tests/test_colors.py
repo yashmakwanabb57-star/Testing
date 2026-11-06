@@ -291,14 +291,15 @@ DARK, LIGHT, BEIGE, GOLD = (45, -30, 10), (85, -30, 50), (80, 2, 22), (70, 10, 6
 
 
 def _badge_rosette(logo: str = "print", logo_r: float = 28.0, logo_at: tuple = (0.0, 0.0),
-                   pleats: bool = False, shape: str = "disc") -> Prepared:
+                   pleats: bool = False, shape: str = "disc", holes: bool = False) -> Prepared:
     """Synthetic rosette: dark pleat disc (r 150) with a light inner layer (r 60..100) and
     a dark badge (r < 60); a logo of radius logo_r sits on it at offset logo_at from the
     head center. logo: 'print' (beige with print strokes: high texture), 'plain' (gold
     satin: a ribbon color) or 'none'. pleats: the pleated layers around the badge get
     radial light/dark folds (as photographed pleats do). shape: 'disc' (radius logo_r),
     'map' (an irregular lobed outline reaching logo_r, like a printed map) or 'ring'
-    (logo_r/2..logo_r, the badge color inside). Below the head two tails:
+    (logo_r/2..logo_r, the badge color inside). holes: dark print on the logo (two
+    blobs and a text-like bar, each larger than a motif blob). Below the head two tails:
     dark | light | dark."""
     h, w = 800, 500
     cx, cy, r = 250.0, 200.0, 150.0
@@ -326,6 +327,11 @@ def _badge_rosette(logo: str = "print", logo_r: float = 28.0, logo_at: tuple = (
             xi, yi = xx.astype(int), yy.astype(int)
             strokes = spot & (yi % 16 < 2) & ((xi + 8 * ((yi // 16) % 2)) % 16 < 10)
             lab[strokes] = (30, 0, 5)
+        if holes:
+            ox, oy = cx + logo_at[0], cy + logo_at[1]
+            ink = ((np.hypot(xx - ox + 15, yy - oy + 18) < 14) | (np.hypot(xx - ox - 18, yy - oy + 12) < 12)
+                   | ((np.abs(xx - ox) < 28) & (yy - oy > 12) & (yy - oy < 30)))
+            lab[spot & ink] = (25, -10, 5)
     rgb = cv2.cvtColor(lab, cv2.COLOR_Lab2RGB)
     rgb = (np.clip(rgb, 0, 1) * 255).round().astype(np.uint8)
     mask = (d <= r) | (tails & (yy < h - 20))
@@ -422,3 +428,15 @@ def test_solid_center_disc_off_the_head_center_survives():
     labels, groups = pixel_groups(_badge_rosette("plain", logo_r=30.0, logo_at=(10.0, 0.0), pleats=True))
     gold = _group_near(groups, GOLD)
     assert len(gold) == 1 and _label_at(labels, 260, 200) == gold[0].id
+
+
+def test_solid_center_disc_with_print_holes_survives():
+    # a gold satin center carrying dark print (blobs and a text bar): the print punches
+    # holes in its label mask, but its outline is still a disc, so it is no badge print
+    from rosette.vision.colors import BADGE_ENCLOSED, _badge_prints
+    p = _badge_rosette("plain", logo_r=45.0, pleats=True, holes=True)
+    merged = []
+    labels, groups = pixel_groups(p, merged=merged)
+    gold = _group_near(groups, GOLD)
+    assert len(gold) == 1 and merged == []
+    assert [(g, e >= BADGE_ENCLOSED) for g, _, e in _badge_prints(p, labels, groups)] == [(gold[0].id, True)]

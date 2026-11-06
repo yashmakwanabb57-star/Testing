@@ -134,15 +134,19 @@ BADGE_IN_HEAD, BADGE_MAX_AREA = 0.95, 0.09
 # eroded texture 10.2 vs 1.8-23.4; second-tone share 0.086 vs 0.002-0.883; texture over
 # the badge's own 0.71 vs 0.19-10.9). Shape is: a candidate enclosed by >= BADGE_ENCLOSED
 # is print when less than BADGE_SHAPE_MIN of its pixels lie on circles around its own
-# centroid that it covers to >= FULL_RING_COV (a disc or a ring puts nearly all its
-# pixels there; a map outline or lettering does not). A7-15 logo 0.549; synthetic discs
-# among pleat folds 0.998, a gold ring 0.993; discs whose rim wanders +-20 % of the
-# radius >= 0.855, a ring with +-10 % rims 0.857. 0.7 sits in that gap. Circles around
-# the centroid, not the head center: a disc 10 units off the head center would read 0.63
-# around the head center. (Also measured, not used: circle solidity, pixels over the
-# area inside the radius holding 95 % of them, A7-15 0.634 vs discs 1.05, but a ring
-# reads low too; convex hull solidity 0.795 vs 1.02; components after a 1 px opening:
-# A7-15 is one large piece like a disc, so it does not separate.)
+# centroid that it covers to >= FULL_RING_COV, holes filled first (a disc or a ring puts
+# nearly all its pixels there; a map outline or lettering does not). Real photos: A7-15
+# logo 0.549 (0.549 unfilled); A1-15 gold badge, the only photographed satin center on
+# a badge, 0.978 (0.647 unfilled: the pink badge face and a gold printed dog inside the
+# gold rim). Synthetic: discs among pleat folds 0.998, a disc carrying dark print holes
+# 0.998 (0.537 unfilled), a gold ring 0.998, a disc 10 px off the head center 0.949,
+# discs whose rim wanders +-20 % of the radius >= 0.855, a ring with +-10 % rims 0.857.
+# 0.7 sits 0.151 above the logo, 0.155 below the lowest synthetic disc and 0.278 below
+# A1-15. Circles around the centroid, not the head center: a disc 10 units off the head
+# center would read 0.63 around the head center. (Also measured, not used: circle
+# solidity, pixels over the area inside the radius holding 95 % of them, A7-15 0.634 vs
+# discs 1.05, but a ring reads low too; convex hull solidity 0.795 vs 1.02; components
+# after a 1 px opening: A7-15 is one large piece like a disc, so it does not separate.)
 BADGE_BAND_UNITS, BADGE_EDGE, BADGE_UNSURE, BADGE_ENCLOSED = 8.0, 0.8, 0.6, 0.9
 BADGE_SHAPE_MIN, FULL_RING_COV = 0.7, 0.8
 
@@ -449,6 +453,8 @@ def pixel_groups(p: Prepared, max_groups: int = 6,
     # window that sees print out of the texture measurement
     near_print = cv2.dilate(printed.astype(np.uint8), np.ones((win, win), np.uint8)) > 0
     groups = _groups(p, labels, absorbed, std, near_print)
+    if merged is None:  # callers that do not ask still get the merge, recorded locally
+        merged = []
     done = False
     for g, b, enclosed in _badge_prints(p, labels, groups):
         if enclosed >= BADGE_ENCLOSED and _disc_or_ring_share(p, labels, g) < BADGE_SHAPE_MIN:
@@ -456,8 +462,7 @@ def pixel_groups(p: Prepared, max_groups: int = 6,
             labels[region] = b
             absorbed |= region
             near_print |= cv2.dilate(region.astype(np.uint8), np.ones((win, win), np.uint8)) > 0
-            if merged is not None:
-                merged.append(groups[g].rgb)
+            merged.append(groups[g].rgb)
             done = True
     if done:
         labels = _by_area(labels, mask)
@@ -468,15 +473,18 @@ def pixel_groups(p: Prepared, max_groups: int = 6,
 def _disc_or_ring_share(p: Prepared, labels: np.ndarray, gid: int) -> float:
     """Share of the group's pixels lying on circles around its own centroid that the
     group covers to >= FULL_RING_COV: near 1 for a disc or a ring (the centroid, not
-    the head center, so a center a few units off still reads as a disc)."""
-    ys, xs = np.nonzero(labels == gid)
+    the head center, so a center a few units off still reads as a disc). Measured on
+    the group's mask with its holes filled: print or a badge face inside a ribbon-colored
+    center does not make its outline less of a disc."""
+    m = ndimage.binary_fill_holes(labels == gid)
+    ys, xs = np.nonzero(m)
     if len(ys) == 0:
         return 1.0
     cx, cy = float(xs.mean()), float(ys.mean())
     d = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2)
     step = max(0.5, p.scale)
     radii = np.arange(step / 2, d.max() + step, step)
-    cov = (polar_sample((labels == gid).astype(np.int8), cx, cy, radii, 360, fill=0) > 0).mean(axis=1)
+    cov = (polar_sample(m.astype(np.int8), cx, cy, radii, 360, fill=0) > 0).mean(axis=1)
     return float((cov[np.minimum((d / step).astype(int), len(radii) - 1)] >= FULL_RING_COV).mean())
 
 

@@ -484,10 +484,10 @@ def _pleated_ring(g: int, a: int, b: int, bridges: list[_Band], cov: np.ndarray,
     mean coverage between its radii, capped at BLOB_UNCONFIRMED_CONF unless the layer
     looks like an annulus (PLEATED_FULL_MIN, PLEATED_REACH_UNITS): loops and stars must
     stay flagged."""
-    full = [bd for bd in bridges if bd.label == g and a <= bd.i0 and bd.i1 <= b]
-    if not full:
+    inside_bands = [bd for bd in bridges if bd.label == g and a <= bd.i0 and bd.i1 <= b]
+    if not inside_bands:
         return None
-    bd = max(full, key=lambda q: q.i1 - q.i0)
+    bd = max(inside_bands, key=lambda q: q.i1 - q.i0)
     i0, i1 = bd.i0, bd.i1
     while i0 > a and cov[i0 - 1, g] >= RING_EXTEND_COV:
         i0 -= 1
@@ -498,9 +498,10 @@ def _pleated_ring(g: int, a: int, b: int, bridges: list[_Band], cov: np.ndarray,
     conf = inside * float(cov[i0:i1, g].mean())
     out = next((i for i in range(i1, b) if cov[i, g] < EXTENT_COV), b)
     inn = next((i for i in range(i0 - 1, a - 1, -1) if cov[i, g] < EXTENT_COV), a - 1)
+    # clamped at the zone edges: tips crossing a zone edge read shorter than they are
     reach = max(fr.d(radii[min(out, len(radii) - 1)] - radii[i1 - 1]),
                 fr.d(radii[i0] - radii[max(inn, 0)]))
-    full = float((cov[i0:i1, g] >= FULL_COV).mean())
-    if full < PLEATED_FULL_MIN or reach > PLEATED_REACH_UNITS:
+    full_share = float((cov[i0:i1, g] >= FULL_COV).mean())
+    if full_share < PLEATED_FULL_MIN or reach > PLEATED_REACH_UNITS:
         conf = min(conf, BLOB_UNCONFIRMED_CONF)
     return i0, i1, g, conf
