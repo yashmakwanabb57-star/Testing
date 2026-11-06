@@ -160,7 +160,7 @@ def analyze_with_fit(data: bytes) -> tuple[RosetteModel, HeadFit | None]:
     p = prepare(data)
     merged_print: list = []
     labels, groups = pixel_groups(p, merged=merged_print)
-    tidy = drop_specks(RosetteModel(parts=detect_parts(p, labels)), head_r=Frame.of(p).d(p.head[2]))
+    tidy = drop_specks(RosetteModel(parts=detect_parts(p, labels, groups)), head_r=Frame.of(p).d(p.head[2]))
     parts = tidy.parts
     used = {q.color_group for q in parts}
     model = RosetteModel(parts=parts, groups=[g for g in groups if g.id in used],

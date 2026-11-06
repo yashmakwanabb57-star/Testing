@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 from scipy import ndimage
 
-from rosette.model import Part
+from rosette.model import ColorGroup, Part
 from rosette.vision.parts_common import Frame, majority, r3
 from rosette.vision.parts_head import detect_head, refine_center
 from rosette.vision.parts_tails import detect_tails
@@ -59,15 +59,17 @@ def _leftovers(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
     return parts
 
 
-def detect_parts(p: Prepared, labels: np.ndarray) -> list[Part]:
-    """Parts of the rosette: head-side parts, tail stripes, then unexplained regions."""
+def detect_parts(p: Prepared, labels: np.ndarray, groups: list[ColorGroup] | None = None) -> list[Part]:
+    """Parts of the rosette: head-side parts, tail stripes, then unexplained regions.
+    With the color groups given, the tails may append a glitter group to them
+    (parts_tails, H6)."""
     fr = Frame.of(p)
     head = detect_head(p, labels, fr)
     pts = [q for q in head if q.role == "points"]
     if pts:  # re-center on the points' symmetry and measure again
         p = refine_center(p, labels, fr, int(pts[0].params["count"]))
         head = detect_head(p, labels, fr)
-    parts = head + detect_tails(p, labels, fr) + _leftovers(p, labels, fr)
+    parts = head + detect_tails(p, labels, fr, groups) + _leftovers(p, labels, fr)
     seen: dict[str, int] = {}
     for q in parts:  # unique ids
         n = seen.get(q.id, 0)

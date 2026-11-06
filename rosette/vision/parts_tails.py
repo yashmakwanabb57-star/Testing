@@ -10,14 +10,24 @@ mirrored offsets, widths and stripe fractions) and expressed the way
 y=bottom_y, one top/bottom width for all tails. top_y is where the outer axes meet
 the center line when that is measurable; otherwise (and for a single tail) it sits
 inside the head so the tails' top corners stay hidden behind it.
+
+Glitter read as two plain tones (H6): on a measured row, a stretch of the tail whose
+photo is textured (local L* spread over PATTERN_T) and whose labels alternate between
+plain groups is one glitter ribbon. With the color groups given, it is relabeled to a new
+pattern group (appended to `groups`, median color of those pixels) before the stripes
+are read, so it becomes one stripe of its full width.
 """
 from __future__ import annotations
 
 import math
 
-import numpy as np
+import itertools
 
-from rosette.model import Part
+import numpy as np
+from scipy import ndimage
+
+from rosette.model import ColorGroup, Part
+from rosette.vision.colors import PATTERN_T, _lab, _local_std
 from rosette.vision.parts_common import CANVAS_AXIS_X, Frame, majority, r3
 from rosette.vision.prepare import Prepared
 
@@ -41,6 +51,19 @@ ROW_BAND_PX = 2
 MIN_FIT_ROWS, FIT_SPAN, MIN_EDGE_SHARE = 4, 0.3, 0.01
 # The tails' top corners are kept this far inside the head circle (share of the way).
 TOP_INSET = 0.9
+# Glitter read as two plain tones (H6). Texture is the local L* spread in a window of
+# GLITTER_WIN_UNITS (median over the row band); a stretch of a row is textured where it
+# is over PATTERN_T after a median filter of GLITTER_SMOOTH_UNITS, over at least
+# GLITTER_MIN_UNITS. It is glitter when, GLITTER_EDGE_UNITS in from both ends (the
+# window's spill onto the neighbours), its labels make at least two runs of
+# GLITTER_RUN_UNITS or more of two or more groups, none of them a pattern group (a
+# pattern group already holds its glitter). Over the 76 photos (H6, docs/pipeline.md):
+# satin stripes 10+ units wide read <= 1.8 on A13-15B, whose glitter reads 9.3-21.6;
+# textured stretches with two plain tones alternating inside occur on A13-15B only;
+# every pattern-group stretch is >= 0.77 one group with 1.4-4 unit spill at its ends;
+# S2-15B's print (plain tones, 15-33 % second tone) is spill at one end only.
+GLITTER_WIN_UNITS, GLITTER_SMOOTH_UNITS, GLITTER_MIN_UNITS = 3.5, 2.0, 10.0
+GLITTER_EDGE_UNITS, GLITTER_RUN_UNITS = 2.0, 3.0
 
 
 def _runs(row: np.ndarray) -> list[tuple[int, int]]:
@@ -85,12 +108,41 @@ def _stripes(lab: np.ndarray, min_px: int) -> list[tuple[int, int]]:
     return [(a, b) for a, b in seq]
 
 
-def _cut(p: Prepared, labels: np.ndarray, y: int, fr: Frame):
+def _glitter(lab: np.ndarray, sd: np.ndarray, fr: Frame, pattern: set[int]) -> list[tuple[int, int]]:
+    """[start, end) stretches of one tail cut (labels `lab`, texture `sd` along it) that
+    are glitter read as alternating plain tones (see GLITTER_*), ends trimmed."""
+    k = max(1, int(round(GLITTER_SMOOTH_UNITS * fr.scale)))
+    tex = ndimage.median_filter((sd > PATTERN_T).astype(np.uint8), size=2 * k + 1) > 0
+    edge = int(round(GLITTER_EDGE_UNITS * fr.scale))
+    out = []
+    for a, b in _runs(tex):
+        if b - a < GLITTER_MIN_UNITS * fr.scale:
+            continue
+        a, b = int(a) + edge, int(b) - edge
+        runs = [(v, len(list(it))) for v, it in itertools.groupby(lab[a:b].tolist())]
+        runs = [v for v, n in runs if n >= GLITTER_RUN_UNITS * fr.scale]
+        if len(runs) >= 2 and len(set(runs)) >= 2 and min(runs) >= 0 and not set(runs) & pattern:
+            out.append((a, b))
+    return out
+
+
+def _cut(p: Prepared, labels: np.ndarray, y: int, fr: Frame, glitter=None):
+    """Tail runs across row y: [(start, end, stripes)]. glitter = (texture image,
+    pattern group ids, new label id, found list) relabels glitter stretches (_glitter)
+    to the new label and appends (y, start, end) of each to the found list."""
     rows = slice(max(0, y - ROW_BAND_PX), y + ROW_BAND_PX + 1)
     m = p.mask[rows].mean(axis=0) >= 0.5
     m = _close(m, max(1, int(round(GAP_UNITS * fr.scale))))
     runs = [(s, e) for s, e in _runs(m) if e - s >= MIN_TAIL_UNITS * fr.scale]
     lab_row = labels[y]
+    if glitter is not None:
+        sd, pattern, new_id, found = glitter
+        lab_row = lab_row.copy()
+        sd_row = np.median(sd[rows], axis=0)
+        for s, e in runs:
+            for a, b in _glitter(lab_row[s:e], sd_row[s:e], fr, pattern):
+                lab_row[s + a:s + b] = new_id
+                found.append((y, s + a, s + b))
     return [(s, e, _stripes(lab_row[s:e], max(1, int(round(MIN_STRIPE_UNITS * fr.scale)))))
             for s, e in runs]
 
@@ -142,12 +194,22 @@ def _at(xs: np.ndarray, ys: np.ndarray, x: float) -> float:
     return a + b * x
 
 
-def detect_tails(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
+def detect_tails(p: Prepared, labels: np.ndarray, fr: Frame,
+                 groups: list[ColorGroup] | None = None) -> list[Part]:
+    """Tail stripes. With the color groups given, glitter read as alternating plain tones
+    becomes a new pattern group appended to `groups` (see the module docstring)."""
     top, bot = p.tails_top_y, p.bottom_y
+    color_groups = groups  # `groups` is reused below for the stripe labels
+    glitter, found = None, []
+    if groups is not None:
+        win = max(3, int(round(GLITTER_WIN_UNITS * fr.scale)) | 1)
+        sd = _local_std(_lab(p.rgb)[..., 0].astype(np.float32), win)
+        new_id = max([g.id for g in groups] + [int(labels.max())]) + 1
+        glitter = (sd, {g.id for g in groups if g.pattern}, new_id, found)
     cuts = []
     for f in ROW_FRACS:
         y = int(round(top + f * (bot - top)))
-        cuts.append((fr.y(y), _cut(p, labels, y, fr)))
+        cuts.append((fr.y(y), _cut(p, labels, y, fr, glitter)))
     low = [len(c) for _, c in cuts[-COUNT_ROWS:]]
     n = max(set(low), key=lambda v: (low.count(v), v))  # tails part only toward the bottom
     if n == 0:
@@ -246,4 +308,12 @@ def detect_tails(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             parts.append(Part(f"tail-{k}-{i}", "tail_stripe",
                               {"tail_index": k, "stripe_index": i, **params_common},
                               g, z, r3(confs[k])))
+    if glitter is not None and any(q.color_group == glitter[2] for q in parts):
+        px = np.concatenate([p.rgb[y, a:b] for y, a, b in found])
+        tex = np.concatenate([glitter[0][y, a:b] for y, a, b in found])
+        area = len(px) / len(ROW_FRACS) * (bot - top) / max(1, int(p.mask.sum()))
+        rgb = tuple(int(v) for v in np.median(px, axis=0))
+        color_groups.append(ColorGroup(id=glitter[2], rgb=rgb, pattern=True,
+                                       texture=round(float(np.median(tex)), 3), area=float(area),
+                                       category=None, confidence=0.0))
     return parts
