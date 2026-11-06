@@ -252,6 +252,18 @@ The confidence is capped at 0.5 (`BLOB_UNCONFIRMED_CONF`, flagged) unless the la
 
 **76-photo numbers** (scratch `compare_all.py`): OK 45 -> 45, mean color agreement 0.832 -> 0.837, mean whole shape IoU 0.902 -> 0.902 (head 0.806, tail 0.947), layer 0.217 -> 0.221. No ID loses more than 0.02 color or whole-shape IoU. Scoreboard: `PASS 24/34` -> `PASS 23/34` (S40-15).
 
+## H4: points layers drawn the way the designer draws them
+
+Started at 1bba1f2. Full notes: `.superpowers/sdd/2026-11-05-rosette-svg-generator/h4-report.md`. The reference SVGs are generating-model output (`reference/generation-prompt.md`); "designer" below means those files.
+
+**Mined vocabulary.** Every single-lobe head element of the 79 reference SVGs was measured around the head center and grouped into layers (same Color, radii, width). Kinds: loop block (21 layers, 20 files: near-constant width, outer end flat in polar terms), kite (41 layers, 22 files: straight sides, widest at 0.4 of the length, quartiles 0.3-0.5), petal (14 layers, 13 files: wide inner end, straight taper to a pointed tip), triangle (54 layers, 28 files: the tips of star polygons), edge strip (18 layers, 16 files: about 4.3 degrees, 0.108 of the loop width), wedge (5 layers). Backings are frames or tips behind each point (11 files), never a disc under everything.
+
+**Geometry** (`rosette/geometry/points.py`): `bow` uses `LOOP_PROFILE` (0.85 of the width at the base, full width by 0.7 of the length) with a shallow convex outer end (`END_SAG` 0.6 of a straight cut's sag; r_outer stays the axis end, as before H4), `diamond` the straight-sided kite (`KITE_PEAK` 0.4), `petal` `PETAL_PROFILE`; stars are unchanged. `edge_width` draws a loop's two edge strips (`EDGE_OUTSIDE` 0.19 strip widths outside the edge). An explicit `inner_ratio` still makes a linear bow; the detector no longer emits it.
+
+**Detector** (`rosette/vision/parts_head.py`): a petal that keeps 0.85 of its width over at least 5 of 9 radii and fills at least 0.45 of the spacing is a loop block (`LOOP_*`; 7 designer loops converted, one designer kite, s39-15). Loops start where the ring or center over them ends; kites and petals that start within one pleat depth outside a ring start at it (`COVER_GAP_UNITS`). A low-confidence layer that runs as a narrow band along both sides of most loops becomes edge strips; one that shows beyond the tips of most points of another layer becomes a backing copy of them reaching the measured tip (`EDGE_*`, `BACK_*`, `EXPLAIN_*`). An unknown in a seam between two bands (at most `SEAM_UNITS` 16 wide, one of the bands' colors, under `SPECK_MAX_UNITS2` 6000) is folded into the band and the seam is closed.
+
+**76-photo numbers** (scratch `compare_all.py`): OK 45 -> 45, color 0.8365 -> 0.8387, whole shape 0.9020 -> 0.9046, head 0.8061 -> 0.8138, layer 0.2210 -> 0.2210; head-zone unknown discs 68 -> 53. No ID loses more than 0.02 (A14-17 color -0.019, s34-15 shape -0.018). S35-19: loops with edge strips, kites with backing frames, no specks; color 0.958 -> 0.959, head 0.757 -> 0.752, layer 0.027 -> 0.027 (see the report).
+
 ## Final state (Task 16)
 
 ### Stages, modules and tuning constants
