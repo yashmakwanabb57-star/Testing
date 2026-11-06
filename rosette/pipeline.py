@@ -5,10 +5,13 @@ Color groups no part uses are dropped before assignment (ids kept as they are);
 the rose is on iff a center part was found.
 A plain group that looks partly patterned on the tails (colors.mixed_texture_groups)
 is warned: a patterned ribbon may have been merged into it.
-Head fit (check_head): our head parts (every part but the tail stripes) are rendered
-and compared with the photo's color labels inside the head circle (head_fit); when
-the layer agreement is below HEAD_FIT_MIN the head part's confidence drops under
-FLAG_BELOW and a warning says what to check.
+Head fit (head_fit): our head parts (every part but the tail stripes) are rendered and
+compared with the photo's color labels inside the head circle. The measurement is
+information for the UI (analyze_with_fit returns it; the API sends it as head_fit);
+check_head flags the head only on a gross failure: layer agreement below HEAD_FIT_MIN or
+silhouette IoU below HEAD_SILHOUETTE_MIN. Shape errors on a head whose layers overlap
+the photo well (petals or loops drawn as blocks) are not caught; the UI always asks the
+user to compare the head with the photo.
 
 render(model): build -> write_svg -> validate. build may add warnings to the model
 (unrecognised shapes drawn as placeholders).
@@ -31,16 +34,16 @@ from .vision.parts_common import Frame
 from .vision.prepare import Prepared, prepare
 from .writer import write_svg
 
-# Head fit: share of the head region (photo foreground or our head) where the photo's
-# color group equals the group we drew; below it the head is flagged. Measured on the
-# 76 reference photos (docs/pipeline.md): the heads the H1 analysis reads as right
-# score 0.60-0.96 (A6-15 0.91 the best real product head), the five known wrong but
-# unflagged heads 0.63-0.88 (S42-15 0.88 the highest). Pixel overlap cannot separate
-# the two sets further, so the bar sits between the best wrong head and A6-15.
-HEAD_FIT_MIN = 0.9
-# Silhouette IoU under which the warning also names the outline (missing or extra
-# layers, holes); it changes the text only.
-HEAD_SILHOUETTE_MIN = 0.85
+# Head fit gross-failure bars, from the 76 reference photos (docs/pipeline.md). Layer
+# agreement (share of the head region's foreground union where the photo's color group
+# equals the group we drew) of the heads the H1 analysis reads as right runs 0.60-0.96
+# (s34-15 0.604 the lowest), and wrong heads overlap that range, so agreement only
+# flags below the right-head range. A synthetic perfect head scores 0.95 (pinked rim)
+# and a ring 5 units off 0.88, so values near 0.9 are boundary noise, not errors.
+HEAD_FIT_MIN = 0.6
+# Silhouette IoU of the right heads is 0.80-0.96 (S11a-15 0.803 the lowest); the bar sits
+# in the gap below it (0.764 to 0.786 in the table): missing or extra layers, holes.
+HEAD_SILHOUETTE_MIN = 0.78
 # Compared region: a disc of HEAD_FIT_EXTENT head radii, without the rows more than
 # HEAD_FIT_WINDOW radii below the head center (the tails cover the lower head),
 # sampled on a HEAD_FIT_GRID x HEAD_FIT_GRID grid.
@@ -103,8 +106,8 @@ def head_fit(p: Prepared, labels: np.ndarray, model: RosetteModel,
     ph[inside] = np.where(p.mask[yi[inside], xi[inside]], labels[yi[inside], xi[inside]], -1)
     for a, b in (merged or {}).items():
         ph[ph == a] = b
-    known = [g.id for g in model.groups]
-    ph[(ph >= 0) & ~np.isin(ph, known)] = -2  # a photo color we drew nowhere
+    # a photo color no model group has stays foreground and never equals our group id,
+    # so it counts as a mismatch
     fr = Frame.of(p)
     cxs, cys = np.rint(fr.x(xs)).astype(int), np.rint(fr.y(ys)).astype(int)
     ok = (cxs >= 0) & (cxs < ours_img.shape[1]) & (cys >= 0) & (cys < ours_img.shape[0])
@@ -121,23 +124,37 @@ def head_fit(p: Prepared, labels: np.ndarray, model: RosetteModel,
 def check_head(p: Prepared, labels: np.ndarray, model: RosetteModel,
                merged: dict[int, int] | None = None) -> RosetteModel:
     """A copy of the model whose head part is flagged (confidence capped at FLAGGED_CONF,
-    under FLAG_BELOW, and a warning added) when head_fit is below HEAD_FIT_MIN."""
+    under FLAG_BELOW, and a warning added) on a gross head failure: head_fit agreement
+    below HEAD_FIT_MIN or silhouette below HEAD_SILHOUETTE_MIN."""
+    return _check_head(model, head_fit(p, labels, model, merged))
+
+
+def _check_head(model: RosetteModel, fit: HeadFit | None) -> RosetteModel:
     out = copy.deepcopy(model)
-    fit = head_fit(p, labels, out, merged)
-    if fit is None or fit.agreement >= HEAD_FIT_MIN:
+    if fit is None:
+        return out
+    bad_layers, bad_outline = fit.agreement < HEAD_FIT_MIN, fit.silhouette < HEAD_SILHOUETTE_MIN
+    if not (bad_layers or bad_outline):
         return out
     for q in out.parts:
         if q.role == "head":
             q.confidence = min(q.confidence, FLAGGED_CONF)
-    what = "the head layers (disc, rings, points, center: shapes, counts and sizes)"
-    if fit.silhouette < HEAD_SILHOUETTE_MIN:
-        what += " and the head outline (missing or extra layers, holes)"
-    out.warnings.append(f"The drawn head matches the photo's head colors on only {fit.agreement:.0%} "
-                        f"of the head - check {what} against the photo.")
+    what = []
+    if bad_layers:
+        what.append("the head layers (disc, rings, points, center: shapes, counts and sizes)")
+    if bad_outline:
+        what.append("the head outline (missing or extra layers, holes)")
+    out.warnings.append(f"The drawn head is far from the photo (head match {fit.agreement:.0%}, outline "
+                        f"{fit.silhouette:.0%}) - check {' and '.join(what)} against the photo.")
     return out
 
 
 def analyze(data: bytes) -> RosetteModel:
+    return analyze_with_fit(data)[0]
+
+
+def analyze_with_fit(data: bytes) -> tuple[RosetteModel, HeadFit | None]:
+    """analyze, plus the head fit measurement (None without head parts)."""
     p = prepare(data)
     labels, groups = pixel_groups(p)
     parts = detect_parts(p, labels)
@@ -145,15 +162,18 @@ def analyze(data: bytes) -> RosetteModel:
     model = RosetteModel(parts=parts, groups=[g for g in groups if g.id in used],
                          rose=any(q.role == "center" for q in parts))
     out = assign(model)
+    # assign keeps the parts (same order and ids) and only relabels merged groups
+    assert [q.id for q in model.parts] == [q.id for q in out.parts]
     merged = {a.color_group: b.color_group for a, b in zip(model.parts, out.parts)
               if a.color_group != b.color_group}
-    out = check_head(p, labels, out, merged)
+    fit = head_fit(p, labels, out, merged)
+    out = _check_head(out, fit)
     by_id = {g.id: g for g in groups}
     for gid in mixed_texture_groups(p, labels, groups):
         if gid in used:
             out.warnings.append(f"Color {hex_rgb(by_id[gid].rgb)} is partly patterned - a patterned ribbon "
                                 "may have been merged into it; check the colors.")
-    return out
+    return out, fit
 
 
 def render(model: RosetteModel) -> RenderResult:

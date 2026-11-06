@@ -142,3 +142,10 @@ def test_render_rejects_degenerate_geometry():
     tail = next(p for p in model["parts"] if p["role"] == "tail_stripe")
     tail["params"]["top_y"] = tail["params"]["bottom_y"]
     assert client.post("/api/render", json={"model": model}).status_code == 422
+
+
+def test_analyze_sends_head_fit_as_information():
+    body = _post("S46-15.png", _png(), "image/png").json()
+    fit = body["head_fit"]
+    assert set(fit) == {"agreement", "silhouette"}
+    assert 0 < fit["agreement"] <= fit["silhouette"] <= 1

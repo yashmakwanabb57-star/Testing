@@ -14,7 +14,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 from rosette.model import RosetteModel
-from rosette.pipeline import analyze, is_flagged, render
+from rosette.pipeline import analyze_with_fit, is_flagged, render
 from rosette.vision.prepare import UNREADABLE, InputError
 
 MAX_UPLOAD = 25 * 1024 * 1024
@@ -80,12 +80,13 @@ def api_analyze(file: UploadFile) -> dict:
     name = file.filename or ""
     _check_image(name, data)
     try:
-        model = analyze(data)
+        model, fit = analyze_with_fit(data)
     except InputError as exc:
         raise HTTPException(422, str(exc)) from None
     result = render(model)
     return {"model": model.to_json(), "svg": result.svg, "issues": _issues(result.issues),
-            "flagged": is_flagged(model, result.issues), "filename": download_name(name)}
+            "flagged": is_flagged(model, result.issues), "filename": download_name(name),
+            "head_fit": asdict(fit) if fit else None}
 
 
 @app.post("/api/render")

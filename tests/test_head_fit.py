@@ -1,4 +1,6 @@
 """Head-fit check: the photo's head segmentation against our own rendered head."""
+from pathlib import Path
+
 import numpy as np
 
 from rosette import pipeline as P
@@ -80,3 +82,47 @@ def test_no_head_parts_no_fit():
     p, labels = photo([])
     m = RosetteModel(parts=[], groups=[])
     assert P.head_fit(p, labels, m) is None
+
+
+def test_small_offset_is_measured_but_not_flagged():
+    # a ring drawn 5 canvas units too wide: boundary noise, not a gross head failure
+    p, labels = photo([(RING, 1)])
+    m = model(95, 65)
+    fit = P.head_fit(p, labels, m)
+    assert 0.6 < fit.agreement < 0.95
+    out = P.check_head(p, labels, m)
+    assert not out.warnings and all(q.confidence == 0.9 for q in out.parts)
+
+
+def test_gross_silhouette_failure_is_flagged():
+    # our head disc is far too small: the photo's outline is not covered
+    p, labels = photo([])
+    m = model(90, 60)
+    m.parts[0].params["r"] = 125.0
+    m.parts = m.parts[:1]
+    fit = P.head_fit(p, labels, m)
+    assert fit.agreement >= P.HEAD_FIT_MIN and fit.silhouette < P.HEAD_SILHOUETTE_MIN
+    out = P.check_head(p, labels, m)
+    assert out.parts[0].confidence < FLAG_BELOW
+    assert any("outline" in w for w in out.warnings)
+
+
+def test_photo_color_we_drew_nowhere_counts_as_mismatch():
+    # label 7 is a photo color no model group has (and not merged): its pixels disagree
+    p, labels = photo([(RING, 7)])
+    good = P.head_fit(*photo([(RING, 1)]), model(90, 60)).agreement
+    fit = P.head_fit(p, labels, model(90, 60))
+    ring_share = RING.sum() / _disc(R).sum()
+    assert fit.agreement < good - 0.8 * ring_share
+
+
+def test_thresholds():
+    assert P.HEAD_FIT_MIN == 0.6
+    assert 0.6 < P.HEAD_SILHOUETTE_MIN < 0.80  # below the lowest right-head outline (0.80)
+
+
+def test_analyze_with_fit_returns_the_measurement():
+    data = (Path(__file__).resolve().parent.parent / "reference" / "photos" / "S46-15.png").read_bytes()
+    model, fit = P.analyze_with_fit(data)
+    assert fit is not None and 0 < fit.agreement <= fit.silhouette <= 1
+    assert model.to_json() == P.analyze(data).to_json()
