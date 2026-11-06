@@ -27,11 +27,14 @@ def test_wide_lobe_keeping_its_width_is_a_loop_block():
     assert H._kind(sine, np.full(80, 150.0)) == "petal"
 
 
-def loops_photo(n=6, profile=PHOTO_LOOP, edge_px=0, backing_px=0, teeth=True):
+def loops_photo(n=6, profile=PHOTO_LOOP, edge_px=0, backing_px=0, teeth=True, edge_tip=None, seam_px=0):
     """Labels of a head: center (2) r < 0.3 R, ring (0) to 0.5 R, n loops (1) from
     0.47 R (just under the ring, whose pleat teeth reach 0.53 R) to 0.9 R with the lateral `profile`, and a tail (3) below.
     edge_px: a band of label 0 that wide along both loop sides. backing_px: n diamonds
-    (4) between the loops, 0.5-0.85 R, on a label-0 copy reaching backing_px further."""
+    (4) between the loops, 0.5-0.85 R, on a label-0 copy reaching backing_px further.
+    edge_tip=(side_px, tip_px): the same diamonds on a copy of a fifth label (5) showing
+    side_px along their sides and tip_px beyond their tips. seam_px: the edge band lies
+    that far off the loop sides (an antialiased seam of another label, S30-15)."""
     h, w = 1200, 900
     cx, cy, R = 450.0, 330.0, 300.0
     yy, xx = np.mgrid[:h, :w].astype(float)
@@ -55,8 +58,14 @@ def loops_photo(n=6, profile=PHOTO_LOOP, edge_px=0, backing_px=0, teeth=True):
         kite = [0, 0.4, 0.7, 0.97, 1, 0.97, 0.8, 0.6, 0.4, 0.2, 0]
         labels[lobes(180 / n, 0.5 * R, 0.85 * R, 0.06 * R, kite, backing_px / 3, backing_px)] = 0
         labels[lobes(180 / n, 0.5 * R, 0.85 * R, 0.06 * R, kite)] = 4
+    if edge_tip:
+        kite = [0, 0.4, 0.7, 0.97, 1, 0.97, 0.8, 0.6, 0.4, 0.2, 0]
+        labels[lobes(180 / n, 0.5 * R, 0.85 * R, 0.06 * R, kite, edge_tip[0], edge_tip[1])] = 5
+        labels[lobes(180 / n, 0.5 * R, 0.85 * R, 0.06 * R, kite)] = 4
     if edge_px:
-        labels[lobes(0, 0.47 * R, 0.9 * R, 0.2 * R, prof, edge_px)] = 0
+        labels[lobes(0, 0.47 * R, 0.9 * R, 0.2 * R, prof, edge_px + seam_px)] = 0
+    if seam_px:
+        labels[lobes(0, 0.47 * R, 0.9 * R, 0.2 * R, prof, seam_px)] = -1
     labels[lobes(0, 0.47 * R, 0.9 * R, 0.2 * R, prof)] = 1
     labels[r <= 0.5 * R] = 0
     bins = ((np.degrees(np.arctan2(dy, dx)) % 360) * 2).astype(int) % 720
@@ -109,6 +118,15 @@ def test_contrasting_band_along_both_loop_sides_becomes_edge_strips():
     assert not [q for q in parts if q.role == "unknown" and q.color_group == 0]
 
 
+def test_edge_band_off_the_loop_by_a_seam_is_still_edge_strips():
+    # S30-15: the pink edges of the dark loops are read with a 1-3 sample lilac seam
+    # between loop and band (antialiasing); the band is still the loops' edge strips,
+    # as the reference draws them (12 strips, 2 per loop)
+    parts = _head_parts(edge_px=8, seam_px=3)
+    strips = [q for q in parts if q.role == "points" and q.color_group == 0]
+    assert len(strips) == 1 and strips[0].params.get("edge_width")
+
+
 def test_no_edge_strips_without_a_band():
     parts = _head_parts()
     assert not [q for q in parts if "edge_width" in q.params]
@@ -133,6 +151,30 @@ def test_backing_showing_beyond_the_points_becomes_tips_behind_them():
     # the points' thin inner tips vanish in the ring's pleats: they start at the ring
     assert pp["r_inner"] == rings[0].params["r_outer"] == bp["r_inner"]
     assert not [q for q in parts if q.role == "unknown" and q.color_group == 0]
+
+
+def test_band_along_the_sides_and_beyond_the_tips_is_a_same_kind_backing(monkeypatch):
+    # S30-15: a pink band along the lilac kites' sides and a pink tip beyond them. The
+    # reference files draw such trims as a same-kind backing (17 files; a kite behind
+    # each kite in 7): one larger kite of the band's color behind each kite, same count
+    # and angles, out by the measured margins. (The synthetic band is read with high
+    # confidence; photos read it below EXPLAIN_MAX_CONF, S30-15 0.5.)
+    from rosette.vision import parts_trims
+    monkeypatch.setattr(parts_trims, "EXPLAIN_MAX_CONF", 1.0)
+    parts = _head_parts(edge_tip=(6, 10))
+    host = [q for q in parts if q.role == "points" and q.color_group == 4]
+    back = [q for q in parts if q.role == "points" and q.color_group == 5]
+    assert len(host) == 1 and len(back) == 1
+    hp, bp = host[0].params, back[0].params
+    assert bp["kind"] == hp["kind"] and bp["count"] == hp["count"]
+    assert bp["rotation_deg"] == hp["rotation_deg"] and bp["r_inner"] == hp["r_inner"]
+    # tip 10 px = 5 units beyond the drawn tip (0.85 R = 127.5); sides 6 px = 3 units each
+    assert abs(bp["r_outer"] - 132.5) < 1.5
+    w_h = hp["width_ratio"] * (hp["r_outer"] - hp["r_inner"])
+    w_b = bp["width_ratio"] * (bp["r_outer"] - bp["r_inner"])
+    assert abs((w_b - w_h) / 2 - 3) < 1.5
+    assert back[0].z < host[0].z
+    assert "edge_width" not in bp
 
 
 def test_specks_of_a_band_are_folded_into_it_not_drawn_as_discs():
@@ -179,7 +221,7 @@ def test_a_trim_never_outlives_its_host(monkeypatch):
     b = ("unknown", 0, 0.1, dict(cx=300, cy=150, r=5.0), 50.0, 25)
     c = ("points", 2, 0.9, dict(kind="diamond", count=6, r_inner=5.0, r_outer=20.0, rotation_deg=30.0,
                                 width_ratio=0.4), 120.0, 20)
-    monkeypatch.setattr(T, "_edge_bands", lambda pol, i0, i1, g, h, p, win: (1.0, pol == h))
+    monkeypatch.setattr(T, "_edge_bands", lambda pol, i0, i1, g, h, p, win, *a, **k: (1.0, pol == h))
     monkeypatch.setattr(T, "_backing_tips", lambda pol, radii, i_out, h, p, win, fr:
                         (1.0, 35, pol == h) if (h, p["kind"]) == (1, "diamond") else (0.0, i_out, pol < -1))
     layers, meta = T.explain_trims([a, b, c], [dict(zone) for _ in range(3)], pol, radii, win,

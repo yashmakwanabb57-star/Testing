@@ -14,8 +14,9 @@ from rosette.vision.parts_common import Frame, r3
 # - edge strips: a band of h right along both side edges of a loop (bow), at most
 #   EDGE_MAX_SHARE of the loop's angular width wide and followed by a third label (h
 #   filling the whole gap between loops is not a band), on >= EDGE_MIN_RADII of the
-#   radii in the middle of the loop's extent, on both sides of >= EXPLAIN_MIN_LOBES of
-#   the visible loops. Drawn as the designer does: two strips per loop, EDGE_SHARE of
+#   radii in the middle of the loop's extent, on >= EXPLAIN_MIN_LOBES of the visible
+#   loops with a band on both sides (on >= EXPLAIN_MIN_LOBES of the sides when h is a
+#   points layer of the loops' count, H5). Drawn as the designer does: two strips per loop, EDGE_SHARE of
 #   the loop's widest width (median strip / loop width over the 14 strip layers on
 #   loops in 13 designer files, quartiles 0.107-0.119);
 # - backing tips: h shows on the axis of >= EXPLAIN_MIN_LOBES of another layer's
@@ -24,14 +25,34 @@ from rosette.vision.parts_common import Frame, r3
 #   outside the points is a ring, not tips). The designer draws backings as a frame or
 #   tip behind each point (hollow frames in 9 of the 11 files with one; never a disc
 #   under everything): drawn as a copy of the points reaching the measured tip.
-# The layer is replaced by its trims when they cover >= EXPLAIN_MIN_SHARE of its pixels.
+# - edge plus tip (H5): a points layer of h with the host's count, its axes within
+#   EDGETIP_AXIS_DEG of the host's, that runs as a band along both sides of
+#   >= EXPLAIN_MIN_LOBES of the visible points of a host that is not a loop block and
+#   ends >= BACK_MIN_UNITS beyond their tips, is a backing of the host's kind: the
+#   host's points, same count and angles, reaching h's outer end and wider by the
+#   measured band on each side. The reference files draw same-kind backings in 17
+#   files (116 pieces; a kite behind each kite in 7 files: out 0.07-0.15 R, sides
+#   0.007-0.063 R, medians 0.10 / 0.035 R). Loop blocks keep the edge-strip rule:
+#   the references trim loops with edge strips (14 layers, 13 files) and draw a
+#   same-kind backing behind loops in one file.
+# The layer is replaced by its trims when they cover >= EXPLAIN_MIN_SHARE of its pixels
+# (H5: 0.45, was 0.5; S30-15's pink loop edges are explained to 0.49 by the strips,
+# the rest is pink around the kite tips that the reference does not draw).
 EXPLAIN_MAX_CONF = 0.6
 EDGE_MAX_SHARE, EDGE_MIN_RADII, EDGE_SHARE = 0.35, 0.5, 0.108
+# H5: the band may lie up to EDGE_SEAM_UNITS off the loop's side (an antialiased seam of
+# another label: S30-15's pink loop edges, 1-3 samples of lilac at about 1 unit each).
+# When h is itself a points layer with the loops' count, the share counts loop sides
+# instead of loops with both sides (S30-15: 6 of 8 visible sides, 2 of 4 loops on
+# both); an unknown h still needs both sides (S5-15's unknown passes on sides only and
+# its strips cost 0.04 color).
+EDGE_SEAM_UNITS = 3.0
 BACK_TOL_DEG, BACK_MIN_UNITS, BACK_MAX_COV = 2.0, 3.0, 0.5
+EDGETIP_AXIS_DEG = 4.0
 # The backing must appear on the axis within BACK_START_UNITS of the points' tip, and
 # gaps of up to BACK_GAP_UNITS in it along the axis (texture, a stray pixel) are bridged.
 BACK_START_UNITS, BACK_GAP_UNITS = 4.0, 2.0
-EXPLAIN_MIN_LOBES, EXPLAIN_MIN_SHARE = 2 / 3, 0.5
+EXPLAIN_MIN_LOBES, EXPLAIN_MIN_SHARE = 2 / 3, 0.45
 # An unknown head-zone layer in a seam - a zone between two bands at most SEAM_PLEATS
 # pleat depths wide (parts_head.RING_MAX_GROWTH_UNITS: the center's pinked edge meets a
 # ring's pleats) - whose label is one of those bands' labels and whose area is under
@@ -59,9 +80,12 @@ def _rows(units: float, radii: np.ndarray, fr: Frame) -> int:
 
 
 def _edge_bands(pol: np.ndarray, i0: int, i1: int, g: int, h: int, params: dict,
-                win: np.ndarray) -> tuple[float, np.ndarray]:
-    """(share of the visible loops with a band of h along both sides, polar mask of the
-    band pixels found) for the loop layer of label g over radius rows i0..i1."""
+                win: np.ndarray, radii: np.ndarray | None = None, fr: Frame | None = None,
+                per_side: bool = False) -> tuple[float, np.ndarray]:
+    """(share of the visible loops with a band of h along both sides - per_side: share
+    of the visible loop sides with one -, polar mask of the band pixels found) for the
+    loop layer of label g over radius rows i0..i1. With radii and fr, a seam of up to
+    EDGE_SEAM_UNITS of another label between the loop and the band is skipped."""
     t = pol.shape[1]
     reach = t // int(params["count"])
     cut = (i1 - i0) // 5
@@ -81,6 +105,13 @@ def _edge_bands(pol: np.ndarray, i0: int, i1: int, g: int, h: int, params: dict,
                 steps = 0
                 while row[(c + d * steps) % t] == g and steps < reach:
                     steps += 1
+                if fr is not None and radii is not None:
+                    seam = int(EDGE_SEAM_UNITS * fr.scale * t / (2 * np.pi * max(radii[i], 1e-6)))
+                    k = 0
+                    while k < seam and row[(c + d * (steps + k)) % t] not in (g, h):
+                        k += 1
+                    if row[(c + d * (steps + k)) % t] == h:
+                        steps += k
                 m = 0
                 while row[(c + d * (steps + m)) % t] == h and m < reach:
                     m += 1
@@ -92,8 +123,27 @@ def _edge_bands(pol: np.ndarray, i0: int, i1: int, g: int, h: int, params: dict,
                     seen += 1
                     hits += band
             sides.append(seen > 0 and hits >= EDGE_MIN_RADII * seen)
-        lobes.append(all(sides))
+        if per_side:
+            lobes.extend(sides)
+        else:
+            lobes.append(all(sides))
     return (float(np.mean(lobes)) if lobes else 0.0), mark
+
+
+def _band_units(mark: np.ndarray, radii: np.ndarray, rows: range, lobes: int, fr: Frame) -> float:
+    """Median lateral width (canvas units) of one side's band over `rows`, from the
+    band pixels of `mark` (both sides of `lobes` visible points)."""
+    t = mark.shape[1]
+    w = [mark[i].sum() / (2 * lobes) * 2 * np.pi * radii[i] / t
+         for i in rows if mark[i].any()]
+    return fr.d(float(np.median(w))) if w else 0.0
+
+
+def _axis_gap(a: dict, b: dict) -> float:
+    """Smallest angle (degrees) between the axes of two points layers of one count."""
+    sp = 360.0 / int(a["count"])
+    d = (float(a["rotation_deg"]) - float(b["rotation_deg"])) % sp
+    return min(d, sp - d)
 
 
 def _backing_tips(pol: np.ndarray, radii: np.ndarray, i_out: int, h: int, params: dict,
@@ -155,8 +205,26 @@ def explain_trims(layers: list, meta: list[dict], pol: np.ndarray, radii: np.nda
             if role2 != "points" or g == h or j == k or meta[j]["zone"] != m["zone"]:
                 continue
             i0, i1 = meta[j]["rows"]
+            if (role == "points" and p2["kind"] != "bow" and int(params["count"]) == int(p2["count"])
+                    and _axis_gap(params, p2) <= EDGETIP_AXIS_DEG
+                    and fr.d(radii[rb - 1] - radii[rb2 - 1]) >= BACK_MIN_UNITS):
+                frac, mark = _edge_bands(pol, i0, i1, g, h, p2, win, radii, fr)
+                if frac >= EXPLAIN_MIN_LOBES:
+                    cut = (i1 - i0) // 5
+                    lobes = max(1, sum(bool(win[c]) for c in _axis_cols(p2, pol.shape[1])))
+                    side = _band_units(mark & (pol == h), radii, range(i0 + cut, i1 - cut), lobes, fr)
+                    ri, ro = float(p2["r_inner"]), r3(fr.d(radii[rb - 1]))
+                    w = float(p2["width_ratio"]) * (float(p2["r_outer"]) - ri)
+                    q = dict(p2, r_outer=ro, width_ratio=r3((w + 2 * side) / max(ro - ri, 1e-6)))
+                    tip = np.zeros(pol.shape, bool)
+                    tip[rb2 - 1:rb] = pol[rb2 - 1:rb] == h
+                    trims.append((j, ("points", h, min(frac, share2), q, 0.0, rb),
+                                  dict(meta[j], rows=(i0, rb), eats=None, trim=True)))
+                    explained |= mark | tip
+                    continue
             if p2["kind"] == "bow":
-                frac, mark = _edge_bands(pol, i0, i1, g, h, p2, win)
+                same_count = role == "points" and int(params["count"]) == int(p2["count"])
+                frac, mark = _edge_bands(pol, i0, i1, g, h, p2, win, radii, fr, per_side=same_count)
                 if frac >= EXPLAIN_MIN_LOBES:
                     w = float(p2["width_ratio"]) * (float(p2["r_outer"]) - float(p2["r_inner"]))
                     q = dict(p2, edge_width=r3(EDGE_SHARE * w))
