@@ -311,19 +311,33 @@ def test_two_color_numbered_from_outer_edge():
     groups = [group(0, (200, 30, 30)), group(1, (240, 200, 40))]
     out = A.assign(RosetteModel(parts=[head(0), *tails([1, 0, 1])], groups=groups))
     assert cats(out) == {1: 1, 0: 2}
+    # the mined rules mildly prefer the reverse: the rule's evidence keeps it unflagged
+    assert all(v >= A.FLAG_BELOW for v in conf(out).values())
+
+
+def test_mild_disagreement_flags_without_the_rule_evidence(monkeypatch):
+    # same layout as above: it is RULE_LOGODDS that keeps a mild disagreement unflagged
+    monkeypatch.setattr(A, "RULE_LOGODDS", 0.0)
+    groups = [group(0, (200, 30, 30)), group(1, (240, 200, 40))]
+    out = A.assign(RosetteModel(parts=[head(0), *tails([1, 0, 1])], groups=groups))
+    assert cats(out) == {1: 1, 0: 2}
+    assert all(v < A.FLAG_BELOW for v in conf(out).values())
 
 
 def test_three_color_numbered_from_outer_edge():
     groups = [group(0, (200, 30, 30)), group(1, (30, 30, 200)), group(2, (240, 200, 40))]
-    parts = [head(1), center(0), *tails([2, 0, 1, 0, 2])]
+    # outer stripes group 2, centre stripe group 0, head-only group 1; the mined rules
+    # alone give the large head Color 1 ({0: 3, 1: 1, 2: 2})
+    parts = [head(1), center(2), *tails([2, 0, 2])]
     out = A.assign(RosetteModel(parts=parts, groups=groups))
     assert cats(out) == {2: 1, 0: 2, 1: 3}
 
 
 def test_repeated_color_keeps_its_first_number():
-    # 1-2-1 inward: the centre stripe repeats the outer color
+    # 1-2-1-2 inward: the colors repeat; the mined rules alone call the large head's
+    # group Color 1 ({0: 2, 1: 1})
     groups = [group(0, (200, 30, 30)), group(1, (30, 30, 200))]
-    out = A.assign(RosetteModel(parts=[head(1), *tails([0, 1, 0, 1, 0])], groups=groups))
+    out = A.assign(RosetteModel(parts=[head(1, r=150), *tails([0, 1, 0, 1, 0, 1, 0])], groups=groups))
     assert cats(out) == {0: 1, 1: 2}
 
 
