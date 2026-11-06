@@ -249,6 +249,47 @@ def test_tail_with_nothing_over_it_keeps_a_flat_top_and_warns():
 
 
 
+def _tail_tops(shapes):
+    return [min(float(p.split(",")[1]) for p in s.attrs["points"].split())
+            for s in shapes if s.role == "tail_stripe" and s.kind == "color"]
+
+
+def test_head_beside_the_tail_leaves_its_top_flat_and_warns():
+    # a head is present but does not close the stripes' top edge (it lies off the tail
+    # axis): the tops stay flat at top_y and the model warns
+    from rosette.build import TAIL_UNCOVERED_WARNING
+    m = ringed(top_y=340)
+    for q in m.parts[:2]:
+        q.params["cx"] = 100
+    shapes = build(m)
+    assert _tail_tops(shapes) == [340, 340]
+    assert TAIL_UNCOVERED_WARNING in m.warnings
+
+
+def test_off_grid_top_y_with_the_head_below_still_warns():
+    # `up` from an off-grid top_y: the extension snapped to the 0.001 grid must not
+    # count as a gap closed above by the head
+    from rosette.build import TAIL_UNCOVERED_WARNING
+    m = ringed(top_y=100.3337)
+    for q in m.parts[:2]:
+        q.params["cy"] = 400  # the head lies below the tail top
+    build(m)
+    assert TAIL_UNCOVERED_WARNING in m.warnings
+
+
+def test_stripe_wholly_inside_the_head_is_dropped_and_warned():
+    # cutting a stripe to the outside of the head leaves nothing: it is not drawn
+    # (never restored uncut), and the model says so
+    from rosette.build import TAIL_HIDDEN_WARNING
+    m = ringed(top_y=340)
+    m.parts[0].params.update(cy=560, r_outer=400, r_inner=60)  # a ring over the whole tail
+    m.parts[1].params["cy"] = 560
+    shapes = build(m)
+    assert _tail_tops(shapes) == []
+    assert any(TAIL_HIDDEN_WARNING.format(part="t0") == w for w in m.warnings)
+    assert validate(write_svg(shapes)) == []
+
+
 def test_a_stripe_narrowing_downward_keeps_its_bottom():
     # a constant-width ribbon on a widening tail takes a smaller share at the bottom: its
     # side lines meet below the tail, and the stripe must still end at bottom_y

@@ -1,6 +1,8 @@
 """RosetteModel -> list[Shape] for the SVG writer."""
 from __future__ import annotations
 
+import math
+
 from shapely import LineString, Polygon, make_valid, set_precision, unary_union
 
 from .geometry import disc, outlines, pinked_circle, place_rose, points_ring, ring, tails
@@ -13,12 +15,17 @@ from .shapes import Shape
 # outline of the head shapes over them and 213 end in a point under one. Our stripes are
 # drawn at full width from top_y down as before, run on up their side lines into every
 # gap between the head shapes that opens onto the stripe's top and is closed above by
-# the head (a hole inside the head stays empty, a gap open to the outside is not filled),
-# and cut to the outside of every head shape whatever the layers, as the reference tails
+# the head (a gap open upward, past the head's top, is not filled; one opening sideways
+# past the stripe's outer side line is filled up to that line), and cut to the outside of every head shape whatever the layers, as the reference tails
 # are: every top edge then lies on a head shape's outline, in the shop and on outline
 # pages that draw hidden edges too. Where the head does not close a stripe's top edge it
 # stays flat at top_y and the model warns.
 TAIL_UNCOVERED_WARNING = "Tail top is not under any head shape - check the tail tops against the photo."
+# A stripe that lies wholly under the head is not drawn (never restored uncut).
+TAIL_HIDDEN_WARNING = ("Tail stripe {part} lies wholly under the head and is not drawn - "
+                       "check the tails against the photo.")
+# Grid (canvas units) the extension above a stripe is snapped to before it is cut.
+_GRID = 1e-3
 _HEAD_ROLES = ("head", "ring", "points", "center")
 
 _TAIL_KEYS = ("tails_count", "top_y", "bottom_y", "top_width", "bottom_width",
@@ -29,16 +36,16 @@ def _parse_stripes(s) -> list[float]:
     return [float(x) for x in str(s).split(",") if x.strip()]
 
 
-def _under_head(stripe: Shape, top_y: float, bottom_y: float, head) -> tuple[Shape, bool]:
+def _under_head(stripe: Shape, top_y: float, bottom_y: float, head) -> tuple[Shape | None, bool]:
     """The stripe run up its side lines into every gap between the head shapes that opens
     onto its top edge and is closed above by the head, and cut to the outside of the head
     (see the tail tops note). (shape, True when its top edge at top_y lies wholly under
-    the head or in such gaps)."""
+    the head or in such gaps; shape None when nothing of it lies outside the head)."""
     pts = [tuple(float(v) for v in p.split(",")) for p in stripe.attrs["points"].split()]
     tl, tr, br, bl = pts[0], pts[1], pts[2], pts[-1]
     if head is None or head.is_empty:
         return stripe, False
-    up = min(head.bounds[1], top_y) - 1.0
+    up = math.floor((min(head.bounds[1], top_y) - 1.0) / _GRID) * _GRID  # on ext's grid
     # side lines x = a + b * t (t = 0 at top_y, 1 at bottom_y); they may meet above top_y
     dl, dr = bl[0] - tl[0], br[0] - tr[0]
     t = (up - top_y) / (bottom_y - top_y)
@@ -47,13 +54,13 @@ def _under_head(stripe: Shape, top_y: float, bottom_y: float, head) -> tuple[Sha
         ring_ = [(tl[0] + dl * tm, top_y + tm * (bottom_y - top_y)), tr, tl]
     else:
         ring_ = [(tl[0] + dl * t, up), (tr[0] + dr * t, up), tr, tl]
-    ext = set_precision(Polygon(ring_), 1e-3)
+    ext = set_precision(Polygon(ring_), _GRID)
     top = LineString([tl, tr])
     gaps = [g for g in getattr(ext.difference(head), "geoms", [ext.difference(head)])
-            if isinstance(g, Polygon) and g.distance(top) < 1e-6 and g.bounds[1] > up + 1e-6]
+            if isinstance(g, Polygon) and g.distance(top) < 1e-6 and g.bounds[1] > up + _GRID / 2]
     covered = top.difference(unary_union([head, *gaps]).buffer(0.01)).length < 0.5
     shape = from_geom(unary_union([Polygon(pts), *gaps]).difference(head).simplify(SIMPLIFY), stripe)
-    return (shape or stripe), covered
+    return shape, covered
 
 
 def build(model: RosetteModel) -> list[Shape]:
@@ -132,6 +139,11 @@ def color_shapes(model: RosetteModel) -> list[tuple[Shape, Part]]:
             shape, covered = _under_head(shape, float(top_y), float(bottom_y), head_geom)
             if not covered and TAIL_UNCOVERED_WARNING not in model.warnings:
                 model.warnings.append(TAIL_UNCOVERED_WARNING)
+            if shape is None:
+                msg = TAIL_HIDDEN_WARNING.format(part=p.id)
+                if msg not in model.warnings:
+                    model.warnings.append(msg)
+                continue
             finish(p, [shape])
 
     colors.sort(key=lambda t: t[0].z)
