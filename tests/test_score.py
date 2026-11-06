@@ -116,3 +116,14 @@ def test_compare_reports_uniform_agreement_too():
     svg = svg_text("S35-19")
     r = compare(svg, svg)
     assert r["uniform_agreement"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("sid", ["S1-15", "A2-15", "S9-19", "S18-15", "A10-15"])
+def test_compare_identical_old_layout_svg_agrees_fully(sid):
+    # old-layout designer files (no Layer_2_1 toggle, or color parts outside
+    # Layer_1 / Layer_2_1_N) must score themselves as a perfect match, not 0
+    svg = svg_text(sid)
+    r = compare(svg, svg)
+    assert r["color_agreement"] == pytest.approx(1.0)
+    used = {int(m) for m in re.findall(r'class="st\d+_([1-4])"', svg)}
+    assert {e["category"] for e in r["elements"]} == used

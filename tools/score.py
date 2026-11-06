@@ -9,7 +9,9 @@ to its non-white bounding box, resize the generated crop onto the designer crop
 (nearest neighbor) and compare:
 
   color_agreement  per part region: each designer color element of the solid
-                   configuration (Layer_1, Layer_2_1_2/3/4) is rendered alone in the
+                   configuration (everything outside the shop's hidden pattern layer,
+                   rosette.roles.pattern_layer; old-layout files keep color parts in
+                   Layer_2, Layer_2_1_1 or unnamed groups) is rendered alone in the
                    same frame, minus the elements painted after it (its visible
                    region; under MIN_ELEMENT_SHARE of the rosette area skipped); the
                    generated category holding the most pixels of that region decides
@@ -57,8 +59,6 @@ SUCCESS_AGREEMENT = 0.9
 # Bar: share of IDs that must succeed.
 TARGET = 0.8
 DEFAULT_COLORS = dict(DEFAULT_PALETTE)
-# Designer groups holding the solid configuration's color elements.
-REGION_LAYERS = {"Layer_1", "Layer_2_1_2", "Layer_2_1_3", "Layer_2_1_4"}
 # Elements smaller than this share of the rosette area are not scored.
 MIN_ELEMENT_SHARE = 0.002
 _WHITE = (255, 255, 255)
@@ -125,10 +125,6 @@ def align_agreement(designer: np.ndarray, generated: np.ndarray) -> tuple[float,
     return _pixel(d, g)
 
 
-def _in_region_layers(el) -> bool:
-    return any(a.get("id") in REGION_LAYERS for a in el.iterancestors())
-
-
 def compare(designer_svg: str, generated_svg: str) -> dict:
     """color_agreement (per part region), pixel_agreement and iou of a generated SVG
     against the designer SVG."""
@@ -150,7 +146,7 @@ def compare(designer_svg: str, generated_svg: str) -> dict:
     elements = []
     for (el, _), region in zip(masks, visible):
         area = float(region.sum())
-        if not _in_region_layers(el) or area < min_px:
+        if area < min_px:
             continue
         counts = np.bincount(g[region], minlength=5)
         winner = int(counts.argmax())

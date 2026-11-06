@@ -2,7 +2,8 @@
 
 classify_roles(svg) -> [(element, role)] for every color element (class stN_1..4)
 shown in the solid configuration, i.e. outside `Layer_3` (whose elements are the
-pattern twins of `Layer_2_1` ones). Roles: head, ring, points, center, tail_stripe,
+pattern twins of `Layer_2_1` ones) when the file has both toggle groups; old-layout
+files without `Layer_2_1` show everything, as the shop does (see `pattern_layer`). Roles: head, ring, points, center, tail_stripe,
 unknown. Used for truth in the part-detection tests and for mining color rules.
 
 Each element is rendered alone (resvg), split into connected pieces and judged by its shape around the head
@@ -72,14 +73,34 @@ def _local(el) -> str:
     return etree.QName(el).localname
 
 
-def _in_layer3(el) -> bool:
-    return any(a.get("id") == "Layer_3" for a in el.iterancestors())
+def _first_by_id(root, ident: str):
+    """First descendant with this id, like `svgImg.querySelector('#id')` (root excluded)."""
+    for el in root.iterdescendants():
+        if isinstance(el.tag, str) and el.get("id") == ident:
+            return el
+    return None
+
+
+def pattern_layer(root):
+    """The group hidden in the solid configuration, or None.
+
+    The shop toggles `#Layer_3` (pattern) against `#Layer_2_1` (solid) only when
+    both exist; old-layout designer files (e.g. Layer_1 nested inside Layer_3, or a
+    top-level Layer_3 holding the only copy of the Color 3 parts) have no
+    `Layer_2_1`, so nothing is hidden and every color element shows."""
+    pl, sl = _first_by_id(root, "Layer_3"), _first_by_id(root, "Layer_2_1")
+    return pl if pl is not None and sl is not None else None
+
+
+def _in_layer3(el, hidden) -> bool:
+    return hidden is not None and any(a is hidden for a in el.iterancestors())
 
 
 def _color_elements(root) -> list:
     out = []
+    hidden = pattern_layer(root)
     for el in root.iter():
-        if not isinstance(el.tag, str) or _local(el) == "g" or _in_layer3(el):
+        if not isinstance(el.tag, str) or _local(el) == "g" or _in_layer3(el, hidden):
             continue
         if any(_COLOR.match(c) for c in (el.get("class") or "").split()):
             out.append(el)
@@ -110,12 +131,14 @@ def _style(el, extra: str) -> None:
 
 def render_categories(svg: str, height: int, colors: dict[int, str]) -> np.ndarray:
     """Solid configuration with every color element filled by its category color,
-    strokes and Layer_3 hidden, padded with a white margin (PAD_FRAC)."""
+    strokes and the pattern layer hidden (`pattern_layer`), padded with a white margin
+    (PAD_FRAC)."""
     root = etree.fromstring(svg.encode("utf-8"), etree.XMLParser(remove_comments=True, huge_tree=True))
+    hidden = pattern_layer(root)
     for el in root.iter():
         if not isinstance(el.tag, str):
             continue
-        if el.get("id") == "Layer_3":
+        if el is hidden:
             _style(el, "display:none")
             continue
         cls = (el.get("class") or "").split()
@@ -149,10 +172,11 @@ def element_masks(svg: str, height: int = RENDER_H) -> list[tuple[object, np.nda
     out = []
     for i, el in enumerate(els):
         r2 = copy.deepcopy(root)
+        hidden = pattern_layer(r2)
         for e in r2.iter():
             if not isinstance(e.tag, str):
                 continue
-            if e.get("id") == "Layer_3":
+            if e is hidden:
                 _style(e, "display:none")
             elif _local(e) != "g" and (e.get("class") or "").split():
                 _style(e, "display:none")

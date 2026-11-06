@@ -34,3 +34,31 @@ def test_layer_3_hidden():
     shown = rasterize(svg.replace('id="Layer_3"', 'id="Layer_3x"'), 850, {1: "#ff0000", 2: "#0000ff", 3: "#00ff00"})
     hidden = rasterize(svg, 850, {1: "#ff0000", 2: "#0000ff", 3: "#00ff00"})
     assert (shown != hidden).any(axis=2).mean() > 0.002
+
+
+def _svg(sid):
+    return (SVG.parent / f"{sid}.svg").read_text(encoding="utf-8")
+
+
+COLORS = {1: "#ff0000", 2: "#0000ff", 3: "#00ff00"}
+
+
+def test_old_layout_layer_1_inside_layer_3_renders():
+    # S1-15: Layer_1 and Layer_2 nested inside Layer_3, no Layer_2_1. The shop only
+    # toggles Layer_3 when Layer_2_1 also exists, so here everything is shown.
+    img = rasterize(_svg("S1-15"), 850, COLORS)
+    assert _share(img, COLORS[1]) > 0.05
+    assert _share(img, COLORS[2]) > 0.01
+
+
+def test_old_layout_top_level_layer_3_parts_shown():
+    # A2-15: top-level Layer_3 holds the Color 3 parts and there is no Layer_2_1 twin.
+    img = rasterize(_svg("A2-15"), 850, COLORS)
+    assert _share(img, COLORS[3]) > 0.01
+
+
+def test_pattern_twins_still_hidden_when_both_layers_exist():
+    # S35-19 has Layer_3 (pattern) and Layer_2_1 (solid): no pattern-class fill shows.
+    svg = _svg("S35-19").replace("st1_2_pattern", "st1_4_pattern")
+    img = rasterize(svg, 850, {**COLORS, 4: "#ffff00"})
+    assert _share(img, "#ffff00") == 0

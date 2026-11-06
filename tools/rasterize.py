@@ -9,6 +9,8 @@ import resvg_py
 from lxml import etree
 from PIL import Image
 
+from rosette.roles import pattern_layer
+
 # Default fill per color category (1-4) when the caller gives none.
 DEFAULT_PALETTE = {1: "#c0392b", 2: "#2c3e9e", 3: "#e8b923", 4: "#2e8b57"}
 
@@ -28,17 +30,19 @@ def rasterize(svg: str, height: int, category_colors: dict[int, str] | None) -> 
 
     Color classes get their category color as an inline style (inline style
     beats the file's own `fill:none` rules), `#Layer_3` is hidden so the solid
-    configuration shows, and stroke classes are hidden only when explicit
+    configuration shows (only when `#Layer_2_1` exists too, as in the shop: old-layout
+    files without it show every group), and stroke classes are hidden only when explicit
     category colors are given.
     """
     palette = dict(DEFAULT_PALETTE)
     if category_colors:
         palette.update(category_colors)
     root = etree.fromstring(svg.encode("utf-8"), etree.XMLParser(remove_comments=True, huge_tree=True))
+    hidden = pattern_layer(root)
     for el in root.iter():
         if not isinstance(el.tag, str):
             continue
-        if el.get("id") == "Layer_3":
+        if el is hidden:
             _style(el, "display:none")
             continue
         tokens = (el.get("class") or "").split()
