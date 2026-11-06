@@ -12,7 +12,7 @@ _COUNT_PARAMS = ("count", "tails_count", "tail_index", "stripe_index")
 _LIST_PARAMS = ("stripes", "stripes_bottom")
 
 
-_POSITIVE = ("r", "r_inner", "r_outer", "width_ratio", "top_width", "bottom_width")
+_POSITIVE = ("r", "r_inner", "r_outer", "width_ratio", "top_width", "bottom_width", "edge_width")
 _CANVAS = {"cx": 600, "cy": 850}  # viewBox 0 0 600 850
 
 

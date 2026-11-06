@@ -181,6 +181,8 @@ def part_area(part: Part, parts: list[Part] | None = None) -> float:
     if part.role == "points":
         ro, ri = float(p["r_outer"]), float(p["r_inner"])
         annulus = pi * max(0.0, ro * ro - ri * ri)
+        if "edge_width" in p and "count" in p:  # a loop's two edge strips (H4)
+            return min(annulus, int(p["count"]) * 2 * float(p["edge_width"]) * (ro - ri))
         if "width_ratio" in p and "count" in p:
             # a bow is a block from inner_ratio * width to width (geometry.points);
             # other kinds are tapered, about half their bounding box

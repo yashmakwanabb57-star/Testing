@@ -444,3 +444,11 @@ def test_dropped_sliver_is_warned():
     assert len(w) == 1 and "1 tail stripe" in w[0] and "check" in w[0], out.warnings
     clean = A.assign(RosetteModel(parts=[head(0), center(2), *tails([0, 1, 2, 1, 0])], groups=groups))
     assert not any("narrower" in x for x in clean.warnings)
+
+
+def test_edge_strip_area_is_two_strips_per_point():
+    # edge strips (H4) are two strips edge_width wide along each loop's length, not a
+    # loop block: a loop-sized estimate would inflate the strip color's head area
+    q = {"cx": 300, "cy": 167, "kind": "bow", "count": 6, "r_inner": 60.0, "r_outer": 100.0,
+         "rotation_deg": 0.0, "width_ratio": 0.5, "edge_width": 2.0}
+    assert A.part_area(Part("p", "points", q, 0, 20, 1.0)) == pytest.approx(6 * 2 * 2.0 * 40.0)

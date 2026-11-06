@@ -56,6 +56,7 @@ const PARAMS = {
   points: [['kind', 'Kind', 'kind'], ['count', 'Count', 'int'], ['r_inner', 'Inner radius', 'num'],
     ['r_outer', 'Outer radius', 'num'], ['rotation_deg', 'Rotation (deg)', 'num'],
     ['width_ratio', 'Width ratio', 'num'], ['inner_ratio', 'Inner ratio (bow)', 'num'],
+    ['edge_width', 'Edge strip width', 'num'],
     ['cx', 'Center x', 'num'], ['cy', 'Center y', 'num']],
   center: [['r', 'Radius', 'num'], ['cx', 'Center x', 'num'], ['cy', 'Center y', 'num']],
   unknown: [['r', 'Radius', 'num'], ['cx', 'Center x', 'num'], ['cy', 'Center y', 'num']],
