@@ -293,3 +293,54 @@ def test_pleated_inner_layer_without_symmetry_is_a_ring():
     # true edges: 100 +- 30 px and 165 +- 30 px, i.e. about 73 and 120 units
     assert 66 < q.params["r_inner"] < 80 and 110 < q.params["r_outer"] < 126
     assert FLAG_BELOW <= q.confidence < 1.0
+
+
+def _pleated(profile, band):
+    """_pleated_ring on a constructed coverage profile of label 0 (radii 30, 31, ... units,
+    1 unit each, zone = the whole profile) with a full band `band` dropped as a bridge."""
+    from rosette.vision.parts_common import Frame
+    from rosette.vision.parts_head import _Band, _pleated_ring
+    cov = np.zeros((len(profile), 1))
+    cov[:, 0] = profile
+    radii = np.arange(len(profile), dtype=float) + 30
+    return _pleated_ring(0, 0, len(profile), [_Band(band[0], band[1], 0, 1.0)], cov, radii,
+                         Frame(0.0, 0.0, 1.0))
+
+
+def test_pleated_annulus_profile_is_a_confident_ring():
+    from rosette.assign import FLAG_BELOW
+    prof = np.zeros(70)
+    prof[20:26] = np.linspace(0.1, 0.8, 6)  # pleat teeth: a few units of ramp each side
+    prof[26:44] = 1.0
+    prof[44:50] = np.linspace(0.8, 0.1, 6)
+    i0, i1, g, conf = _pleated(prof, (26, 44))
+    assert conf >= FLAG_BELOW and 20 <= i0 < 26 and 44 < i1 <= 50
+
+
+def test_poor_ring_fit_stays_under_flag_below():
+    # a full band holding little of the layer: most of it lies loose far outside
+    from rosette.assign import FLAG_BELOW
+    prof = np.zeros(90)
+    prof[20:30] = 1.0
+    prof[30:90] = 0.3
+    assert _pleated(prof, (20, 30))[3] < FLAG_BELOW
+
+
+def test_star_with_solid_body_and_tips_is_not_a_confident_ring():
+    # the solid body covers the circle, the tips reach 25 units beyond it (pleat teeth
+    # reach <= 12): a star, so the ring drawn for it must be flagged
+    from rosette.assign import FLAG_BELOW
+    prof = np.zeros(80)
+    prof[18:20] = 0.7
+    prof[20:40] = 1.0
+    prof[40:65] = np.linspace(0.5, 0.03, 25)
+    assert _pleated(prof, (20, 40))[3] < FLAG_BELOW
+
+
+def test_loops_covering_the_circle_only_at_their_base_are_not_a_confident_ring():
+    # wide loops overlap (full coverage) only over a narrow band of their length
+    from rosette.assign import FLAG_BELOW
+    prof = np.zeros(80)
+    prof[10:60] = 0.7
+    prof[30:42] = 1.0
+    assert _pleated(prof, (30, 42))[3] < FLAG_BELOW

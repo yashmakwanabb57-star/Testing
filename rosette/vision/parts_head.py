@@ -65,6 +65,18 @@ RING_EXTEND_COV = 0.6
 # would be a guess) and stops at another label's points layer once that label covers
 # RING_STOP_COV of the circle (its lobes show there, the ring must not hide them).
 RING_MAX_GROWTH_UNITS, RING_STOP_COV = 8.0, 0.4
+# A pleated layer read as a ring (no rotational symmetry, a full band dropped as a
+# bridge; see _pleated_ring) keeps its fit as confidence only when it looks like an
+# annulus: the label covers the full circle (FULL_COV) on at least PLEATED_FULL_MIN of the
+# ring's radii, and its fringe beyond the ring on either side (until its coverage falls
+# under EXTENT_COV) reaches at most PLEATED_REACH_UNITS. Otherwise the confidence is
+# capped at BLOB_UNCONFIRMED_CONF (flagged). Over the 76 photos the 16 layers this rule
+# reads, checked against the designer files: the annuli (A7-15, A9-15, A16-17, S13-15,
+# S15-15B, S18-15, S18-15B; plus the A1-15 badge rim, which the designer draws as the
+# center disc: no star or loop) have full share 0.478-0.828 and
+# fringe reach <= 12 units; the S55-15 loops have full share 0.338 (the loops overlap
+# only near their base), the star layers of S11-15 and S40-15 reach 18 units.
+PLEATED_FULL_MIN, PLEATED_REACH_UNITS = 0.4, 15.0
 # Zones thinner than this (canvas units) are band edges (teeth, polygon corners).
 MIN_ZONE_UNITS = 10.0
 # Mean zone coverage a label needs to be a candidate points layer.
@@ -404,7 +416,7 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
                     params.update(cx=r3(ccx), cy=r3(ccy))
                     layers.append(("points", g, conf, params, area, rb_blob))
                     continue
-                ring = _pleated_ring(g, a, b, bridges, cov, radii)
+                ring = _pleated_ring(g, a, b, bridges, cov, radii, fr)
                 if ring is not None:
                     pleated.append(ring)
                     continue
@@ -463,13 +475,15 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
 
 
 def _pleated_ring(g: int, a: int, b: int, bridges: list[_Band], cov: np.ndarray,
-                  radii: np.ndarray) -> tuple[int, int, int, float] | None:
+                  radii: np.ndarray, fr: Frame) -> tuple[int, int, int, float] | None:
     """(i0, i1, label, confidence) of a ring for label g in the zone a..b when g covers
     the full circle there (a band of g dropped as a bridge lies in the zone), else None.
     The ring runs out from that band, both ways, while g still holds RING_EXTEND_COV
     of the circle (the pleats' teeth; the same share a ring band is grown by). Its
     confidence is its fit: the share of the zone's g area inside the ring times g's
-    mean coverage between its radii."""
+    mean coverage between its radii, capped at BLOB_UNCONFIRMED_CONF unless the layer
+    looks like an annulus (PLEATED_FULL_MIN, PLEATED_REACH_UNITS): loops and stars must
+    stay flagged."""
     full = [bd for bd in bridges if bd.label == g and a <= bd.i0 and bd.i1 <= b]
     if not full:
         return None
@@ -481,4 +495,12 @@ def _pleated_ring(g: int, a: int, b: int, bridges: list[_Band], cov: np.ndarray,
         i1 += 1
     area = cov[a:b, g] * radii[a:b]
     inside = float(area[i0 - a:i1 - a].sum() / max(area.sum(), 1e-9))
-    return i0, i1, g, inside * float(cov[i0:i1, g].mean())
+    conf = inside * float(cov[i0:i1, g].mean())
+    out = next((i for i in range(i1, b) if cov[i, g] < EXTENT_COV), b)
+    inn = next((i for i in range(i0 - 1, a - 1, -1) if cov[i, g] < EXTENT_COV), a - 1)
+    reach = max(fr.d(radii[min(out, len(radii) - 1)] - radii[i1 - 1]),
+                fr.d(radii[i0] - radii[max(inn, 0)]))
+    full = float((cov[i0:i1, g] >= FULL_COV).mean())
+    if full < PLEATED_FULL_MIN or reach > PLEATED_REACH_UNITS:
+        conf = min(conf, BLOB_UNCONFIRMED_CONF)
+    return i0, i1, g, conf
