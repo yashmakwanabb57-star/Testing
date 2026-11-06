@@ -262,7 +262,21 @@ Started at 1bba1f2. Full notes: `.superpowers/sdd/2026-11-05-rosette-svg-generat
 
 **Detector** (`rosette/vision/parts_head.py`): a petal that keeps 0.85 of its width over at least 5 of 9 radii and fills at least 0.45 of the spacing is a loop block (`LOOP_*`; 7 designer loops converted, one designer kite, s39-15). Loops start where the ring or center over them ends; kites and petals that start within one pleat depth outside a ring start at it (`COVER_GAP_UNITS`). A low-confidence layer that runs as a narrow band along both sides of most loops becomes edge strips; one that shows beyond the tips of most points of another layer becomes a backing copy of them reaching the measured tip (`EDGE_*`, `BACK_*`, `EXPLAIN_*`; the backing is a copy of the points with the same width ratio over its longer length, so it is wider in proportion). An unknown in a seam between two bands (at most `SEAM_PLEATS` 2 pleat depths, 16 units, wide, one of the bands' colors, under `SPECK_MAX_UNITS2` 6000) is folded into the band and the seam is closed. The trims and the seam folding live in `rosette/vision/parts_trims.py`; a layer hosting another's trims is never replaced in the same pass.
 
-**76-photo numbers** (scratch `compare_all.py`): OK 45 -> 45, color 0.8365 -> 0.8387, whole shape 0.9020 -> 0.9046, head 0.8061 -> 0.8138, layer 0.2210 -> 0.2210; head-zone unknown discs 68 -> 53. No ID loses more than 0.02 (A14-17 color -0.019, s34-15 shape -0.018). S35-19: loops with edge strips, kites with backing frames, no specks; color 0.958 -> 0.959, head 0.757 -> 0.752, layer 0.027 -> 0.027 (see the report).
+**76-photo numbers** (scratch `compare_all.py`): OK 45 -> 45, color 0.8365 -> 0.8387, whole shape 0.9020 -> 0.9046, head 0.8061 -> 0.8138, layer 0.2210 -> 0.2210; head-zone unknown discs 68 -> 53. No ID loses more than 0.02 (A14-17 color -0.019, s34-15 shape -0.018). S35-19: loops with edge strips, kites with backing frames, no specks; color 0.958 -> 0.959, head 0.757 -> 0.752, layer 0.027 -> 0.027 (see the report; after the scorer frame fix e9ac42d, which takes our head center from the drawn rose circle or rings, S35-19's layer reads 0.222).
+
+## H5: tail tops under the head, stacking order, edge-plus-tip trims
+
+Started at e9ac42d. Full notes: `.superpowers/sdd/2026-11-05-rosette-svg-generator/h5-report.md`.
+
+**Tail tops** (`rosette/build.py` `_tail_tips`, `rosette/geometry/tails.py` `tip_y`). Measured on the 511 tail stripe pieces of the 78 reference files with tails: no reference draws a flat tail top (top row under 0.06 R wide in every stripe of 60 files, median 0.015 R); 213 tops are a point, 298 a slope that follows the head's lower outline (the high end on the outer side in 224 of them). Our stripes keep full width down from `top_y` (its meaning is unchanged) and close in one apex per tail on the tail axis, `TAIL_TIP_DEPTH` 0.88 head radii below the head center (median top of the sloped reference stripes, quartiles 0.68-0.97), at least `TAIL_TIP_MIN` 0.2 R above `top_y`. The apex must lie inside the drawn head; if the head does not reach that depth it moves to the nearest covered depth and the model warns (6 of the 76 photos: S15-15, S17-15, S36-15B, S40-15, S48-17, S57-17); all 76 apexes lie inside the drawn head.
+
+**Line art** (`rosette/geometry/outline.py`). The shop draws Layer_6 over everything, so st6 outlines now trace only the edges no later-painted shape hides (Layer_1 first, then Layer_2_1, each in document order). Before, the full polygon of a Color 1 tail stripe under a Color 1 head showed its top inside the head (A7-15). Shop-style render at 1700 px: tail pixels inside the head A7-15 0, S35-19 1, S30-15 4 (antialiasing; 601 before on S30-15).
+
+**Stacking order** (`tools/stacking.py`, reported by `tools/score.py`). Every pair of head pieces of the 79 references that overlap (paint order decides) or are cut along each other (the cut piece lies under; local convex hulls) was ordered by kind. Among points pieces with distinct ends the one ending further in lies on top in 92 % (1292 of 1400), which is our z rule; the one consistent kind exception is loop over star, 89 % (63 of 71 pairs, 10 files), so stars now rank under every loop (`parts_head.points_z`). Also consistent and already ours: center over ring 0.95, loop/kite/star/petal/backing over head 0.96-1.00, ring over loop 1.00, backing under its host 0.92 (by radius). Inconsistent, ours kept: kite vs star 0.55 (explained by radius), star vs ring 0.56, center vs star 0.71, head vs tail 0.54. The scoreboard prints, per ID, the kind pairs our file stacks the other way round: 8 pairs in 7 of 34 IDs, mostly tail>head where the cut heuristic cannot tell which side was cut.
+
+**Edge-plus-tip trims** (`rosette/vision/parts_trims.py`). The brief's premise for S30-15 did not hold: its reference draws 12 pink edge strips along the loops, not a larger kite behind each kite. Same-kind backings exist elsewhere (17 files; kite behind kite in 7, out 0.10 R and sides 0.035 R median), so a low-confidence points layer of the host's count and axes running along both sides of a kite, petal or star layer and ending beyond its tips becomes a backing of the host's kind, wider and longer by the measured margins (`EDGETIP_AXIS_DEG` 4; fires on none of the 76 photos). S30-15 itself is fixed through the edge-strip rule: a band may lie up to `EDGE_SEAM_UNITS` 3 off the loop side (an antialiased lilac seam), a band layer of the loops' count counts 2/3 of the loop sides instead of both sides of 2/3 of the loops (6 of 8 sides; an unknown band still needs both sides, S5-15 lost 0.04 color otherwise), and `EXPLAIN_MIN_SHARE` is 0.45 (S30-15 0.49). Only S30-15 and S56-17 change: S30-15 head 0.743 -> 0.748 (0.731 at the H5 start), layer 0.138 -> 0.146, color 0.974 -> 0.973; S56-17 (not on the scoreboard) color 0.951 -> 0.984.
+
+**Scoreboard** (34 IDs): `PASS 23/34` unchanged; shape 0.909 -> 0.911, head 0.809 -> 0.815; no ID loses color or shape. Color gains: S28-15 0.965 -> 0.998 and S69-19 0.980 -> 0.993 (loops over stars).
 
 ## Final state (Task 16)
 
@@ -291,48 +305,48 @@ Every generated file must satisfy section 3 of the [design spec](superpowers/spe
 
 `app/main.py` (FastAPI, started with `run.bat` or uvicorn on 127.0.0.1:8765) serves `app/static`. **Workbench** shows the photo, the detected model, the solid and pattern previews, edit controls and the flagged items on one screen. **Guided** walks through the same state one question at a time (`guided.js`); switching modes keeps the state. Edits go back through `render`, so the validator runs after every change.
 
-### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H3 at 112b021)
+### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H5)
 
-Re-recorded after the H1 scorer fix (every solid color element is scored; old-layout files render as in the shop), which changed two rows at the old HEAD c8d35c1: A13-15B 0.000 -> 0.187, S37-15 1.000 -> 0.949 (counts unchanged: 23/34). The H2 changes are the out-to-in Color numbering (S2-15B 0.000 -> 0.687, S68-19 0.600 -> 0.966 success) and the head-fit check (gross failures only after fix round 1). The H3 changes on these IDs come from the pleated-layer rings: S13-15 0.840 -> 0.894, S40-15 0.903 -> 0.893 (success lost, accepted by ruling, see H3), uniform column A10-15B 0.906 -> 0.942 and A16-17 0.837 -> 0.926. The last column is the H3 start (476d07e); `shape` is the whole-silhouette IoU (H3).
+Re-recorded at the end of H5; the last column is the H5 start (e9ac42d). The H3-era table (agree before H3 at 476d07e) is in git history. `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only).
 
-| ID | agree (per-axis, official) | uni (uniform scale, reported only) | success | uni success | shape | before H3 (476d07e) |
-|---|---|---|---|---|---|---|
-| A10-15B | 0.906 | 0.942 | yes | yes | 0.870 | 0.906 yes |
-| A13-15B | 0.187 | 0.187 | no | no | 0.924 | 0.187 no |
-| A14-17 | 0.968 | 0.968 | yes | yes | 0.957 | 0.968 yes |
-| A15-17 | 0.954 | 0.959 | yes | yes | 0.965 | 0.954 yes |
-| A16-17 | 0.837 | 0.926 | no | yes | 0.895 | 0.837 no |
-| A9-15B | 1.000 | 1.000 | yes | yes | 0.939 | 1.000 yes |
-| S10-19 | 0.904 | 0.904 | yes | yes | 0.881 | 0.904 yes |
-| S13-15 | 0.894 | 0.894 | no | no | 0.961 | 0.840 no |
-| S17-15 | 0.633 | 0.743 | no | no | 0.839 | 0.633 no |
-| S2-15B | 0.687 | 0.687 | no | no | 0.903 | 0.687 no |
-| S26-15 | 0.800 | 0.985 | no | yes | 0.933 | 0.800 no |
-| S28-15 | 0.967 | 0.967 | yes | yes | 0.980 | 0.967 yes |
-| S29-15 | 0.247 | 0.229 | no | no | 0.883 | 0.247 no |
-| S30-15 | 0.972 | 0.972 | yes | yes | 0.863 | 0.972 yes |
-| S31-15 | 0.929 | 0.966 | yes | yes | 0.929 | 0.929 yes |
-| S33-15 | 0.905 | 0.905 | yes | yes | 0.936 | 0.905 yes |
-| S35-19 | 0.958 | 0.960 | yes | yes | 0.897 | 0.958 yes |
-| S37-15 | 0.949 | 0.936 | yes | yes | 0.905 | 0.949 yes |
-| S40-15 | 0.893 | 0.882 | no | no | 0.885 | 0.903 yes |
-| S41-15 | 0.925 | 0.939 | yes | yes | 0.906 | 0.925 yes |
-| S43-15 | 0.957 | 0.971 | yes | yes | 0.953 | 0.957 yes |
-| S45-15 | 0.933 | 0.935 | yes | yes | 0.926 | 0.933 yes |
-| S46-15 | 0.741 | 0.926 | no | yes | 0.835 | 0.741 no |
-| S5-15 | 0.910 | 0.988 | yes | yes | 0.850 | 0.910 yes |
-| S53-19 | 0.513 | 0.513 | no | no | 0.762 | 0.513 no |
-| S56-17B | 0.972 | 0.975 | yes | yes | 0.874 | 0.972 yes |
-| S58-17 | 1.000 | 1.000 | yes | yes | 0.928 | 1.000 yes |
-| S67-19 | 0.964 | 0.964 | yes | yes | 0.947 | 0.964 yes |
-| S68-19 | 0.966 | 0.620 | yes | no | 0.885 | 0.966 yes |
-| S69-19 | 0.980 | 0.988 | yes | yes | 0.912 | 0.980 yes |
-| S70-19 | 0.956 | 0.956 | yes | yes | 0.957 | 0.956 yes |
-| S8-15 | 0.636 | 0.636 | no | no | 0.936 | 0.636 no |
-| S80-22 | 0.979 | 0.989 | yes | yes | 0.927 | 0.979 yes |
-| s34-15 | 0.951 | 0.941 | yes | yes | 0.936 | 0.951 yes |
+| ID | agree | uni | success | uni success | shape | headS | stack reversed | before H5 (e9ac42d) agree / shape / headS |
+|---|---|---|---|---|---|---|---|---|
+| A10-15B | 0.906 | 0.942 | yes | yes | 0.870 | 0.684 | 0 | 0.906 / 0.870 / 0.684 |
+| A13-15B | 0.187 | 0.187 | no | no | 0.924 | 0.962 | 1 (head>center) | 0.187 / 0.924 / 0.962 |
+| A14-17 | 0.949 | 0.949 | yes | yes | 0.957 | 0.963 | 0 | 0.949 / 0.957 / 0.963 |
+| A15-17 | 0.968 | 0.963 | yes | yes | 0.965 | 0.957 | 0 | 0.968 / 0.965 / 0.957 |
+| A16-17 | 0.837 | 0.926 | no | yes | 0.895 | 0.830 | 0 | 0.837 / 0.895 / 0.830 |
+| A9-15B | 1.000 | 1.000 | yes | yes | 0.939 | 0.828 | 0 | 1.000 / 0.939 / 0.828 |
+| S10-19 | 0.904 | 0.904 | yes | yes | 0.886 | 0.701 | 0 | 0.904 / 0.881 / 0.683 |
+| S13-15 | 0.894 | 0.894 | no | no | 0.961 | 0.926 | 0 | 0.894 / 0.961 / 0.926 |
+| S17-15 | 0.633 | 0.743 | no | no | 0.849 | 0.545 | 0 | 0.633 / 0.839 / 0.510 |
+| S2-15B | 0.687 | 0.687 | no | no | 0.923 | 0.779 | 0 | 0.687 / 0.917 / 0.760 |
+| S26-15 | 0.800 | 0.985 | no | yes | 0.933 | 0.856 | 0 | 0.800 / 0.933 / 0.856 |
+| S28-15 | 0.998 | 0.995 | yes | yes | 0.980 | 0.964 | 2 (tail>head star>loop) | 0.965 / 0.980 / 0.964 |
+| S29-15 | 0.247 | 0.229 | no | no | 0.889 | 0.672 | 0 | 0.247 / 0.883 / 0.650 |
+| S30-15 | 0.973 | 0.983 | yes | yes | 0.896 | 0.748 | 0 | 0.974 / 0.888 / 0.731 |
+| S31-15 | 0.929 | 0.966 | yes | yes | 0.932 | 0.840 | 0 | 0.929 / 0.932 / 0.840 |
+| S33-15 | 0.944 | 0.905 | yes | yes | 0.949 | 0.872 | 0 | 0.944 / 0.940 / 0.842 |
+| S35-19 | 0.959 | 0.954 | yes | yes | 0.897 | 0.761 | 0 | 0.959 / 0.895 / 0.752 |
+| S37-15 | 0.949 | 0.936 | yes | yes | 0.905 | 0.825 | 0 | 0.949 / 0.905 / 0.825 |
+| S40-15 | 0.890 | 0.882 | no | no | 0.887 | 0.771 | 0 | 0.890 / 0.883 / 0.763 |
+| S41-15 | 0.925 | 0.932 | yes | yes | 0.906 | 0.914 | 0 | 0.925 / 0.906 / 0.914 |
+| S43-15 | 1.000 | 1.000 | yes | yes | 0.953 | 0.926 | 0 | 1.000 / 0.953 / 0.926 |
+| S45-15 | 0.935 | 0.935 | yes | yes | 0.926 | 0.809 | 1 (tail>head) | 0.935 / 0.926 / 0.809 |
+| S46-15 | 0.751 | 0.936 | no | yes | 0.835 | 0.660 | 0 | 0.751 / 0.835 / 0.660 |
+| S5-15 | 0.910 | 0.988 | yes | yes | 0.850 | 0.732 | 0 | 0.910 / 0.850 / 0.732 |
+| S53-19 | 0.513 | 0.513 | no | no | 0.762 | 0.811 | 0 | 0.513 / 0.762 / 0.809 |
+| S56-17B | 0.975 | 0.978 | yes | yes | 0.875 | 0.743 | 0 | 0.972 / 0.874 / 0.740 |
+| S58-17 | 1.000 | 1.000 | yes | yes | 0.931 | 0.839 | 1 (loop>petal) | 1.000 / 0.930 / 0.837 |
+| S67-19 | 0.964 | 0.964 | yes | yes | 0.947 | 0.861 | 1 (tail>head) | 0.964 / 0.947 / 0.861 |
+| S68-19 | 0.966 | 0.620 | yes | no | 0.885 | 0.676 | 0 | 0.966 / 0.885 / 0.676 |
+| S69-19 | 0.993 | 0.988 | yes | yes | 0.921 | 0.759 | 0 | 0.980 / 0.920 / 0.759 |
+| S70-19 | 0.956 | 0.956 | yes | yes | 0.957 | 0.939 | 1 (tail>head) | 0.956 / 0.957 / 0.939 |
+| S8-15 | 0.640 | 0.640 | no | no | 0.936 | 0.841 | 0 | 0.640 / 0.936 / 0.841 |
+| S80-22 | 0.989 | 1.000 | yes | yes | 0.935 | 0.881 | 0 | 0.989 / 0.931 / 0.869 |
+| s34-15 | 0.956 | 0.951 | yes | yes | 0.924 | 0.832 | 1 (backing>star) | 0.956 / 0.918 / 0.814 |
 
-Official (per-axis): **success 23, flagged-not-success 10, silently wrong 1 (S46-15), errors 0 - `PASS 23/34`** against the bar of 28 (80 %). Reported only (uniform-scale alignment): 25/34; shape: mean whole IoU 0.908 (head 0.805, tail 0.955), shape_ok 21/34. The per-axis column is the metric and the bar; the uniform column only explains misses.
+Official (per-axis): **success 23, flagged-not-success 10, silently wrong 1 (S46-15), errors 0 - `PASS 23/34`** against the bar of 28 (80 %). Reported only (uniform-scale alignment): 25/34; shape: mean whole IoU 0.911 (head 0.815, tail 0.955), shape_ok 21/34; stacking: 8 pairs reversed in 7/34 IDs. The per-axis column is the metric and the bar; the uniform column only explains misses.
 
 Flagged although correct: 21 of the 23 successes; S28-15 and S43-15 are unflagged successes with visibly wrong heads (see 5b). S46-15 is silent again: its head fit (0.82 agreement, 0.94 outline) is not a gross failure; its miss is the scorer alignment effect described below.
 
@@ -340,11 +354,11 @@ Over all 76 reference photos (scratch `compare_all.py`, match >= 0.9 and no issu
 
 ### Sample outputs
 
-`output/s35-19.svg` and `output/s46-15.svg` were regenerated for H2 (and regenerated again for H3: byte-identical, so unchanged) from `reference/photos/S35-19.png` and `reference/photos/S46-15.png` with `rosette.pipeline.analyze` + `render`, the same code path the UI uses, and checked with `rosette.validate.validate` (both return `[]`). They are the tool's unedited output, not confirmed by a person.
+`output/s35-19.svg` and `output/s46-15.svg` were regenerated for H2 (and regenerated again for H3: byte-identical, so unchanged) from `reference/photos/S35-19.png` and `reference/photos/S46-15.png` with `rosette.pipeline.analyze` + `render`, the same code path the UI uses, and checked with `rosette.validate.validate` (both return `[]`). Regenerated again for H5 (pointed tail tops, visible-edge line art; both validate to `[]`). They are the tool's unedited output, not confirmed by a person.
 
 | Output | Flagged | Flagged items | Warnings |
 |---|---|---|---|
-| `output/s35-19.svg` | yes | two points layers with detector confidence 0.46 and 0.47 (below 0.6); three `unknown` parts (unknown-1, unknown-3, unknown-4) drawn as plain discs in the head; head fit 0.58, outline 0.69 (gross failure). No color group below 0.6. | 2 tail slivers not counted for numbering; head fit (layers and outline); unknown-1, unknown-3 and unknown-4: unrecognised shape, drawn as a plain disc |
+| `output/s35-19.svg` | yes | four points layers (loops, their edge strips, kites, their backing) with detector confidence 0.46-0.47 (below 0.6); no `unknown` parts; no color group below 0.6. | 2 tail slivers not counted for numbering |
 | `output/s46-15.svg` | no | none (head fit 0.82 / outline 0.94 is information only) | none |
 
 Before uploading either file to the shop, the user should open each photo in the UI, confirm the flags and compare the drawing with the photo. That confirmation has not been done; it is the user's step.
