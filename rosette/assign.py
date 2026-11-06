@@ -88,7 +88,11 @@ PATTERN_MERGE_PENALTY = 1000.0
 # designer SVGs (rendered rows at 35/50/65% of the tail length) is 0.44 of its row's
 # median (S6-15; next 0.46, 0.47, 0.48); detection slivers measure 0.05 (S31-15).
 SLIVER_SHARE = 0.35
-# Evidence (log-odds) of the out-to-in rule: exact on 73 of 79 designer SVGs.
+# Evidence (log-odds) of the out-to-in rule: exact on 73 of 79 designer SVGs. It is a
+# per-rosette prior applied to every tail-numbered group's logit, added to SCALE * score
+# margin; that treats SCALE as log-odds per unit of mined score margin, which holds only
+# by assumption (SCALE was tuned on the mined path alone). Changing SCALE therefore also
+# moves the flag rate of the tail-order path.
 RULE_LOGODDS = math.log(73 / 6)
 
 
