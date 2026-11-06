@@ -63,9 +63,15 @@ DEFAULT_COLORS = dict(DEFAULT_PALETTE)
 # Elements smaller than this share of the rosette area are not scored.
 MIN_ELEMENT_SHARE = 0.002
 _WHITE = (255, 255, 255)
-# Shape: whole-silhouette IoU at or above which the outline counts as right. Set in the
-# gap of the 76-photo distribution (docs/pipeline.md, shape score).
-SHAPE_OK_IOU = 0.85
+# Shape: whole-silhouette IoU at or above which the outline counts as right. Over the 76
+# reference photos (HEAD 476d07e) whole IoU runs 0.762-0.980 with no gap (steps <= 0.024),
+# median 0.909. The outlines the mismatch analysis (docs/analysis) calls grossly wrong
+# (blobs or squares for loops, missing layers, tails spread apart: S53-19 0.762, S18-15
+# 0.786, S2-15 0.798, S57-17 0.811, S36-15B 0.828) all sit below 0.85; the best rows
+# reach 0.97-0.98 (S49-17, S28-15). 0.90 sits at the median, so shape_ok is a coarse
+# "at least as good as the typical output", not a fine gate: read the per-ID IoU and
+# its change.
+SHAPE_OK_IOU = 0.90
 # Head roles scored per designer element in the shape layer score.
 SHAPE_HEAD_ROLES = ("head", "ring", "points", "center")
 
