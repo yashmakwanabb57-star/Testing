@@ -55,3 +55,13 @@ def test_model_pairs_follow_z_then_layer_order():
     assert set(pairs) == {("kite", "ring")}  # ring z 30 over the kites although Color 1
     ring.z = 20  # equal z: the shop's layer order, Color 2 later
     assert set(st.model_pairs(RosetteModel([kites, ring], groups))) == {("ring", "kite")}
+
+
+def test_summary_lines_of_mined_pairs():
+    # main's table from (below, above, same Color, how) pairs per file, no rendering
+    per_file = {"A": [("star", "loop", False, "cut"), ("star", "loop", True, "overlap")],
+                "B": [("loop", "star", False, "cut"), ("star", "loop", False, "cut")]}
+    lines = st.summary_lines(per_file)
+    row = next(line for line in lines if line.split()[:2] == ["loop", "star"])
+    above, below, n, share, files, same_n, same_share = row.split()
+    assert (n, share, files, same_n, same_share) == ("4", "0.75", "2", "1", "1.00")

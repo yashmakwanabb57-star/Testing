@@ -292,25 +292,35 @@ def disagreements(ref: list[tuple[str, str]], ours: list[tuple[str, str]]) -> li
     return out
 
 
-def main(argv: list[str]) -> int:
-    ids = argv or sorted(p.stem for p in (ROOT / "reference" / "svg").glob("*.svg"))
+def summary_lines(per_file: dict[str, list[tuple[str, str, bool, str]]]) -> list[str]:
+    """Table lines over files' (below, above, same Color, how) pairs: per kind pair the
+    majority (above, below), pairs, its share, files, same-Color pairs and their share."""
     allp, same, files = [], [], Counter()
-    for sid in ids:
-        ps = reference_pairs((ROOT / "reference" / "svg" / f"{sid}.svg").read_text(encoding="utf-8"))
-        allp += [(a, b) for a, b, _ in ps]
-        same += [(a, b) for a, b, s in ps if s]
-        for k in {tuple(sorted((a, b))) for a, b, _ in ps}:
+    for ps in per_file.values():
+        allp += [(a, b) for a, b, _, _ in ps]
+        same += [(a, b) for a, b, s, _ in ps if s]
+        for k in {tuple(sorted((a, b))) for a, b, _, _ in ps}:
             files[k] += 1
-        print(sid, len(ps), flush=True)
     ts = table(same)
-    print(f"{'above':8} {'below':8} {'n':>5} {'share':>6} {'files':>5} {'same-Color n':>12} {'share':>6}")
+    out = [f"{'above':8} {'below':8} {'n':>5} {'share':>6} {'files':>5} {'same-Color n':>12} {'share':>6}"]
     for (x, y), (xy, yx) in sorted(table(allp).items(), key=lambda kv: -sum(kv[1])):
         a, b, n = (x, y, xy) if xy >= yx else (y, x, yx)
         s = ts.get((x, y), (0, 0))
         sn = s[0] + s[1]
         sa = s[0] if a == x else s[1]
-        print(f"{a:8} {b:8} {xy + yx:5d} {n / (xy + yx):6.2f} {files[(x, y)]:5d} {sn:12d} "
-              f"{(sa / sn if sn else float('nan')):6.2f}")
+        out.append(f"{a:8} {b:8} {xy + yx:5d} {n / (xy + yx):6.2f} {files[(x, y)]:5d} {sn:12d} "
+                   f"{(sa / sn if sn else float('nan')):6.2f}")
+    return out
+
+
+def main(argv: list[str]) -> int:
+    ids = argv or sorted(p.stem for p in (ROOT / "reference" / "svg").glob("*.svg"))
+    per_file = {}
+    for sid in ids:
+        per_file[sid] = reference_pairs((ROOT / "reference" / "svg" / f"{sid}.svg").read_text(encoding="utf-8"))
+        print(sid, len(per_file[sid]), flush=True)
+    for line in summary_lines(per_file):
+        print(line)
     return 0
 
 

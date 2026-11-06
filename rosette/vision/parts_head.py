@@ -504,7 +504,10 @@ def points_z(layers: list[tuple[str, str | None, float]]) -> list[int]:
     lies on top in 92 % of the pairs with distinct ends (1292 of 1400). Loop over star is
     the exception to it that the references keep consistently (89 %, 63 of 71 pairs in
     10 files, whichever ends further out), so a star ranks as ending beyond every loop.
-    Ties keep the layers' order (a trim after its host). Non-points layers get 20."""
+    Ties keep the layers' order (a trim after its host). Non-points layers get 20.
+    The two rules can form a cycle (a kite ending inside the loops over a loop, a star
+    ending inside the kite over the kite, the loop over the star): the radius rule loses
+    for stars, which go under every loop and so under everything ranked above a loop."""
     loops = [rb for role, kind, rb in layers if role == "points" and kind == "bow"]
     stars = [rb for role, kind, rb in layers if role == "points" and kind == "star"]
     lift = max(0.0, max(loops) + 0.5 - min(stars)) if loops and stars else 0.0  # stars keep their order

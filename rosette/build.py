@@ -7,6 +7,7 @@ import math
 from shapely import Point, unary_union
 
 from .geometry.clip import clip_occluded, to_geom
+from .geometry.tails import CX as TAIL_CX
 from .model import Part, RosetteModel
 from .shapes import Shape
 
@@ -17,9 +18,11 @@ from .shapes import Shape
 # center (median top of the sloped reference stripes 0.88 R, quartiles 0.68-0.97). The apex
 # stays at least TAIL_TIP_MIN head radii above top_y (median reference taper 0.05 R) and
 # must lie inside the drawn head (any head shape covers it); when the head does not reach
-# that depth the apex moves to the nearest covered depth (TAIL_TIP_STEP steps) and warns.
+# that depth the apex moves to the nearest covered depth (TAIL_TIP_STEP steps) and warns;
+# when no depth is covered, or there is no head, it stays and warns that it shows.
 TAIL_TIP_DEPTH, TAIL_TIP_MIN, TAIL_TIP_STEP = 0.88, 0.2, 0.01
 TAIL_TIP_WARNING = "Tail top moved to stay under the head - check the tail tops against the photo."
+TAIL_UNCOVERED_WARNING = "Tail top is not under any head shape - check the tail tops against the photo."
 _HEAD_ROLES = ("head", "ring", "points", "center")
 
 _TAIL_KEYS = ("tails_count", "top_y", "bottom_y", "top_width", "bottom_width",
@@ -31,31 +34,42 @@ def _parse_stripes(s) -> list[float]:
 
 
 def _tail_tips(model: RosetteModel, head: list[Shape], key: tuple) -> list[float]:
-    """Apex height per tail (see TAIL_TIP_DEPTH); warns on the model when one moved."""
+    """Apex height per tail (see TAIL_TIP_DEPTH); warns on the model when one moved
+    (TAIL_TIP_WARNING) or lies under no head shape (TAIL_UNCOVERED_WARNING). Depths are
+    in head radii: the drawn head's largest distance from its center; without a head
+    half the tail's top width stands in for it."""
     count, top_y, tw, spread = int(key[0]), float(key[1]), float(key[3]), float(key[5])
     slopes = [0.0 if count == 1 else math.tan(math.radians(-spread / 2 + k * spread / (count - 1)))
               for k in range(count)]
     hp = next((q.params for r in ("center", "ring", "head", "points") for q in model.parts if q.role == r), None)
+
+    def warn(msg: str) -> None:
+        if msg not in model.warnings:
+            model.warnings.append(msg)
+
     if not head or hp is None:
-        return [top_y - TAIL_TIP_MIN * tw] * count
+        warn(TAIL_UNCOVERED_WARNING)
+        return [top_y - TAIL_TIP_MIN * tw / 2] * count
     sil = unary_union([to_geom(s) for s in head])
     cx, cy = float(hp["cx"]), float(hp["cy"])
     r = max(math.hypot(x - cx, y - cy) for g in getattr(sil, "geoms", [sil]) for x, y in g.exterior.coords)
     y_max = top_y - TAIL_TIP_MIN * r
     want = min(cy + TAIL_TIP_DEPTH * r, y_max)
-    out, moved = [], False
+    y_lo = min(cy, y_max)
+    out = []
     for slope in slopes:
         cands = [want]
-        y_lo = min(cy, y_max)
-        for i in range(1, int(math.ceil(2 * r / (TAIL_TIP_STEP * r))) + 1):
+        for i in range(1, int(math.ceil(2 / TAIL_TIP_STEP)) + 1):
             for y in (want - i * TAIL_TIP_STEP * r, want + i * TAIL_TIP_STEP * r):
                 if y_lo <= y <= y_max:
                     cands.append(y)
-        y = next((y for y in cands if sil.contains(Point(300.0 + (y - top_y) * slope, y))), want)
-        moved |= y != want
+        y = next((y for y in cands if sil.contains(Point(TAIL_CX + (y - top_y) * slope, y))), None)
+        if y is None:
+            warn(TAIL_UNCOVERED_WARNING)
+            y = want
+        elif y != want:
+            warn(TAIL_TIP_WARNING)
         out.append(y)
-    if moved and TAIL_TIP_WARNING not in model.warnings:
-        model.warnings.append(TAIL_TIP_WARNING)
     return out
 
 

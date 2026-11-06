@@ -85,7 +85,9 @@ def _edge_bands(pol: np.ndarray, i0: int, i1: int, g: int, h: int, params: dict,
     """(share of the visible loops with a band of h along both sides - per_side: share
     of the visible loop sides with one -, polar mask of the band pixels found) for the
     loop layer of label g over radius rows i0..i1. With radii and fr, a seam of up to
-    EDGE_SEAM_UNITS of another label between the loop and the band is skipped."""
+    EDGE_SEAM_UNITS of another label between the loop and the band is skipped; both
+    callers pass them, so the seam skip applies to every edge-band test (the H4 loop
+    edge strips for any low-confidence layer, and the H5 edge-plus-tip backing)."""
     t = pol.shape[1]
     reach = t // int(params["count"])
     cut = (i1 - i0) // 5

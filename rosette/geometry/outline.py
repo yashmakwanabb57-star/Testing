@@ -15,6 +15,8 @@ from ..shapes import Shape, fmt
 # Edges of a lower shape within this distance (canvas units) of a later shape are left
 # to the later shape's outline (they coincide: cut shapes follow the cutter's edge).
 COVER_TOL = 0.05
+# Visible fragments shorter than this (canvas units) are corner crumbs of the cut, dropped.
+MIN_FRAGMENT = 2 * COVER_TOL
 
 
 def _element(s: Shape) -> Shape:
@@ -55,7 +57,7 @@ def outlines(shapes: list[Shape]) -> list[Shape]:
             continue
         for line in _lines(edge):
             pts = list(line.coords)
-            if len(pts) >= 2:
+            if len(pts) >= 2 and line.length >= MIN_FRAGMENT:
                 out.append(Shape("polyline", {"points": " ".join(f"{fmt(x)},{fmt(y)}" for x, y in pts)},
                                  None, role=s.role, z=s.z, kind="outline"))
     return out

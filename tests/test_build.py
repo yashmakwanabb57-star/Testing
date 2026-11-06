@@ -184,6 +184,31 @@ def test_tail_stripes_never_show_inside_the_head(tail_color, head_color):
     if tail_color > head_color:
         assert all(to_geom(s).intersection(head).area < 1e-6 for s in fills)
     lines = [s for s in shapes if s.role == "tail_stripe" and s.kind == "outline"]
-    pts = [tuple(map(float, p.split(","))) for s in lines for p in s.attrs["points"].split()]
+    pts = []
+    for s in lines:  # vertices and segment midpoints
+        v = [tuple(map(float, p.split(","))) for p in s.attrs["points"].split()]
+        pts += v + [((a[0] + b[0]) / 2, (a[1] + b[1]) / 2) for a, b in zip(v, v[1:])]
     assert pts and not any(head.contains(Point(p)) for p in pts)
     assert validate(write_svg(shapes)) == []
+
+
+def test_tail_top_left_uncovered_warns():
+    # a head off the tail axis covers no depth on it: the apex cannot be hidden and the
+    # model says so
+    from rosette.build import TAIL_UNCOVERED_WARNING
+    m = ringed(top_y=340)
+    for q in m.parts[:2]:
+        q.params["cx"] = 100
+    shapes = build(m)
+    assert TAIL_UNCOVERED_WARNING in m.warnings
+    assert validate(write_svg(shapes)) == []
+
+
+def test_tail_top_without_a_head_warns():
+    from rosette.build import TAIL_UNCOVERED_WARNING, TAIL_TIP_MIN
+    m = ringed(top_y=340)
+    m.parts = m.parts[2:]
+    shapes = [t for t, _ in color_shapes(m)]
+    x, y = _tail_tops(shapes)[0]
+    assert abs(y - (340 - TAIL_TIP_MIN * 120 / 2)) < 1e-6  # half the top width stands in for R
+    assert TAIL_UNCOVERED_WARNING in m.warnings
