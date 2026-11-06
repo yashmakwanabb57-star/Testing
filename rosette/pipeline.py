@@ -157,7 +157,8 @@ def analyze(data: bytes) -> RosetteModel:
 def analyze_with_fit(data: bytes) -> tuple[RosetteModel, HeadFit | None]:
     """analyze, plus the head fit measurement (None without head parts)."""
     p = prepare(data)
-    labels, groups = pixel_groups(p)
+    merged_print: list = []
+    labels, groups = pixel_groups(p, merged=merged_print)
     parts = detect_parts(p, labels)
     used = {q.color_group for q in parts}
     model = RosetteModel(parts=parts, groups=[g for g in groups if g.id in used],
@@ -174,6 +175,9 @@ def analyze_with_fit(data: bytes) -> tuple[RosetteModel, HeadFit | None]:
         if gid in used:
             out.warnings.append(f"Color {hex_rgb(by_id[gid].rgb)} is partly patterned - a patterned ribbon "
                                 "may have been merged into it; check the colors.")
+    for rgb in merged_print:
+        out.warnings.append(f"Center badge print was merged into the badge color (print {hex_rgb(rgb)}) - "
+                            "check the center against the photo.")
     for gid in badge_print_unsure(p, labels, groups):
         if gid in used:
             out.warnings.append(f"Color {hex_rgb(by_id[gid].rgb)} may be print on the center badge (a logo) "

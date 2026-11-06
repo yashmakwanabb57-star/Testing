@@ -105,3 +105,18 @@ def test_unsure_badge_print_is_warned(monkeypatch):
     model = analyze(_photo("S46-15"))
     assert any("center badge" in w for w in model.warnings)
     assert is_flagged(model, render(model).issues)
+
+
+def test_merged_badge_print_is_warned(monkeypatch):
+    # merging print into the badge color changes the center: never silently
+    import rosette.pipeline as pl
+    real = pl.pixel_groups
+
+    def fake(p, merged=None):
+        labels, groups = real(p, merged=merged)
+        merged.append((217, 201, 155))
+        return labels, groups
+    monkeypatch.setattr(pl, "pixel_groups", fake)
+    model = analyze(_photo("S46-15"))
+    assert any("Center badge print was merged" in w for w in model.warnings)
+    assert is_flagged(model, render(model).issues)

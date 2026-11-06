@@ -24,10 +24,11 @@ Pipeline:
    tails (flat ribbon, unlike the pleated head) and away from absorbed print;
    pattern = texture > PATTERN_T.
 6. A small group lying wholly inside the head and enclosed by a center badge (one
-   other group around it whose disc ends well inside the head) may be print on the
-   badge (a logo) or a ribbon color (a Color 4 center). No measured signal tells the
-   two apart (see BADGE_*), so the group is kept and badge_print_unsure reports it for
-   a warning.
+   other group around it whose disc ends well inside the head) is print on the badge
+   (a logo) when its shape is neither a disc nor a ring around the center: a ribbon
+   color showing in the middle is a solid disc or ring, a map or lettering is not.
+   Print joins the badge's group (recorded in `merged` for a warning); every other
+   badge candidate is kept and reported by badge_print_unsure.
 """
 from __future__ import annotations
 
@@ -128,11 +129,22 @@ BADGE_IN_HEAD, BADGE_MAX_AREA = 0.95, 0.09
 # coverage below one half) before BADGE_EDGE head radii: a badge, not the head disc. The
 # A1-15 gold badge is itself the candidate; around it the pink head disc runs on to the
 # rim, so it is not reported (the designer draws it as the center).
-# Such a group is only reported, never merged: no print signal from its own pixels
-# separates the A7-15 logo from the center discs of the 76 photos (satin, roses: own
-# eroded texture 10.2 vs plain centers 1.8-23.4; second-tone share 0.086 vs 0.002-0.883;
-# texture over the badge's own 0.71 vs 0.19-10.9).
-BADGE_BAND_UNITS, BADGE_EDGE, BADGE_UNSURE = 8.0, 0.8, 0.6
+# Texture is no print signal here: measured over the group's own pixels it does not
+# separate the A7-15 logo from the center discs of the 76 photos (satin, roses: own
+# eroded texture 10.2 vs 1.8-23.4; second-tone share 0.086 vs 0.002-0.883; texture over
+# the badge's own 0.71 vs 0.19-10.9). Shape is: a candidate enclosed by >= BADGE_ENCLOSED
+# is print when less than BADGE_SHAPE_MIN of its pixels lie on circles around its own
+# centroid that it covers to >= FULL_RING_COV (a disc or a ring puts nearly all its
+# pixels there; a map outline or lettering does not). A7-15 logo 0.549; synthetic discs
+# among pleat folds 0.998, a gold ring 0.993; discs whose rim wanders +-20 % of the
+# radius >= 0.855, a ring with +-10 % rims 0.857. 0.7 sits in that gap. Circles around
+# the centroid, not the head center: a disc 10 units off the head center would read 0.63
+# around the head center. (Also measured, not used: circle solidity, pixels over the
+# area inside the radius holding 95 % of them, A7-15 0.634 vs discs 1.05, but a ring
+# reads low too; convex hull solidity 0.795 vs 1.02; components after a 1 px opening:
+# A7-15 is one large piece like a disc, so it does not separate.)
+BADGE_BAND_UNITS, BADGE_EDGE, BADGE_UNSURE, BADGE_ENCLOSED = 8.0, 0.8, 0.6, 0.9
+BADGE_SHAPE_MIN, FULL_RING_COV = 0.7, 0.8
 
 
 def _lab(rgb: np.ndarray) -> np.ndarray:
@@ -408,8 +420,10 @@ def _flat(feat_img: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return grad <= np.percentile(grad, FLAT_PCT)
 
 
-def pixel_groups(p: Prepared, max_groups: int = 6) -> tuple[np.ndarray, list[ColorGroup]]:
-    """Label every mask pixel with a color group; see module docstring."""
+def pixel_groups(p: Prepared, max_groups: int = 6,
+                 merged: list | None = None) -> tuple[np.ndarray, list[ColorGroup]]:
+    """Label every mask pixel with a color group; see module docstring. Print merged
+    into a center badge (step 6) appends its color (r, g, b) to `merged` when given."""
     mask = p.mask
     lab = _lab(p.rgb)
     feat_img = _features(lab, mask, p.scale)
@@ -434,7 +448,36 @@ def pixel_groups(p: Prepared, max_groups: int = 6) -> tuple[np.ndarray, list[Col
     # print (text) is sparse and must not make its ribbon a pattern: keep every
     # window that sees print out of the texture measurement
     near_print = cv2.dilate(printed.astype(np.uint8), np.ones((win, win), np.uint8)) > 0
-    return labels, _groups(p, labels, absorbed, std, near_print)
+    groups = _groups(p, labels, absorbed, std, near_print)
+    done = False
+    for g, b, enclosed in _badge_prints(p, labels, groups):
+        if enclosed >= BADGE_ENCLOSED and _disc_or_ring_share(p, labels, g) < BADGE_SHAPE_MIN:
+            region = labels == g  # print on the badge: its pixels count for the badge
+            labels[region] = b
+            absorbed |= region
+            near_print |= cv2.dilate(region.astype(np.uint8), np.ones((win, win), np.uint8)) > 0
+            if merged is not None:
+                merged.append(groups[g].rgb)
+            done = True
+    if done:
+        labels = _by_area(labels, mask)
+        groups = _groups(p, labels, absorbed, std, near_print)
+    return labels, groups
+
+
+def _disc_or_ring_share(p: Prepared, labels: np.ndarray, gid: int) -> float:
+    """Share of the group's pixels lying on circles around its own centroid that the
+    group covers to >= FULL_RING_COV: near 1 for a disc or a ring (the centroid, not
+    the head center, so a center a few units off still reads as a disc)."""
+    ys, xs = np.nonzero(labels == gid)
+    if len(ys) == 0:
+        return 1.0
+    cx, cy = float(xs.mean()), float(ys.mean())
+    d = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2)
+    step = max(0.5, p.scale)
+    radii = np.arange(step / 2, d.max() + step, step)
+    cov = (polar_sample((labels == gid).astype(np.int8), cx, cy, radii, 360, fill=0) > 0).mean(axis=1)
+    return float((cov[np.minimum((d / step).astype(int), len(radii) - 1)] >= FULL_RING_COV).mean())
 
 
 def _by_area(labels: np.ndarray, mask: np.ndarray) -> np.ndarray:
@@ -504,8 +547,9 @@ def _badge_prints(p: Prepared, labels: np.ndarray, groups: list[ColorGroup]) -> 
 
 
 def badge_print_unsure(p: Prepared, labels: np.ndarray, groups: list[ColorGroup]) -> list[int]:
-    """Ids of groups on a center badge: print (a logo) or a small ribbon color, which
-    the photo cannot tell apart (see BADGE_*); the user is asked to check them."""
+    """Ids of groups on a center badge that were kept (a disc or ring shape, or less
+    clearly enclosed than BADGE_ENCLOSED): print or a small ribbon color; the user is
+    asked to check them."""
     return [g for g, _, _ in _badge_prints(p, labels, groups)]
 
 

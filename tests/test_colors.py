@@ -291,12 +291,14 @@ DARK, LIGHT, BEIGE, GOLD = (45, -30, 10), (85, -30, 50), (80, 2, 22), (70, 10, 6
 
 
 def _badge_rosette(logo: str = "print", logo_r: float = 28.0, logo_at: tuple = (0.0, 0.0),
-                   pleats: bool = False) -> Prepared:
+                   pleats: bool = False, shape: str = "disc") -> Prepared:
     """Synthetic rosette: dark pleat disc (r 150) with a light inner layer (r 60..100) and
     a dark badge (r < 60); a logo of radius logo_r sits on it at offset logo_at from the
     head center. logo: 'print' (beige with print strokes: high texture), 'plain' (gold
     satin: a ribbon color) or 'none'. pleats: the pleated layers around the badge get
-    radial light/dark folds (as photographed pleats do). Below the head two tails:
+    radial light/dark folds (as photographed pleats do). shape: 'disc' (radius logo_r),
+    'map' (an irregular lobed outline reaching logo_r, like a printed map) or 'ring'
+    (logo_r/2..logo_r, the badge color inside). Below the head two tails:
     dark | light | dark."""
     h, w = 800, 500
     cx, cy, r = 250.0, 200.0, 150.0
@@ -314,6 +316,11 @@ def _badge_rosette(logo: str = "print", logo_r: float = 28.0, logo_at: tuple = (
     if logo != "none":
         dl = np.hypot(xx - cx - logo_at[0], yy - cy - logo_at[1])
         spot = dl < logo_r
+        if shape == "map":
+            ang = np.arctan2(yy - cy - logo_at[1], xx - cx - logo_at[0])
+            spot = dl < logo_r * (0.6 + 0.3 * np.sin(3 * ang + 0.4) + 0.1 * np.sin(5 * ang))
+        elif shape == "ring":
+            spot &= dl >= logo_r / 2
         lab[spot] = BEIGE if logo == "print" else GOLD
         if logo == "print":  # printed detail: short dark strokes (lettering, outlines)
             xi, yi = xx.astype(int), yy.astype(int)
@@ -332,26 +339,49 @@ def _group_near(groups, lab_color) -> list:
     return [g for g in groups if np.abs(np.array(g.rgb) - want).sum() < 40]
 
 
-def test_print_on_the_center_badge_is_reported_not_merged():
-    # head-only texture cannot tell print from satin (the head's pleats add texture of
-    # their own), so a group on a center badge stays a color and is reported
+def test_print_on_the_center_badge_is_not_a_color_group():
+    # a printed map on the badge: not a disc or ring, so it is print: its pixels count
+    # for the badge and the merge is recorded (the pipeline warns about it)
+    merged = []
+    labels, groups = pixel_groups(_badge_rosette("print", logo_r=50.0, shape="map"), merged=merged)
+    assert not _group_near(groups, BEIGE)
+    assert len(groups) == 2
+    dark = _group_near(groups, DARK)[0].id
+    assert _label_at(labels, 250, 200) == dark
+    assert len(merged) == 1
+
+
+def test_disc_shaped_print_is_kept_and_reported():
+    # print filling a round disc cannot be told from a satin center by its shape: it
+    # stays a color and is reported (head-only texture is no evidence)
     from rosette.vision.colors import badge_print_unsure
     p = _badge_rosette("print")
-    labels, groups = pixel_groups(p)
+    merged = []
+    labels, groups = pixel_groups(p, merged=merged)
     beige = _group_near(groups, BEIGE)
     assert len(beige) == 1 and _label_at(labels, 250, 200) == beige[0].id
-    assert badge_print_unsure(p, labels, groups) == [beige[0].id]
+    assert badge_print_unsure(p, labels, groups) == [beige[0].id] and merged == []
 
 
 def test_plain_small_center_color_stays_a_group():
     # a gold satin center (a ribbon color, e.g. Color 4) among pleated layers: it reads
     # as textured like print does, so it must survive (and be flagged for a check)
     from rosette.vision.colors import badge_print_unsure
+    from rosette.vision.colors import BADGE_ENCLOSED, _badge_prints
     p = _badge_rosette("plain", pleats=True)
     labels, groups = pixel_groups(p)
     gold = _group_near(groups, GOLD)
     assert len(gold) == 1 and _label_at(labels, 250, 200) == gold[0].id
     assert badge_print_unsure(p, labels, groups) == [gold[0].id]
+    # it meets every structural condition of badge print: only its solid shape saves it
+    assert [(g, e >= BADGE_ENCLOSED) for g, _, e in _badge_prints(p, labels, groups)] == [(gold[0].id, True)]
+
+
+def test_color_ring_in_the_center_survives():
+    # a gold ring (a ribbon color) around a badge-colored middle, inside the badge
+    labels, groups = pixel_groups(_badge_rosette("plain", logo_r=40.0, pleats=True, shape="ring"))
+    gold = _group_near(groups, GOLD)
+    assert len(gold) == 1 and _label_at(labels, 250, 170) == gold[0].id
 
 
 def test_print_not_inside_the_badge_is_unchanged():
@@ -385,3 +415,10 @@ def test_badge_candidates_are_reported_whatever_their_texture():
     assert badge_print_unsure(p, labels, groups) == [2]
     labels[(d >= 30) & (d < 60) & (xx > 200)] = 1  # half the band is the light layer
     assert badge_print_unsure(p, labels, groups) == []  # enclosed < BADGE_UNSURE
+
+
+def test_solid_center_disc_off_the_head_center_survives():
+    # the head center can be a few units off: a solid disc still reads as a disc
+    labels, groups = pixel_groups(_badge_rosette("plain", logo_r=30.0, logo_at=(10.0, 0.0), pleats=True))
+    gold = _group_near(groups, GOLD)
+    assert len(gold) == 1 and _label_at(labels, 260, 200) == gold[0].id
