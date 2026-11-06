@@ -43,7 +43,8 @@ def _ring_circles(d: str) -> list[tuple[float, float, float]]:
 
 def to_geom(s: Shape) -> BaseGeometry:
     """Shapely geometry of a color shape; ValueError for a shape this module cannot
-    read (only the geometry package's polygons, circles and ring paths are known)."""
+    read (only the geometry package's polygons, circles, ring paths and the even-odd
+    paths of cut shapes are known)."""
     a = s.attrs
     if s.tag == "polygon":
         nums = [float(v) for v in re.findall(_NUM, a["points"])]
@@ -52,6 +53,15 @@ def to_geom(s: Shape) -> BaseGeometry:
             return Polygon(pts).buffer(0)
     if s.tag == "circle":
         return Point(float(a["cx"]), float(a["cy"])).buffer(float(a["r"]), quad_segs=QUAD_SEGS)
+    if s.tag == "path" and re.fullmatch(r"(M[-\d.,e ]+z)+", a.get("d", "")):
+        geom = None  # an even-odd path of straight rings (from_geom)
+        for sub in a["d"].split("M")[1:]:
+            nums = [float(v) for v in re.findall(_NUM, sub)]
+            if len(nums) >= 6:
+                ring_ = Polygon(list(zip(nums[0::2], nums[1::2]))).buffer(0)
+                geom = ring_ if geom is None else geom.symmetric_difference(ring_)
+        if geom is not None:
+            return geom
     if s.tag == "path" and "a" in a.get("d", ""):
         circles = _ring_circles(a["d"])
         if not circles:

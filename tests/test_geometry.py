@@ -248,3 +248,49 @@ def test_tail_stripes_converge_to_a_point_above_top_y():
     total = sum(area(pts_of(s)) for s in t[1])
     trap = (60 + 90) / 2 * 620 + 60 * 30 / 2
     assert abs(total - trap) / trap < 0.01
+
+
+def _outline_points(o):
+    pts = [tuple(map(float, p.split(","))) for p in o.attrs["points"].split()]
+    mids = [((a[0] + b[0]) / 2, (a[1] + b[1]) / 2) for a, b in zip(pts, pts[1:])]
+    return pts + mids
+
+
+def _poly(pts, cat, role):
+    from rosette.geometry.common import points_attr
+    return Shape("polygon", {"points": points_attr(pts)}, cat, role=role, kind="color")
+
+
+def test_outline_traces_only_edges_no_later_shape_hides():
+    # H5 (A7-15): st6 line art is drawn over everything, so an outline must leave out
+    # the edges that a shape painted later (same Color: later in the layer) covers
+    from shapely import Point, Polygon
+    lower = _poly([(0, 0), (100, 0), (100, 100), (0, 100)], 1, "lower")
+    upper = _poly([(50, 50), (150, 50), (150, 150), (50, 150)], 1, "upper")
+    out = outlines([lower, upper])
+    inner = Polygon([(50, 50), (150, 50), (150, 150), (50, 150)]).buffer(-0.5)
+    pts = [p for o in out if o.role == "lower" for p in _outline_points(o)]
+    assert pts and not any(inner.contains(Point(p)) for p in pts)
+    assert any(abs(x - 100) < 1e-6 and 0 < y < 50 for x, y in pts)  # its visible edges stay
+    up = [o for o in out if o.role == "upper"]
+    assert len(up) == 1 and Polygon(_outline_points(up[0])[:5]).area == 10000  # whole outline
+    # the shop paints Layer_1 (Color 1) before Layer_2_1: a Color 2 shape listed first
+    # still hides the Color 1 one
+    up2 = _poly([(50, 50), (150, 50), (150, 150), (50, 150)], 2, "upper")
+    out = outlines([up2, lower])
+    assert not [o for o in out if o.role == "lower" and any(inner.contains(Point(p)) for p in _outline_points(o))]
+
+
+def test_stripe_outline_stops_at_a_pinked_head_painted_later():
+    from shapely import Point
+    from rosette.geometry.clip import to_geom
+    head = pinked_circle(300, 200, 120)
+    head.category, head.kind, head.role = 1, "color", "head"
+    t = tails(250, 800, 1, 120, 160, 0, [1, 1, 1], tip_y=230)
+    stripes = [s for s in t[0]]
+    for s in stripes:
+        s.category, s.kind, s.role = 1, "color", "tail_stripe"
+    out = outlines(stripes + [head])
+    inner = to_geom(head).buffer(-0.5)
+    pts = [p for o in out if o.role == "tail_stripe" for p in _outline_points(o)]
+    assert pts and not any(inner.contains(Point(p)) for p in pts)

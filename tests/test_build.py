@@ -1,6 +1,6 @@
 import pytest
 
-from rosette.build import build
+from rosette.build import build, color_shapes
 from rosette.model import ColorGroup, Part, RosetteModel
 from rosette.validate import validate
 from rosette.writer import write_svg
@@ -135,18 +135,18 @@ def test_tail_top_is_a_point_inside_the_head_at_the_mined_depth():
     from rosette.build import TAIL_TIP_DEPTH, TAIL_TIP_MIN
     for top_y in (400, 340):  # apex at the mined depth, or TAIL_TIP_MIN above a shallow top_y
         m = ringed(top_y=top_y)
-        shapes = build(m)
+        shapes = [t for t, _ in color_shapes(m)]  # before the cuts
         x, y = _tail_tops(shapes)[0]
         assert abs(x - 300) < 1e-6 and abs(y - min(200 + TAIL_TIP_DEPTH * 150, top_y - TAIL_TIP_MIN * 150)) < 0.5
     m = ringed(top_y=400)
-    shapes = build(m)
+    shapes = [t for t, _ in color_shapes(m)]  # before the cuts
     tops = _tail_tops(shapes)
     assert len(tops) == 2 and len({(round(x, 2), round(y, 2)) for x, y in tops}) == 1
     x, y = tops[0]
     assert abs(x - 300) < 1e-6 and abs(y - (200 + TAIL_TIP_DEPTH * 150)) < 0.5
     assert y < 400 - TAIL_TIP_MIN * 150 + 1e-6
     assert not m.warnings
-    assert validate(write_svg(shapes)) == []
+    assert validate(write_svg(build(m))) == []
 
 
 def test_tail_top_moves_to_the_nearest_covered_depth_and_warns():
@@ -156,8 +156,34 @@ def test_tail_top_moves_to_the_nearest_covered_depth_and_warns():
     m = ringed(top_y=340)
     m.parts[0] = Part("pts", "points", {"cx": 300, "cy": 200, "kind": "diamond", "count": 4, "r_inner": 50,
                                         "r_outer": 150, "rotation_deg": 45, "width_ratio": 0.5}, 2, 20, 1.0)
-    shapes = build(m)
+    shapes = [t for t, _ in color_shapes(m)]  # before the cuts
     x, y = _tail_tops(shapes)[0]
     assert abs(x - 300) < 1e-6 and 250 < y <= 260 + 1e-6 < 200 + TAIL_TIP_DEPTH * 150
     assert any("tail top" in w.lower() for w in m.warnings)
+    assert validate(write_svg(build(m))) == []
+
+
+@pytest.mark.parametrize("tail_color, head_color", [(2, 1), (1, 2), (1, 1)])
+def test_tail_stripes_never_show_inside_the_head(tail_color, head_color):
+    # H5 (A7-15): the shop paints Layer_1 first and draws the st6 line art over
+    # everything: a stripe painted after the head is cut to the head's outside, and no
+    # stripe outline runs inside the head whatever the layers
+    from shapely import Point
+    from rosette.geometry.clip import to_geom
+    groups = [ColorGroup(1, (200, 30, 30), False, 0.1, 0.3, 1, 0.9),
+              ColorGroup(2, (30, 30, 200), False, 0.9, 0.3, 2, 0.9)]
+    parts = [Part("head", "head", {"cx": 300, "cy": 200, "r": 120, "pinked": 1}, head_color, 10, 1.0)]
+    for i in range(3):
+        parts.append(Part(f"t{i}", "tail_stripe", {
+            "tail_index": 0, "stripe_index": i, "tails_count": 1, "top_y": 300, "bottom_y": 800,
+            "top_width": 120, "bottom_width": 160, "spread_deg": 0, "stripes": "1,1,1"}, tail_color, 0, 1.0))
+    shapes = build(RosetteModel(parts, groups))
+    head = to_geom(next(s for s in shapes if s.kind == "color" and s.role == "head")).buffer(-0.5)
+    fills = [s for s in shapes if s.role == "tail_stripe" and s.kind == "color"]
+    assert len(fills) == 3
+    if tail_color > head_color:
+        assert all(to_geom(s).intersection(head).area < 1e-6 for s in fills)
+    lines = [s for s in shapes if s.role == "tail_stripe" and s.kind == "outline"]
+    pts = [tuple(map(float, p.split(","))) for s in lines for p in s.attrs["points"].split()]
+    assert pts and not any(head.contains(Point(p)) for p in pts)
     assert validate(write_svg(shapes)) == []
