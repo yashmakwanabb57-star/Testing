@@ -21,7 +21,7 @@ tools/mine_rules.py into rosette/data/assign_rules.json.
    are numbered by the tail stripes from the outer tail edge inward - the outermost
    stripe's group is Color 1, the next new group inward Color 2, and so on (a group
    repeating further in keeps its number). Sliver stripes (narrower than
-   SLIVER_SHARE of the median stripe width) do not count. Groups in no counted
+   SLIVER_SHARE of the median stripe width) do not count and are warned. Groups in no counted
    stripe (head-only colors) take the following numbers, larger visible area
    (part_area summed) first, ties by lower group id. A real pattern group that does
    not land on Color 2 is warned and flagged, not moved. Asymmetric ('flag') tails
@@ -207,20 +207,28 @@ def stripe_width(params: dict) -> float:
     return f[i] / sum(f) * w
 
 
+def tail_slivers(parts: list[Part]) -> list[Part]:
+    """Tail stripes narrower than SLIVER_SHARE of the median stripe width."""
+    stripes = [q for q in parts if q.role == "tail_stripe"]
+    if not stripes:
+        return []
+    widths = [stripe_width(q.params) for q in stripes]
+    med = float(np.median(widths))
+    return [q for q, w in zip(stripes, widths) if w < SLIVER_SHARE * med]
+
+
 def outer_in_order(parts: list[Part]) -> list[int] | None:
     """Color groups by first appearance walking the tail stripes from the outer tail
-    edge inward (by |stripe_dx|, slivers under SLIVER_SHARE of the median stripe width
-    skipped), or None when there are no tail stripes or the left-to-right color
-    sequence of the counted stripes (runs collapsed) is not mirror-symmetric."""
+    edge inward (by |stripe_dx|, slivers (tail_slivers) skipped), or None when there are
+    no tail stripes or the left-to-right color sequence of the counted stripes is not
+    mirror-symmetric (stripe by stripe: a doubled stripe on one side only breaks it)."""
     stripes = [q for q in parts if q.role == "tail_stripe"]
     if not stripes:
         return None
-    widths = [stripe_width(q.params) for q in stripes]
-    med = float(np.median(widths))
-    kept = [(stripe_dx(q.params), q.color_group) for q, w in zip(stripes, widths) if w >= SLIVER_SHARE * med]
+    slivers = {id(q) for q in tail_slivers(parts)}
+    kept = [(stripe_dx(q.params), q.color_group) for q in stripes if id(q) not in slivers]
     seq = [g for _, g in sorted(kept, key=lambda t: t[0])]
-    runs = [g for i, g in enumerate(seq) if i == 0 or seq[i - 1] != g]
-    if runs != runs[::-1]:
+    if seq != seq[::-1]:
         return None
     order: list[int] = []
     for _, g in sorted(kept, key=lambda t: -abs(t[0])):
@@ -346,6 +354,11 @@ def assign(model: RosetteModel, rules: dict | None = None) -> RosetteModel:
         rest = sorted((gid for gid in used if gid not in order), key=lambda gid: (-area[gid], gid))
         num = {gid: n + 1 for n, gid in enumerate(order + rest)}
         rule = tuple(num[gid] for gid in used)
+        n_sliver = len(tail_slivers([q for q in out.parts if q.color_group in col]))
+        if n_sliver:
+            out.warnings.append(f"{n_sliver} tail stripe(s) narrower than {SLIVER_SHARE:.0%} of the median stripe "
+                                "width were not counted for the Color numbering (Color 1 = outermost counted "
+                                "stripe) - check the tail colors.")
         forced = None  # the pattern rule only checks (below)
 
     maps = []

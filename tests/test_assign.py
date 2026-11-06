@@ -428,3 +428,19 @@ def test_two_patterns_by_tail_order_warn_only_the_one_off_color2():
     assert conf(out)[1] >= A.FLAG_BELOW
     assert conf(out)[2] < A.FLAG_BELOW
     assert any("#f0c828" in w and "tail order" in w for w in out.warnings), out.warnings
+
+
+def test_uneven_repeat_is_not_symmetric():
+    # [0, 0, 1, 0]: a doubled stripe on one side only is not mirror-symmetric
+    assert A.outer_in_order(tails([0, 0, 1, 0])) is None
+    assert A.outer_in_order(tails([0, 1, 1, 0])) == [0, 1]
+
+
+def test_dropped_sliver_is_warned():
+    groups = [group(0, (200, 30, 30)), group(1, (30, 30, 200)), group(2, (240, 200, 40))]
+    parts = [head(0), center(2), *tails([2, 0, 1, 2, 1, 0], fracs=[0.01, 0.19, 0.2, 0.2, 0.2, 0.2])]
+    out = A.assign(RosetteModel(parts=parts, groups=groups))
+    w = [x for x in out.warnings if "sliver" in x or "narrower" in x]
+    assert len(w) == 1 and "1 tail stripe" in w[0] and "check" in w[0], out.warnings
+    clean = A.assign(RosetteModel(parts=[head(0), center(2), *tails([0, 1, 2, 1, 0])], groups=groups))
+    assert not any("narrower" in x for x in clean.warnings)
