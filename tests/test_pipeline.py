@@ -120,3 +120,19 @@ def test_merged_badge_print_is_warned(monkeypatch):
     model = analyze(_photo("S46-15"))
     assert any("Center badge print was merged" in w for w in model.warnings)
     assert is_flagged(model, render(model).issues)
+
+
+def test_unknown_speck_is_left_out_and_warned(monkeypatch):
+    # an unknown speck the detector reports is not drawn; the model says so
+    import rosette.pipeline as pl
+    real = pl.detect_parts
+
+    def fake(p, labels, *args, **kwargs):
+        parts = real(p, labels, *args, **kwargs)
+        g = parts[0].color_group
+        return parts + [Part("unknown-9", "unknown", {"cx": 430.0, "cy": 290.0, "r": 3.0}, g, 60, 0.2)]
+    monkeypatch.setattr(pl, "detect_parts", fake)
+    model = analyze(_photo("S46-15"))
+    assert not any(q.id == "unknown-9" for q in model.parts)
+    assert any("unknown-9" in w for w in model.warnings)
+    assert render(model).issues == []
