@@ -227,3 +227,24 @@ def test_edited_inner_ratio_changes_only_the_loop_base():
     assert abs(max(math.dist(v, (300, 167)) for v in p) - (90 + 0.6 * sag)) < 1e-3
     # between the base and full width it follows the loop profile's shape
     assert width_along_x(q, 360) > width_along_x(p, 360) > 0.6 * w
+
+
+def test_tail_stripes_converge_to_a_point_above_top_y():
+    # H5: every stripe's top ends in the tail's apex (no flat top edge); the stripes
+    # still reach full width at top_y and keep their side lines and pinked bottom
+    t = tails(200, 820, 3, 60, 90, 30, [0.3, 0.4, 0.3], tip_y=170)
+    for k, row in enumerate(t):
+        apexes = set()
+        for s in row:
+            p = pts_of(s)
+            top = min(y for _, y in p)
+            assert abs(top - 170) < 1e-6
+            assert sum(abs(y - top) < 1e-6 for _, y in p) == 1  # one top point, no edge
+            apexes.add(next((round(x, 3), round(y, 3)) for x, y in p if abs(y - top) < 1e-6))
+            assert sum(abs(y - 200) < 1e-6 for _, y in p) == 2  # full width at top_y
+        assert len(apexes) == 1  # the stripes of a tail share the apex: no gaps between them
+    (mid,) = {next((x, y) for x, y in pts_of(s) if abs(y - 170) < 1e-6) for s in t[1]}
+    assert abs(mid[0] - 300) < 1e-6
+    total = sum(area(pts_of(s)) for s in t[1])
+    trap = (60 + 90) / 2 * 620 + 60 * 30 / 2
+    assert abs(total - trap) / trap < 0.01

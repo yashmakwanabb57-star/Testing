@@ -105,3 +105,59 @@ def test_clip_rejects_unknown_color_shape():
     top = Shape("circle", {"cx": "5", "cy": "5", "r": "3"}, 1, z=5)
     with pytest.raises(ValueError):
         clip_occluded([odd, top])
+
+
+def _tail_tops(shapes):
+    from rosette.geometry.clip import to_geom
+    out = []
+    for s in shapes:
+        if s.kind == "color" and s.role == "tail_stripe":
+            g = to_geom(s)
+            xs, ys = g.exterior.coords.xy if hasattr(g, "exterior") else (None, None)
+            i = min(range(len(ys)), key=lambda k: ys[k])
+            out.append((xs[i], ys[i]))
+    return out
+
+
+def ringed(top_y, ring_out=150.0):
+    groups = [ColorGroup(1, (200, 30, 30), False, 0.1, 0.3, 1, 0.9),
+              ColorGroup(2, (30, 30, 200), False, 0.9, 0.3, 2, 0.9)]
+    parts = [Part("ring", "ring", {"cx": 300, "cy": 200, "r_outer": ring_out, "r_inner": 60}, 2, 30, 1.0),
+             Part("ctr", "center", {"cx": 300, "cy": 200, "r": 60}, 2, 50, 1.0)]  # tails Color 1: not cut
+    for i in range(2):
+        parts.append(Part(f"t{i}", "tail_stripe", {
+            "tail_index": 0, "stripe_index": i, "tails_count": 1, "top_y": top_y, "bottom_y": 800,
+            "top_width": 120, "bottom_width": 160, "spread_deg": 0, "stripes": "1,1"}, 1, 0, 1.0))
+    return RosetteModel(parts, groups)
+
+
+def test_tail_top_is_a_point_inside_the_head_at_the_mined_depth():
+    from rosette.build import TAIL_TIP_DEPTH, TAIL_TIP_MIN
+    for top_y in (400, 340):  # apex at the mined depth, or TAIL_TIP_MIN above a shallow top_y
+        m = ringed(top_y=top_y)
+        shapes = build(m)
+        x, y = _tail_tops(shapes)[0]
+        assert abs(x - 300) < 1e-6 and abs(y - min(200 + TAIL_TIP_DEPTH * 150, top_y - TAIL_TIP_MIN * 150)) < 0.5
+    m = ringed(top_y=400)
+    shapes = build(m)
+    tops = _tail_tops(shapes)
+    assert len(tops) == 2 and len({(round(x, 2), round(y, 2)) for x, y in tops}) == 1
+    x, y = tops[0]
+    assert abs(x - 300) < 1e-6 and abs(y - (200 + TAIL_TIP_DEPTH * 150)) < 0.5
+    assert y < 400 - TAIL_TIP_MIN * 150 + 1e-6
+    assert not m.warnings
+    assert validate(write_svg(shapes)) == []
+
+
+def test_tail_top_moves_to_the_nearest_covered_depth_and_warns():
+    # kites on the diagonals leave the bottom of the head open below the center disc:
+    # the mined depth is not covered, so the apex moves up to the disc and the model warns
+    from rosette.build import TAIL_TIP_DEPTH
+    m = ringed(top_y=340)
+    m.parts[0] = Part("pts", "points", {"cx": 300, "cy": 200, "kind": "diamond", "count": 4, "r_inner": 50,
+                                        "r_outer": 150, "rotation_deg": 45, "width_ratio": 0.5}, 2, 20, 1.0)
+    shapes = build(m)
+    x, y = _tail_tops(shapes)[0]
+    assert abs(x - 300) < 1e-6 and 250 < y <= 260 + 1e-6 < 200 + TAIL_TIP_DEPTH * 150
+    assert any("tail top" in w.lower() for w in m.warnings)
+    assert validate(write_svg(shapes)) == []
