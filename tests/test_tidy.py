@@ -1,5 +1,7 @@
 import math
 
+import pytest
+
 from rosette import tidy
 from rosette.model import ColorGroup, Part, RosetteModel
 
@@ -57,3 +59,54 @@ def test_photo_head_circle_is_used_without_a_head_part():
     m = RosetteModel(parts=[unknown("unknown-0", 5.0)], groups=[group(0)])
     assert tidy.drop_specks(m, head_r=150.0).parts == []
     assert len(tidy.drop_specks(m, head_r=50.0).parts) == 1
+
+
+def tail(groups, fracs, bottom=None, k=0, n=1):
+    common = {"tails_count": n, "top_y": 320.0, "bottom_y": 825.0, "top_width": 140.0,
+              "bottom_width": 300.0, "spread_deg": 0.0, "stripes": ",".join(f"{f:.4f}" for f in fracs),
+              "stripes_bottom": ",".join(f"{f:.4f}" for f in (bottom or fracs))}
+    return [Part(f"tail-{k}-{i}", "tail_stripe", {"tail_index": k, "stripe_index": i, **common}, g, 9, 0.9)
+            for i, g in enumerate(groups)]
+
+
+def stripe_list(model, k=0):
+    t = sorted((q for q in model.parts if q.role == "tail_stripe" and q.params["tail_index"] == k),
+               key=lambda q: q.params["stripe_index"])
+    return ([q.color_group for q in t], [float(v) for v in t[0].params["stripes"].split(",")],
+            [q.id for q in t], [q.params["stripe_index"] for q in t])
+
+
+def test_sliver_between_two_stripes_of_one_group_joins_them():
+    m = RosetteModel(parts=[head()] + tail([1, 0, 1, 0], [0.3, 0.03, 0.3, 0.37]), groups=[group(0), group(1)])
+    out = tidy.merge_tail_slivers(m)
+    g, f, ids, idx = stripe_list(out)
+    assert g == [1, 0] and f == [pytest.approx(0.63, abs=1e-3), pytest.approx(0.37, abs=1e-3)]
+    assert ids == ["tail-0-0", "tail-0-1"] and idx == [0, 1]
+    assert len(out.warnings) == 1 and "tail-0-1" in out.warnings[0]
+    assert len(m.parts) == 5  # input untouched
+
+
+def test_sliver_between_different_groups_goes_to_the_wider_neighbour():
+    m = RosetteModel(parts=tail([1, 2, 0], [0.30, 0.03, 0.67], bottom=[0.2, 0.03, 0.77]),
+                     groups=[group(0), group(1), group(2)])
+    out = tidy.merge_tail_slivers(m)
+    g, f, _, _ = stripe_list(out)
+    assert g == [1, 0] and f == [pytest.approx(0.30, abs=1e-3), pytest.approx(0.70, abs=1e-3)]
+    bottom = [float(v) for v in out.parts[0].params["stripes_bottom"].split(",")]
+    assert bottom == [pytest.approx(0.2, abs=1e-3), pytest.approx(0.8, abs=1e-3)]
+    assert len(out.warnings) == 1
+
+
+def test_sliver_of_a_neighbours_group_merges_into_that_neighbour():
+    # after an edit a sliver can sit next to a stripe of its own group: that one takes it
+    m = RosetteModel(parts=tail([1, 0, 0, 2], [0.30, 0.25, 0.03, 0.42]), groups=[group(0), group(1), group(2)])
+    g, f, _, _ = stripe_list(tidy.merge_tail_slivers(m))
+    assert g == [1, 0, 2] and f[1] == pytest.approx(0.28, abs=1e-3)
+
+
+def test_mirrored_tails_merge_alike_and_wide_stripes_stay():
+    parts = tail([1, 0, 1, 0], [0.3, 0.03, 0.3, 0.37], k=0, n=2) + tail([0, 1, 0, 1], [0.37, 0.3, 0.03, 0.3], k=1, n=2)
+    out = tidy.merge_tail_slivers(RosetteModel(parts=parts, groups=[group(0), group(1)]))
+    assert stripe_list(out, 0)[0] == [1, 0] and stripe_list(out, 1)[0] == [0, 1]
+    same = RosetteModel(parts=tail([1, 0, 1], [0.3, 0.2, 0.5]), groups=[group(0), group(1)])
+    assert tidy.merge_tail_slivers(same).parts == same.parts

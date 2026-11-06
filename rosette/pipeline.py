@@ -1,8 +1,9 @@
 """Photo -> RosetteModel -> SVG, end to end.
 
 analyze(data): prepare -> pixel_groups -> detect_parts -> tidy -> RosetteModel -> assign.
-tidy (H6) leaves out unknown specks too small to draw, with a warning. Color groups no part uses are dropped before assignment (ids kept as they are);
-the rose is on iff a center part was found.
+tidy (H6) leaves out unknown specks too small to draw and merges tail sliver stripes into
+a neighbour, with warnings. Color groups no part uses are dropped before assignment (ids
+kept as they are); the rose is on iff a center part was found.
 A plain group that looks partly patterned on the tails (colors.mixed_texture_groups)
 is warned: a patterned ribbon may have been merged into it. A small patterned color on
 the center badge that is not clearly enclosed (colors.badge_print_unsure) is warned too.
@@ -28,7 +29,7 @@ from .assign import FLAG_BELOW, FLAGGED_CONF, assign, hex_rgb
 from .build import build
 from .model import RosetteModel
 from .roles import PAD_FRAC, render_categories
-from .tidy import drop_specks
+from .tidy import drop_specks, merge_tail_slivers
 from .validate import Issue, validate
 from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_groups
 from .vision.parts import detect_parts
@@ -160,7 +161,8 @@ def analyze_with_fit(data: bytes) -> tuple[RosetteModel, HeadFit | None]:
     p = prepare(data)
     merged_print: list = []
     labels, groups = pixel_groups(p, merged=merged_print)
-    tidy = drop_specks(RosetteModel(parts=detect_parts(p, labels, groups)), head_r=Frame.of(p).d(p.head[2]))
+    tidy = merge_tail_slivers(drop_specks(RosetteModel(parts=detect_parts(p, labels, groups)),
+                                          head_r=Frame.of(p).d(p.head[2])))
     parts = tidy.parts
     used = {q.color_group for q in parts}
     model = RosetteModel(parts=parts, groups=[g for g in groups if g.id in used],
