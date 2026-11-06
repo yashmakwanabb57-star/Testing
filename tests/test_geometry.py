@@ -212,24 +212,18 @@ def test_edge_strips_follow_the_loop_sides():
     assert abs(lo - (half - 0.31 * 2)) < 0.05 and abs(hi - (half + 0.69 * 2)) < 0.05
 
 
-def test_bow_is_a_block_widening_from_its_inner_width():
-    # The designer's bows (S35-19, S5-15, S30-15, S56-17B) are ribbon loops: blocks
-    # about as wide in the middle as at the ends, often widening outward. The old
-    # bow-tie shape pinched to a quarter of the width in the middle and left white
-    # where the loops are.
-    s = points_ring(300, 167, "bow", 6, 50, 90, 0, 0.5, inner_ratio=0.8)[0]
-    p = pts_of(s)
+def test_edited_inner_ratio_changes_only_the_loop_base():
+    # An edited inner_ratio sets the base width; the rest of the designer loop profile
+    # and the convex outer end stay (the UI shows the drawn 0.85 when none is set).
+    p = pts_of(points_ring(300, 167, "bow", 6, 50, 90, 0, 0.5, inner_ratio=0.6)[0])
+    q = pts_of(points_ring(300, 167, "bow", 6, 50, 90, 0, 0.5)[0])
+    same = pts_of(points_ring(300, 167, "bow", 6, 50, 90, 0, 0.5, inner_ratio=0.85)[0])
     w = 0.5 * 40
-    xs = [x for x, _ in p]
-    assert min(xs) == 350 and max(xs) == 390  # radial extent along +x
-
-    def width_at(x):
-        ys = []
-        for (x0, y0), (x1, y1) in zip(p, p[1:] + p[:1]):
-            if min(x0, x1) <= x <= max(x0, x1) and x0 != x1:
-                ys.append(y0 + (y1 - y0) * (x - x0) / (x1 - x0))
-        return max(ys) - min(ys)
-
-    assert abs(width_at(351) - 0.8 * w) < 0.5
-    assert abs(width_at(370) - 0.9 * w) < 0.5
-    assert abs(width_at(389) - w) < 0.5
+    assert same == q
+    assert abs(width_along_x(p, 350.01) - 0.6 * w) < 0.3
+    assert abs(width_along_x(p, 380) - w) < 0.3  # full width from 0.7 of the length on
+    assert max(x for x, _ in p) == 390
+    sag = math.hypot(90, 10) - 90
+    assert abs(max(math.dist(v, (300, 167)) for v in p) - (90 + 0.6 * sag)) < 1e-3
+    # between the base and full width it follows the loop profile's shape
+    assert width_along_x(q, 360) > width_along_x(p, 360) > 0.6 * w

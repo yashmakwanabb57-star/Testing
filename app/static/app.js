@@ -6,7 +6,7 @@ import { applyConfig, glitterPattern, COLOR_INDICES } from './simulator.js';
 import {
   MAX_COUNT, POINT_KINDS, errorText, hex, flagItems,
   downloadBlockers as blockersFor, groupColor, tailGroups, parseValue, tailCheckKey, sourceNotice,
-  convertBlocker, resetForFile, checklistItems,
+  convertBlocker, resetForFile, checklistItems, paramShown,
 } from './logic.js';
 
 export { errorText, flagItems, parseValue, tailGroups, hex };
@@ -490,7 +490,7 @@ function partCard(p) {
     if (k === 'inner_ratio' && p.params.kind !== 'bow') continue;
     if (!(k in p.params) && k !== 'inner_ratio') continue;
     const field = `${p.id}.${k}`;
-    const value = k === 'inner_ratio' && !(k in p.params) ? 1 : p.params[k];
+    const value = paramShown(p.params, k);
     grid.append(paramField(type, label, value, field, (raw, target) => {
       const ok = actions.setParam(p, k, type, raw, field);
       if (target.type === 'number') markInvalid(target, ok);

@@ -12,7 +12,7 @@ from .common import Pt, points_attr, polar
 # - bow = ribbon loop block: the 10 loop layers (8 files) whose base is visible at
 #   the ring are 0.85 of their widest width there and widen to full width by 0.7 of
 #   the length; the outer end is a shallow convex curve (END_SAG);
-# - diamond = kite (43 layers, 22 files): straight sides from pointed ends to the
+# - diamond = kite (41 layers, 22 files): straight sides from pointed ends to the
 #   widest point at 0.4 of the length (median peak; quartiles 0.3-0.5). The median of
 #   the profiles has rounded shoulders only because the peaks differ; each designer
 #   kite is a straight-sided polygon;
@@ -21,8 +21,7 @@ from .common import Pt, points_attr, polar
 _T = tuple(i / 10 for i in range(11))
 LOOP_PROFILE = (0.85, 0.85, 0.89, 0.92, 0.94, 0.96, 0.98, 1.0, 1.0, 1.0, 1.0)
 KITE_PEAK = 0.4
-KITE_PROFILE = tuple(round(t / KITE_PEAK if t <= KITE_PEAK else (1 - t) / (1 - KITE_PEAK), 4)
-                     for t in (i / 10 for i in range(11)))
+KITE_PROFILE = tuple(round(t / KITE_PEAK if t <= KITE_PEAK else (1 - t) / (1 - KITE_PEAK), 4) for t in _T)
 PETAL_PROFILE = (0.75, 0.75, 0.86, 0.96, 0.98, 1.0, 0.83, 0.60, 0.41, 0.23, 0.0)
 # A loop's outer end is a shallow convex curve: r_outer is its radius on the axis and
 # its corners lie END_SAG times a straight cut's sag (sqrt(r^2 + h^2) - r) further from
@@ -48,9 +47,11 @@ def _to_world(cx, cy, theta_deg, radial, lateral) -> Pt:
 
 def _profile(kind: str, inner_ratio: float | None) -> tuple[float, ...]:
     if kind == "bow":
-        if inner_ratio is not None:  # an edited bow: linear from inner_ratio to full width
-            return tuple(inner_ratio + (1 - inner_ratio) * t for t in _T)
-        return LOOP_PROFILE
+        if inner_ratio is None:
+            return LOOP_PROFILE
+        # an edited base width: the loop profile rescaled between it and full width
+        base = LOOP_PROFILE[0]
+        return tuple(inner_ratio + (p - base) * (1 - inner_ratio) / (1 - base) for p in LOOP_PROFILE)
     if kind == "diamond":
         return KITE_PROFILE
     if kind == "petal":
@@ -61,8 +62,8 @@ def _profile(kind: str, inner_ratio: float | None) -> tuple[float, ...]:
 def _side(kind: str, r_in: float, r_out: float, h: float, inner_ratio: float | None,
           offset: float = 0.0) -> list[tuple[float, float]]:
     """(radial, lateral) points of one side (lateral >= 0) from the inner to the outer
-    end, the profile's half-width plus `offset`. A bow's side stops where it meets
-    its outer arc (radius r_out around the head center)."""
+    end, the profile's half-width plus `offset`. A bow's side stops at the corner of
+    its convex outer end (`_end_radial`, END_SAG)."""
     prof = _profile(kind, inner_ratio)
     pts = [(r_in + (r_out - r_in) * t, max(0.0, h * p + offset)) for t, p in zip(_T, prof)]
     if kind != "bow":
@@ -110,8 +111,8 @@ def points_ring(cx: float, cy: float, kind: Literal["star", "diamond", "bow", "p
     """Angles run clockwise on screen from +x; point k is centered on
     rotation_deg + k*360/count. Width = width_ratio * (r_outer - r_inner) is the widest
     lateral width; the width profile is the designer's for the kind (LOOP_PROFILE,
-    KITE_PROFILE, PETAL_PROFILE). An explicit inner_ratio makes a bow widen linearly
-    from inner_ratio times its width at the inner end. With edge_width the shapes are
+    KITE_PROFILE, PETAL_PROFILE). An explicit inner_ratio sets a bow's base width
+    (share of the widest; LOOP_PROFILE[0] = 0.85 when unset), the profile rescaled. With edge_width the shapes are
     the two edge strips along each point's sides instead (two-tone loops)."""
     if kind == "star":
         pts = []

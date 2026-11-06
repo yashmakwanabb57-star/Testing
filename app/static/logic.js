@@ -4,6 +4,15 @@
 export const FLAG_BELOW = 0.6; // rosette/assign.py FLAG_BELOW
 export const MAX_COUNT = 200; // rosette/model.py MAX_COUNT
 export const POINT_KINDS = ['star', 'diamond', 'bow', 'petal'];
+// Base width of a loop (bow) as a share of its widest width when the model sets no
+// inner_ratio: rosette/geometry/points.py LOOP_PROFILE[0].
+export const LOOP_BASE = 0.85;
+
+// Value shown in a part's param field: a bow's inner_ratio is the drawn base width.
+export function paramShown(params, key) {
+  if (key === 'inner_ratio' && !(key in params)) return LOOP_BASE;
+  return params[key];
+}
 export const TAIL_SHARED = ['tails_count', 'top_y', 'bottom_y', 'top_width', 'bottom_width', 'spread_deg'];
 export const TAIL_KEYS = [...TAIL_SHARED, 'stripes', 'stripes_bottom']; // rosette/build.py _TAIL_KEYS
 

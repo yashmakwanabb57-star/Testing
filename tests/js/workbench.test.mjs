@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  HEAD_CHECK, SOURCE_NOT_READY, checklistItems, convertBlocker, headFitText, downloadBlockers, errorText, flagItems, parseValue, resetForFile, sourceNotice,
+  HEAD_CHECK, LOOP_BASE, SOURCE_NOT_READY, checklistItems, paramShown, convertBlocker, headFitText, downloadBlockers, errorText, flagItems, parseValue, resetForFile, sourceNotice,
 } from '../../app/static/logic.js';
 import { applyConfig } from '../../app/static/simulator.js';
 
@@ -333,4 +333,14 @@ test('choosing a new file clears the old model so it cannot be downloaded under 
 
 test('no file at all asks for an upload', () => {
   assert.deepEqual(downloadBlockers(ready({ model: null, svg: null, pendingFile: null })), ['Upload a photo first.']);
+});
+
+
+test('a bow without inner_ratio shows the base width the geometry draws', () => {
+  // rosette/geometry/points.py LOOP_PROFILE[0]: the detector sets no inner_ratio
+  const bow = { kind: 'bow', count: 6, r_inner: 50, r_outer: 90, width_ratio: 0.5 };
+  assert.equal(LOOP_BASE, 0.85);
+  assert.equal(paramShown(bow, 'inner_ratio'), 0.85);
+  assert.equal(paramShown({ ...bow, inner_ratio: 0.7 }, 'inner_ratio'), 0.7);
+  assert.equal(paramShown(bow, 'width_ratio'), 0.5);
 });
