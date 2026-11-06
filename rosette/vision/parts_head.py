@@ -39,6 +39,7 @@ from scipy import ndimage
 
 from rosette.model import Part
 from rosette.vision.parts_common import Frame, blob_rings, majority, polar_sample, r3
+from rosette.vision.parts_trims import explain_trims, fold_specks
 from rosette.vision.prepare import Prepared
 
 # Radial sampling step (canvas units) and angular samples per circle.
@@ -107,38 +108,6 @@ PETAL_FULLNESS = 0.6
 # S46-15, S56-17, S70-19) have plateau 5-6 of 9 and share 0.52-0.71; of the 21 other
 # petal layers one passes (s39-15, a designer kite: 5 of 9, share 0.59).
 LOOP_KEEP, LOOP_PLATEAU, LOOP_SHARE = 0.85, 5 / 9, 0.45
-# A layer of label h read with low confidence (unknown, or points under EXPLAIN_MAX_CONF)
-# may be another layer's trim (H4):
-# - edge strips: a band of h right along both side edges of a loop (bow), at most
-#   EDGE_MAX_SHARE of the loop's angular width wide and followed by a third label (h
-#   filling the whole gap between loops is not a band), on >= EDGE_MIN_RADII of the
-#   radii in the middle of the loop's extent, on both sides of >= EXPLAIN_MIN_LOBES of
-#   the visible loops. Drawn as the designer does: two strips per loop, EDGE_SHARE of
-#   the loop's widest width (median strip / loop width over the 14 strip layers on
-#   loops in 13 designer files, quartiles 0.107-0.119);
-# - backing tips: h shows on the axis of >= EXPLAIN_MIN_LOBES of another layer's
-#   visible points (within BACK_TOL_DEG), continuing beyond their tips by
-#   >= BACK_MIN_UNITS while covering under BACK_MAX_COV of the circle there (a band of h
-#   outside the points is a ring, not tips). The designer draws backings as a frame or
-#   tip behind each point (hollow frames in 9 of the 11 files with one; never a disc
-#   under everything): drawn as a copy of the points reaching the measured tip.
-# The layer is replaced by its trims when they cover >= EXPLAIN_MIN_SHARE of its pixels.
-EXPLAIN_MAX_CONF = 0.6
-EDGE_MAX_SHARE, EDGE_MIN_RADII, EDGE_SHARE = 0.35, 0.5, 0.108
-BACK_TOL_DEG, BACK_MIN_UNITS, BACK_MAX_COV = 2.0, 3.0, 0.5
-EXPLAIN_MIN_LOBES, EXPLAIN_MIN_SHARE = 2 / 3, 0.5
-# An unknown head-zone layer in a seam - a zone between two bands at most SEAM_UNITS
-# wide (two pleat depths, RING_MAX_GROWTH_UNITS: the center's pinked edge meets a ring's
-# pleats) - whose label is one of those bands' labels and whose area is under
-# SPECK_MAX_UNITS2 is that band's fringe (H4): it is folded into the band instead of
-# being drawn as a disc, and a seam left empty is closed (the outer band, a ring,
-# starts where the inner one ends). Over the 76 photos 14 seams (11-16 units wide) hold
-# 22 such unknowns of 1525-5729 units^2 (S35-19: 1525 and 1943), all folded. The next
-# wider zones (S17-15 and S1-15B 21 units, S52-19 and S57-17 28) hold real layers in
-# the designer files (S17-15: a 4-point star) and are kept, as are unknowns of a third
-# color (a badge's print, a gold rim) and zones open on one side (S5-15's loops).
-SEAM_UNITS = 2 * RING_MAX_GROWTH_UNITS
-SPECK_MAX_UNITS2 = 6000.0
 # A points layer (not a loop or star) whose inner end lies within COVER_GAP_UNITS outside
 # a ring or the center started under it (one pleat depth, RING_MAX_GROWTH_UNITS).
 COVER_GAP_UNITS = 8.0
@@ -492,8 +461,8 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             # a star with a core: the band is this layer's body, the star polygon covers it
             meta.append(dict(zone=(a, b), rows=(ra, rb), eats=inner if has_core else None, inner=inner))
 
-    layers, meta = _explain_trims(layers, meta, pol, radii, win, fr)
-    layers, meta = _fold_specks(layers, meta, bands, head_band, pleated, radii, fr)
+    layers, meta = explain_trims(layers, meta, pol, radii, win, fr, RING_MAX_GROWTH_UNITS)
+    layers, meta = fold_specks(layers, meta, bands, head_band, pleated, radii, fr, RING_MAX_GROWTH_UNITS)
     eaten = {id(m["eats"]) for m in meta if m["eats"] is not None}
 
     # points: largest layer first; outer layers drawn underneath (lower z)
@@ -586,157 +555,3 @@ def _pleated_ring(g: int, a: int, b: int, bridges: list[_Band], cov: np.ndarray,
     if full_share < PLEATED_FULL_MIN or reach > PLEATED_REACH_UNITS:
         conf = min(conf, BLOB_UNCONFIRMED_CONF)
     return i0, i1, g, conf
-
-
-def _axis_cols(params: dict) -> list[int]:
-    """Polar column of each point's axis (RING_THETA columns, clockwise from +x)."""
-    n, rot = int(params["count"]), float(params["rotation_deg"])
-    return [int(round((rot + k * 360.0 / n) % 360 * RING_THETA / 360)) % RING_THETA for k in range(n)]
-
-
-def _edge_bands(pol: np.ndarray, i0: int, i1: int, g: int, h: int, params: dict,
-                win: np.ndarray) -> tuple[float, np.ndarray]:
-    """(share of the visible loops with a band of h along both sides, polar mask of the
-    band pixels found) for the loop layer of label g over radius rows i0..i1."""
-    t = RING_THETA
-    reach = t // int(params["count"])
-    cut = (i1 - i0) // 5
-    mid = range(i0 + cut, max(i0 + cut + 1, i1 - cut))
-    mark = np.zeros(pol.shape, bool)
-    lobes = []
-    for c in _axis_cols(params):
-        if not win[c]:
-            continue
-        sides = []
-        for d in (1, -1):
-            hits = seen = 0
-            for i in range(i0, i1):
-                row = pol[i]
-                if row[c] != g:
-                    continue
-                steps = 0
-                while row[(c + d * steps) % t] == g and steps < reach:
-                    steps += 1
-                m = 0
-                while row[(c + d * (steps + m)) % t] == h and m < reach:
-                    m += 1
-                after = row[(c + d * (steps + m)) % t]
-                band = 1 <= m <= EDGE_MAX_SHARE * 2 * steps and after not in (h, g)
-                if band:  # with one sample of slack on each side (resampled edges)
-                    mark[i, [(c + d * (steps + j)) % t for j in range(-1, m + 1)]] = True
-                if i in mid:
-                    seen += 1
-                    hits += band
-            sides.append(seen > 0 and hits >= EDGE_MIN_RADII * seen)
-        lobes.append(all(sides))
-    return (float(np.mean(lobes)) if lobes else 0.0), mark
-
-
-def _backing_tips(pol: np.ndarray, radii: np.ndarray, i_out: int, h: int, params: dict,
-                  win: np.ndarray, fr: Frame) -> tuple[float, int, np.ndarray]:
-    """(share of the visible points with h on their axis beyond their tip, median
-    outer row of h there, polar mask of the h pixels in those points' sectors) for a
-    points layer ending at radius row i_out."""
-    t = RING_THETA
-    tol = max(1, int(round(BACK_TOL_DEG * t / 360)))
-    cov_h = (pol == h)[:, win].mean(axis=1)
-    mark = np.zeros(pol.shape, bool)
-    half = fr.scale * float(params["width_ratio"]) * (float(params["r_outer"]) - float(params["r_inner"])) / 2
-    ok, tips = [], []
-    for c in _axis_cols(params):
-        if not win[c]:
-            continue
-        cols = [(c + o) % t for o in range(-tol, tol + 1)]
-        has = (pol[:, cols] == h).any(axis=1)
-        start = next((i for i in range(max(0, i_out - 4), min(len(radii), i_out + 4)) if has[i]), None)
-        if start is None:
-            ok.append(False)
-            continue
-        i = start
-        while i + 1 < len(radii) and (has[i + 1] or (i + 2 < len(radii) and has[i + 2])):
-            i += 1
-        beyond = fr.d(radii[i] - radii[i_out])
-        good = bool(beyond >= BACK_MIN_UNITS and cov_h[i_out:i + 1].mean() < BACK_MAX_COV)
-        ok.append(good)
-        if good:
-            tips.append(i)
-            for j in range(i + 1):
-                span = int(np.ceil(np.degrees(np.arctan2(half, max(radii[j], 1e-6))) * t / 360)) + tol
-                mark[j, [(c + o) % t for o in range(-span, span + 1)]] = True
-    tip = int(np.median(tips)) if tips else i_out
-    return (float(np.mean(ok)) if ok else 0.0), tip, mark & (pol == h)
-
-
-def _explain_trims(layers: list, meta: list[dict], pol: np.ndarray, radii: np.ndarray,
-                   win: np.ndarray, fr: Frame) -> tuple[list, list[dict]]:
-    """Replace low-confidence layers that are other layers' trims (edge strips along
-    loops, backing tips behind points; EXPLAIN_*) by those trims."""
-    out, out_meta, extra = [], [], []
-    for k, (role, h, share, params, area, rb) in enumerate(layers):
-        m = meta[k]
-        if role == "points" and share >= EXPLAIN_MAX_CONF:
-            out.append(layers[k])
-            out_meta.append(m)
-            continue
-        ra_h, rb_h = m["rows"]
-        mine = np.zeros(pol.shape, bool)
-        mine[ra_h:rb_h] = pol[ra_h:rb_h] == h
-        mine[:, ~win] = False
-        explained = np.zeros(pol.shape, bool)
-        inner = m["inner"]
-        if inner is not None and inner.label == h:  # the fringe of h's own band (pleats)
-            reach = int(round(RING_MAX_GROWTH_UNITS * fr.scale / (radii[1] - radii[0]))) if len(radii) > 1 else 0
-            explained[inner.i1:inner.i1 + reach] = True
-        trims = []
-        for j, (role2, g, share2, p2, _, rb2) in enumerate(layers):
-            if role2 != "points" or g == h or j == k or meta[j]["zone"] != m["zone"]:
-                continue
-            i0, i1 = meta[j]["rows"]
-            if p2["kind"] == "bow":
-                frac, mark = _edge_bands(pol, i0, i1, g, h, p2, win)
-                if frac >= EXPLAIN_MIN_LOBES:
-                    w = float(p2["width_ratio"]) * (float(p2["r_outer"]) - float(p2["r_inner"]))
-                    q = dict(p2, edge_width=r3(EDGE_SHARE * w))
-                    trims.append((("points", h, min(frac, share2), q, 0.0, rb2), dict(meta[j], eats=None, trim=True)))
-                    explained |= mark
-            frac, tip, mark = _backing_tips(pol, radii, i1 - 1, h, p2, win, fr)
-            if frac >= EXPLAIN_MIN_LOBES and tip > i1 - 1:
-                q = dict(p2, r_outer=r3(fr.d(radii[tip])))
-                trims.append((("points", h, min(frac, share2), q, 0.0, tip + 1),
-                              dict(meta[j], rows=(i0, tip + 1), eats=None, trim=True)))
-                explained |= mark
-        if trims and (explained & mine).sum() >= EXPLAIN_MIN_SHARE * max(int(mine.sum()), 1):
-            extra += trims
-            continue
-        out.append(layers[k])
-        out_meta.append(m)
-    # trims come last: a strip ties its loop's outer radius and must sort after it (z)
-    for layer, mm in extra:
-        out.append(layer)
-        out_meta.append(mm)
-    return out, out_meta
-
-
-def _fold_specks(layers: list, meta: list[dict], bands: list[_Band], head_band: _Band | None,
-                 pleated: list, radii: np.ndarray, fr: Frame) -> tuple[list, list[dict]]:
-    """Fold unknown layers that are a seam band's fringe (SEAM_UNITS, SPECK_MAX_UNITS2)
-    into that band and close a seam they leave empty."""
-    out, out_meta, folded = [], [], set()
-    for k, (role, h, share, params, area, rb) in enumerate(layers):
-        a, b = meta[k]["zone"]
-        inner = next((bd for bd in bands if bd.i1 == a), None)
-        outer = next((bd for bd in bands if bd.i0 == b), None)
-        if (role == "unknown" and inner is not None and outer is not None
-                and fr.d(radii[b - 1] - radii[a]) <= SEAM_UNITS
-                and h in (inner.label, outer.label) and fr.d(fr.d(area)) < SPECK_MAX_UNITS2):
-            folded.add((a, b))
-            continue
-        out.append(layers[k])
-        out_meta.append(meta[k])
-    for a, b in folded:
-        if any(m["zone"] == (a, b) for m in out_meta) or any(a <= i0 < b for i0, *_ in pleated):
-            continue
-        outer = next(bd for bd in bands if bd.i0 == b)
-        if outer is not head_band:
-            outer.i0 = a
-    return out, out_meta

@@ -161,3 +161,29 @@ def test_specks_of_a_band_are_folded_into_it_not_drawn_as_discs():
     center = [q for q in parts if q.role == "center"]
     assert len(ring) == 1 and len(center) == 1
     assert ring[0].params["r_inner"] <= center[0].params["r"] + 1
+
+
+def test_a_trim_never_outlives_its_host(monkeypatch):
+    # Layer A (a low-confidence loop) hosts B's edge strips while A itself reads as the
+    # backing of C: replacing A in the same pass would leave strips without their loop.
+    from rosette.vision import parts_trims as T
+    from rosette.vision.parts_common import Frame
+    pol = np.full((40, 720), -1, np.int32)
+    pol[10:20, 100:110] = 0  # B's pixels
+    pol[10:20, 300:310] = 1  # A's pixels
+    win = np.ones(720, bool)
+    radii = np.arange(40, dtype=float) + 0.5
+    zone = dict(zone=(0, 40), rows=(0, 30), eats=None, inner=None)
+    a = ("points", 1, 0.5, dict(kind="bow", count=6, r_inner=5.0, r_outer=25.0, rotation_deg=0.0,
+                                width_ratio=0.5), 100.0, 25)
+    b = ("unknown", 0, 0.1, dict(cx=300, cy=150, r=5.0), 50.0, 25)
+    c = ("points", 2, 0.9, dict(kind="diamond", count=6, r_inner=5.0, r_outer=20.0, rotation_deg=30.0,
+                                width_ratio=0.4), 120.0, 20)
+    monkeypatch.setattr(T, "_edge_bands", lambda pol, i0, i1, g, h, p, win: (1.0, pol == h))
+    monkeypatch.setattr(T, "_backing_tips", lambda pol, radii, i_out, h, p, win, fr:
+                        (1.0, 35, pol == h) if (h, p["kind"]) == (1, "diamond") else (0.0, i_out, pol < -1))
+    layers, meta = T.explain_trims([a, b, c], [dict(zone) for _ in range(3)], pol, radii, win,
+                                   Frame(axis_x=0.0, top=0.0, scale=1.0), 8.0)
+    loops = [p for role, g, s, p, ar, rb in layers if g == 1 and p.get("kind") == "bow" and "edge_width" not in p]
+    assert loops, layers  # the host loop stays
+    assert [p for role, g, s, p, ar, rb in layers if "edge_width" in p]  # B became A's strips
