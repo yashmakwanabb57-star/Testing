@@ -16,13 +16,25 @@ tools/mine_rules.py into rosette/data/assign_rules.json.
    rosette; a 'pattern' group on head print/logos (unknown, center, head pieces)
    is treated as plain, warned and flagged. Of several such groups only the one
    with the most ribbon area is Color 2; the others are flagged.
-4. With k used groups, every one-to-one mapping of groups onto Colors 1..k is
+4. Out-to-in numbering (the designer's rule, exact on 73 of the 79 designer SVGs,
+   Color 1 = outermost stripe on 77): when the tails are mirror-symmetric, Colors
+   are numbered by the tail stripes from the outer tail edge inward - the outermost
+   stripe's group is Color 1, the next new group inward Color 2, and so on (a group
+   repeating further in keeps its number). Sliver stripes (narrower than
+   SLIVER_SHARE of the median stripe width) do not count. Groups in no counted
+   stripe (head-only colors) take the following numbers, larger visible area
+   (part_area summed) first, ties by lower group id. A real pattern group that does
+   not land on Color 2 is warned and flagged, not moved. Asymmetric ('flag') tails
+   or no tails: step 5 decides.
+5. Mined rules: with k used groups, every one-to-one mapping of groups onto Colors 1..k is
    scored: sum over parts of area share * log P(category | role). The designer
    files never skip a color (k colors are always 1..k), so neither does this.
-5. A group's confidence is the two-way softmax between the best mapping and the
+6. A group's confidence is the two-way softmax between the best mapping and the
    best mapping giving that group another color, at evidence scale SCALE; a tie
-   gives 0.5. Below FLAG_BELOW the group is flagged for confirmation.
-6. Plausibility: P(category | role) is renormalized over the Colors 1..k in use
+   gives 0.5. Below FLAG_BELOW the group is flagged for confirmation. With the
+   out-to-in rule the margin is taken against the rule's mapping and the rule adds
+   RULE_LOGODDS of evidence, so only a strong disagreement of the mined rules flags.
+7. Plausibility: P(category | role) is renormalized over the Colors 1..k in use
    (a 2-color rosette is judged among Colors 1-2 only); when even the best
    mapping's area-weighted mean log of it is below log(1/k) - no more plausible
    than coloring at random - the coloring is a guess (merged or missed colors,
@@ -71,6 +83,13 @@ TAIL_POS_TOL = 3.0
 FLAGGED_CONF = 0.5
 # Added to the Lab distance of a pattern / plain pair so such pairs merge last.
 PATTERN_MERGE_PENALTY = 1000.0
+# A tail stripe narrower than this share of the median stripe width is a sliver and
+# does not count for out-to-in numbering. The narrowest real stripe of the 79
+# designer SVGs (rendered rows at 35/50/65% of the tail length) is 0.44 of its row's
+# median (S6-15; next 0.46, 0.47, 0.48); detection slivers measure 0.05 (S31-15).
+SLIVER_SHARE = 0.35
+# Evidence (log-odds) of the out-to-in rule: exact on 73 of 79 designer SVGs.
+RULE_LOGODDS = math.log(73 / 6)
 
 
 @lru_cache(maxsize=None)
@@ -174,6 +193,36 @@ def part_area(part: Part, parts: list[Part] | None = None) -> float:
         over = sum(part_area(q) for q in parts or [] if q.role in ("ring", "points", "center"))
         return max(0.1 * disc, disc - over)
     return 0.0
+
+
+def stripe_width(params: dict) -> float:
+    """Width (canvas units) of a tail stripe, at the middle of the tail length."""
+    f = _fracs(params)
+    i = min(max(int(params.get("stripe_index", 0)), 0), len(f) - 1)
+    w = (float(params.get("top_width", 0.0)) + float(params.get("bottom_width", 0.0))) / 2
+    return f[i] / sum(f) * w
+
+
+def outer_in_order(parts: list[Part]) -> list[int] | None:
+    """Color groups by first appearance walking the tail stripes from the outer tail
+    edge inward (by |stripe_dx|, slivers under SLIVER_SHARE of the median stripe width
+    skipped), or None when there are no tail stripes or the left-to-right color
+    sequence of the counted stripes (runs collapsed) is not mirror-symmetric."""
+    stripes = [q for q in parts if q.role == "tail_stripe"]
+    if not stripes:
+        return None
+    widths = [stripe_width(q.params) for q in stripes]
+    med = float(np.median(widths))
+    kept = [(stripe_dx(q.params), q.color_group) for q, w in zip(stripes, widths) if w >= SLIVER_SHARE * med]
+    seq = [g for _, g in sorted(kept, key=lambda t: t[0])]
+    runs = [g for i, g in enumerate(seq) if i == 0 or seq[i - 1] != g]
+    if runs != runs[::-1]:
+        return None
+    order: list[int] = []
+    for _, g in sorted(kept, key=lambda t: -abs(t[0])):
+        if g not in order:
+            order.append(g)
+    return order
 
 
 def role_keys(parts: list[Part]) -> list[str]:
@@ -282,20 +331,48 @@ def assign(model: RosetteModel, rules: dict | None = None) -> RosetteModel:
                             "rosette has a single color - it stays Color 1.")
         forced = None
 
+    order = outer_in_order([q for q in out.parts if q.color_group in col])
+    rule = None
+    if order is not None:
+        area = {gid: 0.0 for gid in used}
+        for q, a in zip(out.parts, areas):
+            if q.color_group in area:
+                area[q.color_group] += a
+        rest = sorted((gid for gid in used if gid not in order), key=lambda gid: (-area[gid], gid))
+        num = {gid: n + 1 for n, gid in enumerate(order + rest)}
+        rule = tuple(num[gid] for gid in used)
+        forced = None  # the pattern rule only checks (below)
+
     maps = []
     for perm in itertools.permutations(range(1, k + 1)):
         if forced is not None and perm[forced] != 2:
             continue
         maps.append((float(sum(gs[i, perm[i] - 1] for i in range(k))), perm))
-    best_s, best = max(maps, key=lambda m: m[0])  # first of equal scores: stable order
-    if k > 1 and best_s - norm < math.log(1.0 / k) * weight:
+    mined_s, best = max(maps, key=lambda m: m[0])  # first of equal scores: stable order
+    if k > 1 and mined_s - norm < math.log(1.0 / k) * weight:
         out.warnings.append("The colors are no more plausible for this layout than a random guess - "
                             "check every Color.")
+    prior = 0.0
+    best_s = mined_s
+    if rule is not None:
+        best, prior = rule, RULE_LOGODDS
+        best_s = float(sum(gs[i, best[i] - 1] for i in range(k)))
+        for i in real:
+            if best[i] != 2 and k > 1:
+                losers.append(i)
+                out.warnings.append(f"Color {hex_rgb(by_id[used[i]].rgb)} looks like a pattern but is not "
+                                    "Color 2 by the tail order - check its Color.")
     for i, gid in enumerate(used):
         g = by_id[gid]
         g.category = int(best[i])
         alts = [s for s, perm in maps if perm[i] != best[i]]
-        c = _sigmoid(SCALE * (best_s - max(alts))) if alts else 1.0
+        bonus = prior
+        if rule is not None and gid not in order:
+            # a head-only color: the rule fixes the tail colors; judged among the rest
+            alts = [s for s, perm in maps if perm[i] != best[i]
+                    and all(perm[j] == best[j] for j, h in enumerate(used) if h in order)]
+            bonus = 0.0
+        c = _sigmoid(SCALE * (best_s - max(alts)) + bonus) if alts else 1.0
         if i in losers or i in demoted or gid in merged:
             c = min(c, FLAGGED_CONF)
         g.confidence = round(float(c), 3)

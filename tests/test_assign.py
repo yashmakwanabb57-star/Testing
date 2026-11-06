@@ -48,6 +48,16 @@ def tails(groups_per_stripe, fracs=None):
             for i, g in enumerate(groups_per_stripe)]
 
 
+def flag_tails(groups_left_to_right):
+    """Single-stripe tails, one per group left to right ('flag' tails of the A-series):
+    asymmetric unless the sequence mirrors, so the mined rules number the colors."""
+    n = len(groups_left_to_right)
+    common = {"tails_count": n, "top_y": 300, "bottom_y": 825, "top_width": 100,
+              "bottom_width": 200, "spread_deg": 30, "stripes": "1.0000"}
+    return [Part(f"tail-{k}-0", "tail_stripe", {"tail_index": k, "stripe_index": 0, **common}, g, 5, 0.9)
+            for k, g in enumerate(groups_left_to_right)]
+
+
 def cats(model):
     return {g.id: g.category for g in model.groups}
 
@@ -78,7 +88,7 @@ def test_rules_file_covers_roles():
 def test_pattern_group_is_color2():
     # tails dominate; without the pattern rule the tails group would not be Color 2
     groups = [group(0, (200, 30, 30)), group(1, (30, 30, 200), pattern=True), group(2, (240, 200, 40))]
-    parts = [head(0), points("points-1", 2), *tails([1, 1, 1])]
+    parts = [head(0), points("points-1", 2), *flag_tails([1, 1, 0])]
     out = A.assign(RosetteModel(parts=parts, groups=groups))
     assert cats(out)[1] == 2
     assert sorted(cats(out).values()) == [1, 2, 3]
@@ -91,7 +101,7 @@ def test_pattern_rule_is_hard_even_against_rules():
         rules["roles"][k] = {"1": 0.97, "2": 0.01, "3": 0.01, "4": 0.01}
     rules["roles"]["head"] = {"1": 0.01, "2": 0.97, "3": 0.01, "4": 0.01}
     groups = [group(0, (200, 30, 30)), group(1, (30, 30, 200), pattern=True)]
-    parts = [head(0, r=150), *tails([1])]
+    parts = [head(0, r=150), *flag_tails([1, 1, 0])]
     out = A.assign(RosetteModel(parts=parts, groups=groups), rules=rules)
     assert cats(out) == {0: 1, 1: 2}
     assert conf(out)[1] == 1.0  # a hard rule leaves no alternative for the pattern group
@@ -137,7 +147,9 @@ def test_merge_never_hides_pattern_group():
     assert len(out.groups) == 4
     tails_g = next(g for g in out.groups if g.id == out.parts[-1].color_group)
     assert tails_g.pattern
-    assert tails_g.category == 2
+    # the only tail color is Color 1 by the tail order; a pattern off Color 2 is flagged
+    assert tails_g.category == 1
+    assert tails_g.confidence < A.FLAG_BELOW
     assert {0, 1} <= {g.id for g in out.groups}  # red head and glitter red both kept
 
 
@@ -181,7 +193,9 @@ def test_head_print_pattern_not_forced():
     rules["roles"]["center"] = {"1": 0.7, "2": 0.1, "3": 0.1, "4": 0.1}
     rules["roles"]["head"] = {"1": 0.1, "2": 0.7, "3": 0.1, "4": 0.1}
     out = A.assign(RosetteModel(parts=parts, groups=groups), rules=rules)
-    assert cats(out) == {0: 2, 1: 1}  # rules decide, the head print is not forced to 2
+    # the tail color is Color 1 by the tail order (overriding the rules), the head
+    # print takes the next number; it is not forced to 2 for being a 'pattern'
+    assert cats(out) == {0: 1, 1: 2}
     assert any("#b0897c" in w and "pattern" in w for w in out.warnings), out.warnings
     assert conf(out)[1] < A.FLAG_BELOW  # demoted pattern group is always confirmed
 
@@ -200,7 +214,7 @@ def test_head_print_pattern_ending_color2_is_flagged():
 def test_two_pattern_groups_only_one_color2():
     groups = [group(0, (200, 30, 30)), group(1, (30, 30, 200), pattern=True),
               group(2, (240, 200, 40), pattern=True)]
-    parts = [head(0), points("points-1", 2), *tails([1, 0, 1], fracs=[0.35, 0.3, 0.35])]
+    parts = [head(0), points("points-1", 2), *flag_tails([1, 1, 0])]
     out = A.assign(RosetteModel(parts=parts, groups=groups))
     c = cats(out)
     assert c[1] == 2  # the larger ribbon pattern group
@@ -286,3 +300,103 @@ def test_bow_area_is_a_block_from_its_inner_width():
     assert A.part_area(Part("p", "points", q, 0, 20, 1.0)) == pytest.approx(6 * w * L)
     # other kinds keep the half-width estimate
     assert A.part_area(Part("p", "points", {**q, "kind": "diamond"}, 0, 20, 1.0)) == pytest.approx(6 * 0.5 * w * L)
+
+
+# ---- out-to-in numbering (designer rule: Color 1 = outermost tail stripe, then inward)
+
+
+def test_two_color_numbered_from_outer_edge():
+    # outer stripes in group 1, centre stripe and head in group 0: the mined prior
+    # alone calls the head color Color 1; the designer numbers by the tails
+    groups = [group(0, (200, 30, 30)), group(1, (240, 200, 40))]
+    out = A.assign(RosetteModel(parts=[head(0), *tails([1, 0, 1])], groups=groups))
+    assert cats(out) == {1: 1, 0: 2}
+
+
+def test_three_color_numbered_from_outer_edge():
+    groups = [group(0, (200, 30, 30)), group(1, (30, 30, 200)), group(2, (240, 200, 40))]
+    parts = [head(1), center(0), *tails([2, 0, 1, 0, 2])]
+    out = A.assign(RosetteModel(parts=parts, groups=groups))
+    assert cats(out) == {2: 1, 0: 2, 1: 3}
+
+
+def test_repeated_color_keeps_its_first_number():
+    # 1-2-1 inward: the centre stripe repeats the outer color
+    groups = [group(0, (200, 30, 30)), group(1, (30, 30, 200))]
+    out = A.assign(RosetteModel(parts=[head(1), *tails([0, 1, 0, 1, 0])], groups=groups))
+    assert cats(out) == {0: 1, 1: 2}
+
+
+def test_sliver_stripe_does_not_count():
+    # a thin edge stripe (detection sliver, far under any designer stripe) of group 2
+    # on one side only must not become Color 1
+    groups = [group(0, (200, 30, 30)), group(1, (30, 30, 200)), group(2, (240, 200, 40))]
+    parts = [head(0), center(2), *tails([2, 0, 1, 2, 1, 0], fracs=[0.01, 0.19, 0.2, 0.2, 0.2, 0.2])]
+    assert A.outer_in_order(parts) == [0, 1, 2]
+    out = A.assign(RosetteModel(parts=parts, groups=groups))
+    assert cats(out) == {0: 1, 1: 2, 2: 3}
+
+
+def test_head_only_colors_come_after_tail_colors():
+    # group 2 (center) and group 3 (ring) appear in no tail stripe: they take the
+    # numbers after the tail colors, larger visible area first
+    groups = [group(0, (200, 30, 30)), group(1, (30, 30, 200)), group(2, (240, 200, 40)),
+              group(3, (20, 140, 60))]
+    parts = [head(0), ring("ring-0", 3, 60, 45), center(2, r=20), *tails([1, 0, 1])]
+    out = A.assign(RosetteModel(parts=parts, groups=groups))
+    assert cats(out) == {1: 1, 0: 2, 3: 3, 2: 4}
+
+
+def test_four_colors_numbered_from_outer_edge():
+    groups = [group(i, rgb) for i, rgb in enumerate([(200, 30, 30), (30, 30, 200), (240, 200, 40),
+                                                     (20, 140, 60)])]
+    out = A.assign(RosetteModel(parts=[head(3), *tails([3, 2, 1, 0, 1, 2, 3])], groups=groups))
+    assert cats(out) == {3: 1, 2: 2, 1: 3, 0: 4}
+
+
+def test_asymmetric_tails_have_no_outer_in_order():
+    # three single-color tails, left / middle / right each its own color ('flag' tails):
+    # no mirror symmetry, the numbering falls back to the mined rules
+    common = {"tails_count": 3, "top_y": 300, "bottom_y": 825, "top_width": 100,
+              "bottom_width": 200, "spread_deg": 30, "stripes": "1.0000"}
+    parts = [head(0)] + [Part(f"tail-{k}-0", "tail_stripe", {"tail_index": k, "stripe_index": 0, **common},
+                              k, 5, 0.9) for k in range(3)]
+    assert A.outer_in_order(parts) is None
+    groups = [group(0, (200, 30, 30)), group(1, (30, 30, 200)), group(2, (240, 200, 40))]
+    out = A.assign(RosetteModel(parts=parts, groups=groups))
+    assert sorted(cats(out).values()) == [1, 2, 3]
+
+
+def test_rule_agreeing_with_mined_rules_is_confident():
+    groups = [group(0, (200, 30, 30)), group(1, (30, 30, 200)), group(2, (240, 200, 40))]
+    parts = [head(0), center(2), *tails([0, 1, 2, 1, 0])]
+    out = A.assign(RosetteModel(parts=parts, groups=groups))
+    assert cats(out) == {0: 1, 1: 2, 2: 3}
+    assert all(v >= A.FLAG_BELOW for v in conf(out).values())
+
+
+def test_strong_disagreement_with_mined_rules_flags():
+    # mined rules that make the outer stripe Color 2 with near certainty: the rule
+    # still numbers out to in, but the groups are flagged, not silently picked
+    rules = {"roles": {k: {"1": 0.25, "2": 0.25, "3": 0.25, "4": 0.25} for k in ROLE_KEYS},
+             "pattern_role_prob": {k: 0.5 for k in ROLE_KEYS}}
+    rules["roles"]["tail_outer"] = {"1": 0.001, "2": 0.997, "3": 0.001, "4": 0.001}
+    rules["roles"]["tail_inner"] = {"1": 0.997, "2": 0.001, "3": 0.001, "4": 0.001}
+    groups = [group(0, (200, 30, 30)), group(1, (240, 200, 40))]
+    out = A.assign(RosetteModel(parts=[head(0, r=40), *tails([1, 0, 1])], groups=groups), rules=rules)
+    assert cats(out) == {1: 1, 0: 2}
+    assert all(v < A.FLAG_BELOW for v in conf(out).values())
+
+
+def test_sliver_share_below_narrowest_designer_stripe():
+    # narrowest real designer stripe: 0.44 of its row's median stripe width (S6-15)
+    assert 0 < A.SLIVER_SHARE < 0.44
+
+
+def test_pattern_off_color2_by_tail_order_is_flagged_not_moved():
+    groups = [group(0, (200, 30, 30)), group(1, (30, 30, 200), pattern=True), group(2, (240, 200, 40))]
+    parts = [head(0), center(2), *tails([1, 0, 2, 0, 1])]
+    out = A.assign(RosetteModel(parts=parts, groups=groups))
+    assert cats(out) == {1: 1, 0: 2, 2: 3}
+    assert conf(out)[1] < A.FLAG_BELOW
+    assert any("#1e1ec8" in w and "tail order" in w for w in out.warnings), out.warnings
