@@ -184,3 +184,21 @@ def test_render_draws_the_head_picked_on_the_head_card():
     assert [p["id"] for p in rules["model"]["parts"]] == ["t0", "head"]
     assert rules["issues"] == []
     assert client.post("/api/render", json={"model": model, "head": "S99-15"}).status_code == 422
+
+
+def test_render_takes_a_library_head_outside_the_top_3():
+    model = _picker_model()
+    model["library_heads"] = [{"id": "library_S36-15", "role": "template", "params": {
+        "template_id": "S36-15", "cx": 300, "cy": 200, "r": 150, "rotation_deg": 0, "score": 0.4, "rank": 7,
+        "description": "6 points, center", "group_1": 1, "group_2": 2}, "color_group": 1, "z": 10,
+        "confidence": 0.5}]
+    model["warnings"] = ["general"]
+    model["head_states"] = {"A1-15": {"warnings": [], "fit": None},
+                            "S36-15": {"warnings": ["far: S36-15"], "fit": {"agreement": 0.5, "silhouette": 0.7}}}
+    model["parts"][1]["params"]["cx"] = 305
+    body = client.post("/api/render", json={"model": model, "head": "S36-15"}).json()
+    drawn = [p for p in body["model"]["parts"] if p["role"] == "template"]
+    assert [p["params"]["template_id"] for p in drawn] == ["S36-15"]
+    assert drawn[0]["params"]["cx"] == 305 and drawn[0]["confidence"] == 0.5
+    assert body["model"]["warnings"] == ["general", "far: S36-15"]
+    assert body["model"]["library_heads"] == [] and body["issues"] == [] and body["flagged"]

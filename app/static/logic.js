@@ -56,8 +56,16 @@ export function usesGroup(p, gid) {
   return partGroups(p).includes(gid);
 }
 
+// Library heads the matcher offers on the head card (rosette/pipeline.py TEMPLATE_CANDIDATES);
+// a higher rank was chosen from the whole library.
+const TOP_CANDIDATES = 3;
+
 // Head card text of a library head.
 export function templateText(p) {
+  if (Number(p.params.rank) > TOP_CANDIDATES) {
+    const desc = p.params.description ? ` - ${p.params.description}` : '';
+    return `Head shape: chosen from the library: ${p.params.template_id}${desc}`;
+  }
   const score = Number(p.params.score);
   const pct = Number.isFinite(score) ? `${Math.round(score * 100)}%` : '-';
   const pts = Number(p.params.points) > 0 ? `, ${p.params.points} points` : '';
@@ -124,7 +132,28 @@ export function headFitOf(model) {
 // (rosette/pipeline.py TEMPLATE_PLACEMENT).
 const TEMPLATE_PLACEMENT = ['cx', 'cy', 'r', 'rotation_deg'];
 
+// "Choose from the library": the matcher's candidates first (by rank), then every other
+// template by id; filter keeps the ids containing it (case and spaces ignored).
+export function libraryChoices(model, filter = '') {
+  if (!model) return [];
+  const { cands } = headPool(model);
+  const rest = [...(model.library_heads || [])]
+    .sort((a, b) => String(a.params.template_id).localeCompare(String(b.params.template_id)));
+  const f = String(filter).trim().toLowerCase();
+  return [...cands, ...rest]
+    .filter((p) => !f || String(p.params.template_id).toLowerCase().includes(f))
+    .map((p) => ({ choice: String(p.params.template_id),
+      text: `${p.params.template_id}${p.params.description ? ' - ' + p.params.description : ''}` }));
+}
+
 export function switchHead(model, choice) {
+  if (choice !== undefined && choice !== 'rules') { // a library template joins the candidates
+    const found = (model.library_heads || []).find((p) => String(p.params.template_id) === choice);
+    if (found) {
+      model.library_heads = model.library_heads.filter((p) => p !== found);
+      model.alternatives = [...(model.alternatives || []), found];
+    }
+  }
   const { rules, cands } = headPool(model);
   const before = model.parts.find((p) => p.role === 'template');
   const current = drawnHead(model);

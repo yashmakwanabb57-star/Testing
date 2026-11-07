@@ -2,7 +2,7 @@
 // Run: node --test tests/js/template.test.mjs (tests/test_js.py runs it when node is on PATH)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { colorQuestions, flagItems, headCandidates, headChoice, headFitOf, partGroups, switchHead, templateText, usesGroup } from '../../app/static/logic.js';
+import { colorQuestions, flagItems, headCandidates, headChoice, headFitOf, libraryChoices, partGroups, switchHead, templateText, usesGroup } from '../../app/static/logic.js';
 
 function model(score = 0.8) {
   return {
@@ -130,4 +130,36 @@ test('switchHead swaps the head-dependent warnings and keeps the library head pl
   switchHead(m, 'S29-15');
   assert.deepEqual(m.warnings, ['general', 'heads differ']);
   assert.equal(headFitOf({ ...m, head_states: {} }), undefined);
+});
+
+// H8: the library chooser.
+function libraryModel() {
+  const m = pickerModel();
+  const lib = (id, rank, description) => ({ id: `library_${id}`, role: 'template', params: { template_id: id, cx: 300, cy: 150, r: 120, rotation_deg: 0, score: 0.3, rank, description, group_1: 1 }, color_group: 1, z: 10, confidence: 0.5 });
+  m.library_heads = [lib('S9-19', 5, '4 loops, 6-point star, center'), lib('A1-15', 4, 'disc, center'), lib('S11a-15', 6, '2 points, 10 kites, ring, center')];
+  return m;
+}
+
+test('libraryChoices lists the top 3 first, then every other template by id, filtered', () => {
+  const c = libraryChoices(libraryModel());
+  assert.deepEqual(c.map((x) => x.choice), ['S29-15', 'S30-15', 'S57-17', 'A1-15', 'S11a-15', 'S9-19']);
+  assert.equal(c[3].text, 'A1-15 - disc, center');
+  assert.deepEqual(libraryChoices(libraryModel(), 's1').map((x) => x.choice), ['S11a-15']);
+  assert.deepEqual(libraryChoices(libraryModel(), ' 9-19 ').map((x) => x.choice), ['S9-19']);
+  assert.ok(c.every((x) => !/[–—]/.test(x.text)));
+});
+
+test('switchHead takes a template from the library and shows where it came from', () => {
+  const m = libraryModel();
+  m.parts[1].params.cx = 310;
+  switchHead(m, 'S9-19');
+  const t = m.parts.find((p) => p.role === 'template');
+  assert.equal(t.id, 'library_S9-19');
+  assert.equal(t.params.cx, 310);
+  assert.equal(templateText(t), 'Head shape: chosen from the library: S9-19 - 4 loops, 6-point star, center');
+  assert.ok(!m.library_heads.some((p) => p.params.template_id === 'S9-19'));
+  assert.ok(headCandidates(m).some((x) => x.choice === 'S9-19' && x.drawn));
+  switchHead(m, 'rules');
+  switchHead(m, 'S9-19');
+  assert.equal(m.parts.find((p) => p.role === 'template').id, 'library_S9-19');
 });

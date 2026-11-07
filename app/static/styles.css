@@ -81,6 +81,8 @@ h2:first-child { margin-top: 0; }
 .card-head .conf { margin-left: auto; font-size: 11px; }
 .pick { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; margin: 3px 0; cursor: pointer; }
 .pick input { margin-top: 2px; }
+.library-chooser { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.library-chooser input[type=search], .library-list { font: inherit; font-size: 12px; width: 100%; box-sizing: border-box; }
 .params { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 4px 8px; }
 .param { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--muted); }
 .param.wide { flex-direction: row; align-items: center; gap: 8px; margin-bottom: 6px; }

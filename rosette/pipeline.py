@@ -39,7 +39,7 @@ from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_group
 from .vision.parts import detect_parts
 from .vision.parts_common import Frame
 from .vision.prepare import Prepared, prepare
-from .vision.templates import describe, load_library, photo_grid, rank, relabel_map
+from .vision.templates import describe, load_library, photo_grid, rank, relabel_map, score_all
 from .writer import write_svg
 
 # Head fit gross-failure bars, from the 76 reference photos (docs/pipeline.md). Layer
@@ -87,6 +87,8 @@ TEMPLATE_PART_ID = "template"
 # template_2, template_3) with the rule-based head. Own design among the top 3: 58 of 76.
 TEMPLATE_CANDIDATES = 3
 RULES_HEAD = "rules"
+# Part id prefix of the other library templates (model.library_heads, H8).
+LIBRARY_PART_ID = "library"
 # Template params that stay when the user switches from one library head to another.
 TEMPLATE_PLACEMENT = ("cx", "cy", "r", "rotation_deg")
 # Template colors follow the tails (H7 fix round 2): a reference category that is also one
@@ -158,12 +160,12 @@ def _head_render(model: RosetteModel) -> np.ndarray | None:
 
 
 def head_fit(p: Prepared, labels: np.ndarray, model: RosetteModel,
-             merged: dict[int, int] | None = None) -> HeadFit | None:
+             merged: dict[int, int] | None = None, render_of=None) -> HeadFit | None:
     """Our rendered head against the photo's color labels on a grid over the head
     circle (HEAD_FIT_*). merged maps photo label ids that assign merged away onto the
     group that absorbed them; other ids no model group has count as a mismatch. None
     when the model has no head parts."""
-    ours_img = _head_render(model)
+    ours_img = (render_of or _head_render)(model)
     if ours_img is None:
         return None
     cx, cy, r = p.head
@@ -201,9 +203,10 @@ def check_head(p: Prepared, labels: np.ndarray, model: RosetteModel,
     return _check_head(model, head_fit(p, labels, model, merged))
 
 
-def head_overlap(a: RosetteModel, b: RosetteModel) -> float | None:
-    """Silhouette IoU of two models' drawn heads (every part but the tail stripes)."""
-    ra, rb = _head_render(a), _head_render(b)
+def head_overlap(a: RosetteModel, b: RosetteModel, render_of=None) -> float | None:
+    """Silhouette IoU of two models' drawn heads (every part but the tail stripes).
+    render_of: a (caching) replacement of _head_render."""
+    ra, rb = (render_of or _head_render)(a), (render_of or _head_render)(b)
     if ra is None or rb is None:
         return None
     fa, fb = ra >= 0, rb >= 0
@@ -311,6 +314,14 @@ def with_template(model: RosetteModel, mask: np.ndarray, labels: np.ndarray, hea
     for i, q in enumerate(cands):
         q.id = TEMPLATE_PART_ID if i == 0 else f"{TEMPLATE_PART_ID}_{i + 1}"
         q.params["rank"] = i + 1
+    taken = {q.params["template_id"] for q in cands}
+    rest = [(t, f) for t, f in score_all(grid, lib, _tail_groups(out)) if t.sid not in taken
+            and (exclude_key is None or t.key != exclude_key)]
+    library = [q for q in (_template_part(t, f, have, circle) for t, f in rest) if q is not None]
+    for i, q in enumerate(library):
+        q.id = f"{LIBRARY_PART_ID}_{q.params['template_id']}"
+        q.params["rank"] = len(cands) + i + 1
+    out.library_heads = library
     out.alternatives = [q for q in out.parts if q.role != "tail_stripe"] + cands[1:]
     out.parts = [q for q in out.parts if q.role == "tail_stripe"] + cands[:1]
     _split_groups(out)
@@ -368,6 +379,11 @@ def use_head(model: RosetteModel, choice: str) -> RosetteModel:
     head waits in alternatives. Color groups follow the parts that use them. Raises
     ValueError for a choice the model does not hold."""
     out = copy.deepcopy(model)
+    if choice != RULES_HEAD:  # a template from the library chooser joins the candidates
+        found = [q for q in out.library_heads if q.params.get("template_id") == choice][:1]
+        if found:
+            out.library_heads = [q for q in out.library_heads if q is not found[0]]
+            out.alternatives = out.alternatives + found
     rules, cands = _head_pool(out)
     before = next((q for q in out.parts if q.role == "template"), None)
     current = drawn_head(out)
@@ -445,7 +461,7 @@ def choose_head(rules: RosetteModel, lib: RosetteModel | None,
     conf: dict[str, float] = {}
     fits: dict[str, HeadFit | None] = {}
     path = None
-    for q in cands:
+    for q in cands + list(lib.library_heads):
         tid = str(q.params["template_id"])
         m = use_head(lib, tid)
         fits[tid] = fit_of(m)
@@ -465,7 +481,7 @@ def choose_head(rules: RosetteModel, lib: RosetteModel | None,
     conf.update({x.id: x.confidence for x in checked.parts if x.role != "tail_stripe"})
     states[RULES_HEAD] = {"warnings": warns, "fit": _fit_json(rules_fit)}
     out = copy.deepcopy(lib)
-    for q in out.parts + out.alternatives:
+    for q in out.parts + out.alternatives + out.library_heads:
         if q.id in conf:
             q.confidence = conf[q.id]
     choice = str(first.params["template_id"]) if path in ("floor", "override") else RULES_HEAD
@@ -527,7 +543,15 @@ def analyze_with_fit(data: bytes, template: bool = True,
     lib = None
     if template:
         lib = with_template(out, p.mask, labels, p.head, Frame.of(p), groups, merged, exclude_key=exclude_key)
-    out, fit = choose_head(out, lib, lambda m: head_fit(p, labels, m, merged), head_overlap)
+    cache: dict[int, tuple] = {}  # one render per head model (fit and overlap share it)
+
+    def render_of(m: RosetteModel):
+        if id(m) not in cache:  # the model is kept alive in the cache, so ids stay unique
+            cache[id(m)] = (m, _head_render(m))
+        return cache[id(m)][1]
+
+    out, fit = choose_head(out, lib, lambda m: head_fit(p, labels, m, merged, render_of),
+                           lambda a, b: head_overlap(a, b, render_of))
     by_id = {g.id: g for g in groups}
     for gid in mixed_texture_groups(p, labels, groups):
         if gid in used:

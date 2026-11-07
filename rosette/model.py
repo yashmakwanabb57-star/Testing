@@ -88,6 +88,9 @@ class RosetteModel:
     # Per head of the head card (template_id or "rules"): the warnings that belong to that
     # head and its head fit on the photo (pipeline.choose_head); use_head swaps them.
     head_states: dict = field(default_factory=dict)
+    # Every other library template as a ready template part (H8: the head card's "Choose
+    # from the library"); pipeline.use_head moves a chosen one into the candidates.
+    library_heads: list[Part] = field(default_factory=list)
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -101,11 +104,13 @@ class RosetteModel:
         parts = [Part(**p) for p in d.get("parts", [])]
         alternatives = [Part(**p) for p in d.get("alternatives", [])]
         alt_groups = [ColorGroup(**{**g, "rgb": tuple(g["rgb"])}) for g in d.get("alternative_groups", [])]
-        for q in parts + alternatives:
+        library = [Part(**p) for p in d.get("library_heads", [])]
+        for q in parts + alternatives + library:
             check_params(q.params)
         return cls(parts=parts, groups=groups, rose=bool(d.get("rose", False)),
                    warnings=list(d.get("warnings", [])), alternatives=alternatives,
-                   alternative_groups=alt_groups, head_states=_head_states(d.get("head_states") or {}))
+                   alternative_groups=alt_groups, head_states=_head_states(d.get("head_states") or {}),
+                   library_heads=library)
 
 
 def _head_states(d) -> dict:

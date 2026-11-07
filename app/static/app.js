@@ -6,7 +6,7 @@ import { applyConfig, glitterPattern, COLOR_INDICES } from './simulator.js';
 import {
   MAX_COUNT, POINT_KINDS, errorText, hex, flagItems,
   downloadBlockers as blockersFor, groupColor, tailGroups, parseValue, tailCheckKey, sourceNotice,
-  convertBlocker, resetForFile, checklistItems, paramShown, headCandidates, headFitOf, switchHead, templateText, usesGroup,
+  convertBlocker, resetForFile, checklistItems, paramShown, headCandidates, headFitOf, libraryChoices, switchHead, templateText, usesGroup,
 } from './logic.js';
 
 export { errorText, flagItems, parseValue, tailGroups, hex };
@@ -551,7 +551,23 @@ function headPicker(choices) {
   return el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('strong', { text: 'Head shape' }),
       el('span', { class: 'muted', text: ' pick the head closest to the photo' })),
-    ...rows);
+    ...rows, libraryChooser());
+}
+
+// "Choose from the library": every template by id (the matcher's top 3 first), filtered
+// by typing part of an id; picking one draws it like a picker choice.
+let libraryFilter = '';
+function libraryChooser() {
+  const list = el('select', { class: 'library-list', size: 6, 'aria-label': 'Library templates',
+    onchange: (ev) => { if (ev.target.value) actions.switchHead(ev.target.value); } });
+  const fill = () => list.replaceChildren(...libraryChoices(state.model, libraryFilter)
+    .map((c) => el('option', { value: c.choice, text: c.text })));
+  fill();
+  const search = el('input', { type: 'search', value: libraryFilter, placeholder: 'Type part of an id',
+    'aria-label': 'Filter the library by id',
+    oninput: (ev) => { libraryFilter = ev.target.value; fill(); } });
+  return el('div', { class: 'library-chooser' },
+    el('label', { class: 'param wide' }, el('span', { text: 'Choose from the library' }), search), list);
 }
 
 function tailCard(parts, n) {

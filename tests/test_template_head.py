@@ -476,3 +476,68 @@ def test_the_library_holds_one_template_per_product_reference_file():
     from rosette.vision.templates import NOT_PRODUCTS, load_library
     stems = {q.stem for q in (Path(__file__).resolve().parent.parent / "reference" / "svg").glob("*.svg")}
     assert sorted(t.sid for t in load_library()) == sorted(stems - set(NOT_PRODUCTS))
+
+
+# ---------------------------------------------------------------- H8: any library head by id
+
+def _five_templates():
+    t, near, far = _three_templates()
+    # a disc (fails the lobe gate for a star photo) and a smaller star: both outside the top 3
+    disc = Template("T9-15", "T9", [Piece(2, "head", [_circle(1.0)]), *t.pieces[1:]])
+    small = Template("T10-15", "T10", [Piece(2, "points", [_star(6, 0.4, 0.6)]), *t.pieces[1:]])
+    return t, near, far, disc, small
+
+
+@pytest.fixture
+def five(monkeypatch):
+    for x in _five_templates()[1:]:
+        monkeypatch.setitem(LIB, x.sid, x)
+
+
+def _five_model():
+    t, near, far, disc, small = _five_templates()
+    mask, labels = _labels_like(t, mapping={1: 1, 2: 2, 3: 3})
+    fr = Frame(axis_x=200, top=100, scale=1.0)
+    return with_template(_detected(), mask, labels, (200, 200, 100), fr, _groups(),
+                         lib=[disc, far, small, near, t], min_score=0.0)
+
+
+def test_every_library_template_outside_the_top_3_waits_in_library_heads(five):
+    m = _five_model()
+    cands = [q.params["template_id"] for q in m.parts + m.alternatives if q.role == "template"]
+    assert len(cands) == 3 and "T9-15" not in cands
+    lib = {q.params["template_id"]: q for q in m.library_heads}
+    assert set(lib) | set(cands) == {"T1-15", "T7-15", "T8-15", "T9-15", "T10-15"}
+    q = lib["T9-15"]  # the disc, gated out of the matcher's ranking, is still offered
+    assert q.role == "template" and q.params["description"] and q.params["rank"] > 3
+    assert (q.params["cx"], q.params["cy"], q.params["r"]) == (300, 125, 100)
+    assert RosetteModel.from_json(m.to_json()).library_heads == m.library_heads
+
+
+def test_use_head_takes_a_library_head_by_id_like_a_candidate(five):
+    from rosette.pipeline import drawn_head, use_head
+    m = _five_model()
+    t = next(q for q in m.parts if q.role == "template")
+    t.params.update(cx=310.0, r=110.0)
+    picked = use_head(m, "T9-15")
+    assert drawn_head(picked) == "T9-15"
+    drawn = next(q for q in picked.parts if q.role == "template")
+    assert (drawn.params["cx"], drawn.params["r"]) == (310.0, 110.0)  # the user's placement stays
+    assert "T9-15" not in [q.params["template_id"] for q in picked.library_heads]
+    assert render(picked).issues == []
+    # it joins the candidates: back and forth works
+    assert drawn_head(use_head(use_head(picked, "rules"), "T9-15")) == "T9-15"
+    with pytest.raises(ValueError):
+        use_head(m, "T99-15")
+
+
+def test_library_heads_are_checked_and_flagged_like_the_candidates(five):
+    from rosette.pipeline import FLAGGED_CONF, HeadFit, choose_head, drawn_head, use_head
+    fits = {"rules": HeadFit(0.9, 0.9), "T9-15": HeadFit(0.5, 0.7)}
+    m, _ = choose_head(_detected(), _five_model(), lambda x: fits.get(drawn_head(x), HeadFit(0.9, 0.9)),
+                       lambda a, b: 0.9)
+    assert {"T9-15", "T10-15"} <= set(m.head_states)
+    picked = use_head(m, "T9-15")
+    assert next(q for q in picked.parts if q.role == "template").confidence <= FLAGGED_CONF
+    assert [w for w in picked.warnings if "head match 50%, outline 70%" in w]
+    assert picked.head_states["T9-15"]["fit"] == {"agreement": 0.5, "silhouette": 0.7}
