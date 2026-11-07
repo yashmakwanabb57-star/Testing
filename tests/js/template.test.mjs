@@ -2,7 +2,7 @@
 // Run: node --test tests/js/template.test.mjs (tests/test_js.py runs it when node is on PATH)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { colorQuestions, flagItems, headCandidates, headChoice, automaticHeadText, headFitOf, renderBody, partGroups, switchHead, templateText, usesGroup } from '../../app/static/logic.js';
+import { colorQuestions, flagItems, automaticHeadText, renderBody, partGroups, templateText, usesGroup } from '../../app/static/logic.js';
 
 function model(score = 0.8) {
   return {
@@ -37,36 +37,12 @@ test('a template part uses every mapped group', () => {
   assert.equal(q.noun, 'head shape');
 });
 
-test('switchHead swaps the template and the rule-based head, tails stay', () => {
-  const m = model();
-  assert.equal(headChoice(m), 'template');
-  switchHead(m);
-  assert.deepEqual(m.parts.map((p) => p.id), ['t0', 'head']);
-  assert.deepEqual(m.alternatives.map((p) => p.id), ['template']);
-  assert.equal(headChoice(m), 'rules');
-  switchHead(m);
-  assert.deepEqual(m.parts.map((p) => p.id), ['t0', 'template']);
-  assert.equal(headChoice({ ...m, parts: m.parts.slice(0, 1), alternatives: [] }), null);
-});
-
-test('switchHead moves the hidden head colors out of the colors list and back', () => {
-  const m = model();
-  m.alternatives[0].color_group = 2;
-  m.alternative_groups = [{ id: 2, rgb: [1, 2, 3], pattern: false, texture: 1, area: 0.1, category: 2, confidence: 0.9 }];
-  switchHead(m);
-  assert.deepEqual(m.groups.map((g) => g.id), [0, 2]);
-  assert.deepEqual(m.alternative_groups.map((g) => g.id), [1]);
-  switchHead(m);
-  assert.deepEqual(m.groups.map((g) => g.id), [0, 1]);
-  assert.deepEqual(m.alternative_groups.map((g) => g.id), [2]);
-});
-
 test('a weak template match is flagged, a good one is not', () => {
   assert.ok(flagItems(model(0.45), [], false).some((f) => f.key === 'part:template' && /weak match/.test(f.text)));
   assert.ok(!flagItems(model(0.8), [], false).some((f) => f.key === 'part:template'));
 });
 
-// The head card's picker (fix round 4): the rule-based head and the library candidates.
+// A model with a library head drawn and two more candidates waiting in alternatives.
 function pickerModel() {
   const m = model(0.8);
   m.parts[1].params = { ...m.parts[1].params, rank: 1, points: 6, description: '6 loops, 6 kites, ring, center' };
@@ -76,72 +52,14 @@ function pickerModel() {
   return m;
 }
 
-test('headCandidates lists the rule-based head and the library candidates by rank', () => {
-  const c = headCandidates(pickerModel());
-  assert.deepEqual(c.map((x) => x.choice), ['rules', 'S29-15', 'S30-15', 'S57-17']);
-  assert.deepEqual(c.map((x) => x.drawn), [false, true, false, false]);
-  assert.equal(c[1].text, 'Library template S29-15 - match 80%, 6 points - 6 loops, 6 kites, ring, center');
-  assert.equal(c[2].text, 'Library template S30-15 - match 70%');
-  assert.equal(c[0].text, 'Rule-based head (the detected parts)');
-  assert.ok(c.every((x) => !/[–—]/.test(x.text)));
-  assert.deepEqual(headCandidates({ ...model(), parts: model().parts.slice(0, 1), alternatives: [] }), []);
-});
-
-test('switchHead draws the picked candidate, the others wait, colors follow', () => {
-  const m = pickerModel();
-  switchHead(m, 'S30-15');
-  assert.deepEqual(m.parts.map((p) => p.id), ['t0', 'template_2']);
-  assert.deepEqual(m.alternatives.map((p) => p.id).sort(), ['head', 'template', 'template_3']);
-  assert.deepEqual(m.groups.map((g) => g.id), [0, 1, 2]);
-  assert.equal(headChoice(m), 'template');
-  assert.equal(headCandidates(m).find((x) => x.drawn).choice, 'S30-15');
-  switchHead(m, 'rules');
-  assert.deepEqual(m.parts.map((p) => p.id), ['t0', 'head']);
-  assert.deepEqual(m.alternative_groups.map((g) => g.id), [1, 2]);
-  // the toggle without a choice goes back to the best match (rank 1)
-  switchHead(m);
-  assert.deepEqual(m.parts.map((p) => p.id), ['t0', 'template']);
-  assert.throws(() => switchHead(m, 'S99-15'));
-});
-
-test('a picked weak candidate is flagged like any library head', () => {
-  const m = pickerModel();
-  switchHead(m, 'S57-17');
-  assert.ok(flagItems(m, [], false).some((f) => f.key === 'part:template_3' && /weak match/.test(f.text)));
-});
-
-test('switchHead swaps the head-dependent warnings and keeps the library head placement', () => {
-  const m = pickerModel();
-  m.warnings = ['general', 'heads differ'];
-  m.head_states = {
-    'S29-15': { warnings: ['heads differ'], fit: { agreement: 0.8, silhouette: 0.9 } },
-    'S30-15': { warnings: [], fit: { agreement: 0.7, silhouette: 0.85 } },
-    rules: { warnings: ['far: head match 42%'], fit: { agreement: 0.42, silhouette: 0.6 } },
-  };
-  m.parts[1].params.cx = 310;
-  m.parts[1].params.r = 99;
-  switchHead(m, 'S30-15');
-  assert.deepEqual(m.warnings, ['general']);
-  assert.equal(m.parts[1].params.cx, 310);
-  assert.equal(m.parts[1].params.r, 99);
-  switchHead(m, 'rules');
-  assert.deepEqual(m.warnings, ['general', 'far: head match 42%']);
-  assert.deepEqual(headFitOf(m), { agreement: 0.42, silhouette: 0.6 });
-  switchHead(m, 'S29-15');
-  assert.deepEqual(m.warnings, ['general', 'heads differ']);
-  assert.equal(headFitOf({ ...m, head_states: {} }), undefined);
-});
-
 // H9 (amended): the head card shows the automatic head only; no picker in the UI.
 test('the head card heading names the automatic head', () => {
   assert.equal(automaticHeadText(pickerModel(), 'S29-15'), 'Automatic result: library template S29-15, match 80%');
+  assert.equal(automaticHeadText(pickerModel(), 'S30-15'), 'Automatic result: library template S30-15, match 70%');
+  assert.equal(automaticHeadText(pickerModel(), 'rules'), 'Automatic result: rule-based head');
+  assert.equal(automaticHeadText(pickerModel(), null), '');
+  assert.ok(!/[–—]/.test(automaticHeadText(pickerModel(), 'S29-15')));
   const m = pickerModel();
-  switchHead(m, 'S30-15'); // a head switched through the API (use_head) is not the automatic one
-  assert.equal(automaticHeadText(m, 'S29-15'), 'Automatic result: library template S29-15, match 80% (not drawn: another head is picked)');
-  switchHead(m, 'rules');
-  assert.equal(automaticHeadText(m, 'rules'), 'Automatic result: rule-based head');
-  assert.equal(automaticHeadText(m, null), '');
-  assert.ok(!/[\u2013\u2014]/.test(automaticHeadText(m, 'S29-15')));
   assert.equal(renderBody(m, 'S9-19'), JSON.stringify({ model: m, head: 'S9-19' }));
   assert.equal(renderBody(m), JSON.stringify({ model: m }));
 });

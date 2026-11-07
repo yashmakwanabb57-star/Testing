@@ -100,7 +100,6 @@ export const state = {
 
 // ---------------------------------------------------------------- api
 
-
 async function request(url, options) {
   let res;
   try {
@@ -758,10 +757,11 @@ export const views = {
   warnings() {
     const flags = flagItems(state.model, state.issues, state.flagged)
       .filter((f) => f.key.startsWith('warning:') || f.key.startsWith('server:'));
-    $('warnings-block').hidden = !flags.length;
+    const info = (state.model && state.model.info) || []; // information lines, not flags
+    $('warnings-block').hidden = !flags.length && !info.length;
     $('warnings').replaceChildren(...flags.map((f) => el('div', { class: 'card flagged', 'data-flag': f.key },
       el('p', { class: 'warn-text', text: f.text }),
-      confirmBox(f.key))));
+      confirmBox(f.key))), ...info.map((t) => el('p', { class: 'muted info-line', text: t })));
     views.flagsMarked();
   },
 

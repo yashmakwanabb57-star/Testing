@@ -90,12 +90,11 @@ TEMPLATE_CANDIDATES = 3
 RULES_HEAD = "rules"
 # Part id prefix of a library template chosen outside the candidates (add_library_head, H8).
 LIBRARY_PART_ID = "library"
-# Template params that stay when the user switches from one library head to another.
-TEMPLATE_PLACEMENT = ("cx", "cy", "r", "rotation_deg")
 # A drawn library head whose pose moves it at least RECENTER_MIN (head radii, or scale
 # change) from prepare's head circle leaves an information line (model.info, not a flag),
 # so a later round on prepare has the data (H9).
 RECENTER_MIN = 0.1
+RECENTER_PREFIX = "Head re-centered:"
 RECENTER_INFO = ("Head re-centered: the library head is drawn at an offset of {dx:+.2f}, {dy:+.2f} head radii "
                  "and scale {scale:.2f} from the photo's head circle.")
 # Template colors follow the tails (H7 fix round 2): a reference category that is also one
@@ -386,7 +385,6 @@ def use_head(model: RosetteModel, choice: str) -> RosetteModel:
     ValueError for a choice the model does not hold."""
     out = copy.deepcopy(model)
     rules, cands = _head_pool(out)
-    before = next((q for q in out.parts if q.role == "template"), None)
     current = drawn_head(out)
     if choice == RULES_HEAD:
         drawn = rules
@@ -394,10 +392,7 @@ def use_head(model: RosetteModel, choice: str) -> RosetteModel:
         drawn = [q for q in cands if q.params.get("template_id") == choice][:1]
         if not drawn:
             raise ValueError(f"no head {choice!r} in the model")
-        if before is not None and drawn[0] is not before:  # the user's placement stays
-            for k in TEMPLATE_PLACEMENT:
-                if k in before.params:
-                    drawn[0].params[k] = before.params[k]
+    # each library head keeps its own pose (from its search, or the user's edit of it)
     keep = {id(q) for q in drawn}
     out.parts = [q for q in out.parts if q.role == "tail_stripe"] + drawn
     out.alternatives = [q for q in rules + cands if id(q) not in keep]
@@ -406,7 +401,21 @@ def use_head(model: RosetteModel, choice: str) -> RosetteModel:
         out.warnings = [w for w in out.warnings if w not in old] + [
             w for w in out.head_states.get(choice, {}).get("warnings", [])]
     _split_groups(out)
+    out.info = [x for x in out.info if not x.startswith(RECENTER_PREFIX)] + _recenter_info(out)
     return out
+
+
+def _recenter_info(model: RosetteModel) -> list[str]:
+    """The information line of a drawn library head moved RECENTER_MIN or more from the
+    photo's head circle by its pose search (H9), else none."""
+    t = next((q for q in model.parts if q.role == "template"), None)
+    if t is None:
+        return []
+    dx, dy = float(t.params.get("pose_dx", 0.0)), float(t.params.get("pose_dy", 0.0))
+    sc = float(t.params.get("pose_scale", 1.0))
+    if max(abs(dx), abs(dy), abs(sc - 1.0)) < RECENTER_MIN - 1e-9:
+        return []
+    return [RECENTER_INFO.format(dx=dx, dy=dy, scale=sc)]
 
 
 def drawn_head(model: RosetteModel) -> str:
@@ -486,12 +495,7 @@ def choose_head(rules: RosetteModel, lib: RosetteModel | None,
     out = use_head(out, choice)
     out.head_states = states
     out.warnings = base + states[choice]["warnings"]
-    drawn = next((q for q in out.parts if q.role == "template"), None)
-    if drawn is not None:
-        dx, dy = float(drawn.params.get("pose_dx", 0.0)), float(drawn.params.get("pose_dy", 0.0))
-        sc = float(drawn.params.get("pose_scale", 1.0))
-        if max(abs(dx), abs(dy), abs(sc - 1.0)) >= RECENTER_MIN - 1e-9:
-            out.info = list(out.info) + [RECENTER_INFO.format(dx=dx, dy=dy, scale=sc)]
+
     return out, (fits[choice] if choice != RULES_HEAD else rules_fit)
 
 

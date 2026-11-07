@@ -463,14 +463,19 @@ def test_switching_heads_swaps_flags_warnings_and_fit(three):
     assert RosetteModel.from_json(back.to_json()).head_states == back.head_states
 
 
-def test_switching_between_library_heads_keeps_the_placement(three):
+def test_each_library_head_keeps_its_own_pose_across_switches(three):
     from rosette.pipeline import use_head
     m = _lib_model(0.9)
     t = next(q for q in m.parts if q.role == "template")
-    t.params.update(cx=310.0, cy=190.0, r=120.0, rotation_deg=15.0)
-    other = next(q for q in use_head(m, "T7-15").parts if q.role == "template")
-    assert (other.params["cx"], other.params["cy"], other.params["r"], other.params["rotation_deg"]) == (
-        310.0, 190.0, 120.0, 15.0)
+    other0 = next(q for q in m.alternatives if q.params.get("template_id") == "T7-15")
+    own = {k: other0.params[k] for k in ("cx", "cy", "r", "rotation_deg")}
+    t.params.update(cx=310.0, cy=190.0, r=120.0, rotation_deg=15.0)  # a user edit of the drawn head
+    switched = use_head(m, "T7-15")
+    other = next(q for q in switched.parts if q.role == "template")
+    assert {k: other.params[k] for k in own} == own  # never overwritten by the switch
+    back = next(q for q in use_head(switched, "T1-15").parts if q.role == "template")
+    assert (back.params["cx"], back.params["cy"], back.params["r"], back.params["rotation_deg"]) == (
+        310.0, 190.0, 120.0, 15.0)  # the edit stays on the head it was made on
 
 
 def test_the_library_holds_one_template_per_product_reference_file():
@@ -534,7 +539,11 @@ def test_a_library_head_outside_the_candidates_is_placed_and_checked_on_demand(f
     assert drawn_head(picked) == "T9-15"
     drawn = next(q for q in picked.parts if q.role == "template")
     assert drawn.id == "library_T9-15" and drawn.params["rank"] > 3 and drawn.params["description"]
-    assert (drawn.params["cx"], drawn.params["r"]) == (310.0, 110.0)  # the user's placement stays
+    # placed at its own pose on the photo circle (canvas (300, 125, 100)), not at the edited head
+    p = drawn.params
+    assert p["cx"] == pytest.approx(300 + p["pose_dx"] * 100, abs=0.01)
+    assert p["cy"] == pytest.approx(125 + p["pose_dy"] * 100, abs=0.01)
+    assert p["r"] == pytest.approx(100 * p["pose_scale"], abs=0.01)
     assert "T9-15" in picked.head_states and picked.head_states["T9-15"]["fit"] is not None
     assert render(picked).issues == []
     # it joins the candidates: back and forth works without the photo
@@ -600,3 +609,15 @@ def test_a_re_centered_library_head_leaves_an_information_line_not_a_flag(three)
     assert RosetteModel.from_json(m.to_json()).info == m.info
     t.params.update(pose_dy=0.05, pose_scale=1.0)
     assert choose_head(_detected(), lib, fits, lambda a, b: 0.9)[0].info == []
+
+
+
+def test_the_re_centered_line_follows_the_drawn_head(three):
+    from rosette.pipeline import RECENTER_INFO, use_head
+    m = _lib_model(0.9)
+    other = next(q for q in m.alternatives if q.params.get("template_id") == "T7-15")
+    other.params.update(pose_dx=0.0, pose_dy=0.2, pose_scale=1.0)
+    line = RECENTER_INFO.format(dx=0.0, dy=0.2, scale=1.0)
+    switched = use_head(m, "T7-15")
+    assert line in switched.info
+    assert line not in use_head(switched, "rules").info

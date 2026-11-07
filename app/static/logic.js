@@ -72,114 +72,22 @@ export function templateText(p) {
   return `Head shape: from library template ${p.params.template_id}, match ${pct}${pts}`;
 }
 
-// Which head the model draws: 'template', 'rules', or null when it has no choice.
-export function headChoice(model) {
-  if (!model) return null;
-  const all = [...model.parts, ...(model.alternatives || [])];
-  if (!all.some((p) => p.role === 'template')) return null;
-  return model.parts.some((p) => p.role === 'template') ? 'template' : 'rules';
-}
-
-// The heads the model holds: the detected head parts and the library candidates by rank
-// (rosette/pipeline.py _head_pool).
-function headPool(model) {
-  const pool = [...model.parts.filter((p) => p.role !== 'tail_stripe'), ...(model.alternatives || [])];
-  const rank = (p) => Number(p.params.rank ?? 1);
-  const cands = pool.filter((p) => p.role === 'template').sort((a, b) => rank(a) - rank(b));
-  return { rules: pool.filter((p) => p.role !== 'template'), cands };
-}
-
-// Head card picker line of one library candidate.
-export function candidateText(p) {
-  const score = Number(p.params.score);
-  const pct = Number.isFinite(score) ? `${Math.round(score * 100)}%` : '-';
-  const pts = Number(p.params.points) > 0 ? `, ${p.params.points} points` : '';
-  const desc = p.params.description ? ` - ${p.params.description}` : '';
-  return `Library template ${p.params.template_id} - match ${pct}${pts}${desc}`;
-}
-
-// The head card's choices: the rule-based head, then the library candidates by rank;
-// empty when the model holds no library head. choice is what switchHead takes.
-export function headCandidates(model) {
-  if (!model) return [];
-  const { cands } = headPool(model);
-  if (!cands.length) return [];
-  const drawn = new Set(model.parts);
-  return [
-    { choice: 'rules', text: 'Rule-based head (the detected parts)', drawn: headChoice(model) === 'rules' },
-    ...cands.map((p) => ({ choice: String(p.params.template_id), text: candidateText(p), drawn: drawn.has(p) })),
-  ];
-}
-
-// Draw the picked head (rosette/pipeline.py use_head): 'rules' or a candidate's
-// template_id; without a choice, the toggle (the rule-based head when a library head is
-// drawn, else the first-ranked candidate). Tails stay in place; every other head waits
-// in alternatives. Mutates the model; returns it.
-// The head the model draws: a template_id, or 'rules'.
-function drawnHead(model) {
-  const t = model.parts.find((p) => p.role === 'template');
-  return t ? String(t.params.template_id) : 'rules';
-}
-
-// Head fit of the drawn head (model.head_states, rosette/pipeline.py choose_head), or
-// undefined when the model does not record it.
-export function headFitOf(model) {
-  const st = (model.head_states || {})[drawnHead(model)];
-  return st ? st.fit : undefined;
-}
-
-// Template params that stay when the user switches between library heads
-// (rosette/pipeline.py TEMPLATE_PLACEMENT).
-const TEMPLATE_PLACEMENT = ['cx', 'cy', 'r', 'rotation_deg'];
-
-// The head the conversion chose (choice: 'rules' or a template_id, kept from the analyze
-// response) and whether it is the one drawn now; '' without a choice.
+// The head card heading (H9): the head the conversion chose (choice: 'rules' or a
+// template_id, kept from the analyze response); '' without a choice. The UI has no head
+// picker; heads are switched only through the API (rosette/pipeline.py use_head).
 export function automaticHeadText(model, choice) {
   if (!model || !choice) return '';
-  const drawn = drawnHead(model) === choice ? '' : ' (not drawn: another head is picked)';
-  if (choice === 'rules') return `Automatic result: rule-based head${drawn}`;
-  const p = headPool(model).cands.find((q) => String(q.params.template_id) === choice);
+  if (choice === 'rules') return 'Automatic result: rule-based head';
+  const p = [...model.parts, ...(model.alternatives || [])]
+    .find((q) => q.role === 'template' && String(q.params.template_id) === choice);
   const score = p ? Number(p.params.score) : NaN;
   const pct = Number.isFinite(score) ? `, match ${Math.round(score * 100)}%` : '';
-  return `Automatic result: library template ${choice}${pct}${drawn}`;
+  return `Automatic result: library template ${choice}${pct}`;
 }
 
-// Body of /api/render: the model, and the head to draw when the server picks it.
+// Body of /api/render: the model, and the head to draw when a script asks the server for one.
 export function renderBody(model, head) {
   return JSON.stringify(head === undefined ? { model } : { model, head });
-}
-
-export function switchHead(model, choice) {
-  const { rules, cands } = headPool(model);
-  const before = model.parts.find((p) => p.role === 'template');
-  const current = drawnHead(model);
-  if (choice === undefined) {
-    choice = model.parts.some((p) => p.role === 'template') || !cands.length
-      ? 'rules' : String(cands[0].params.template_id);
-  }
-  let drawn = rules;
-  if (choice !== 'rules') {
-    drawn = cands.filter((p) => String(p.params.template_id) === choice).slice(0, 1);
-    if (!drawn.length) throw new Error(`No head ${choice} in the model.`);
-    if (before && drawn[0] !== before) {
-      for (const k of TEMPLATE_PLACEMENT) if (k in before.params) drawn[0].params[k] = before.params[k];
-    }
-  }
-  // head-dependent warnings follow the head (the flagged confidences live on the parts)
-  const states = model.head_states || {};
-  if (Object.keys(states).length) {
-    const old = new Set((states[current] || {}).warnings || []);
-    model.warnings = [...(model.warnings || []).filter((w) => !old.has(w)), ...((states[choice] || {}).warnings || [])];
-  }
-  const tails = model.parts.filter((p) => p.role === 'tail_stripe');
-  model.parts = [...tails, ...drawn];
-  model.alternatives = [...rules, ...cands].filter((p) => !drawn.includes(p));
-  // color groups follow the parts that use them (rosette/pipeline.py _split_groups)
-  const pool = [...model.groups, ...(model.alternative_groups || [])].sort((a, b) => a.id - b.id);
-  const used = new Set(model.parts.flatMap((p) => partGroups(p)));
-  model.groups = pool.filter((g) => used.has(g.id));
-  model.alternative_groups = pool.filter((g) => !used.has(g.id));
-  return model;
 }
 
 // Mirrors rosette/pipeline.py is_flagged: one item per thing the user must confirm.

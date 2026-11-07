@@ -213,3 +213,32 @@ def test_rank_turns_a_star_within_its_symmetry():
     (best, f), = rank(_posed_photo(t, rot=15.0), [t], gate=None, n=1)
     assert f["pose"].rotation in (15.0, -45.0)  # 15 degrees, or the same star 60 degrees on
     assert f["iou"] > 0.9
+
+
+
+def test_best_pose_breaks_ties_without_comparing_poses():
+    from rosette.vision.templates import Pose, best_pose
+    t = _template("B2-15", [(1, "points", [_star(6, 0.55, 1.0)]), (2, "center", [_circle(0.35)])])
+    empty = np.full((GRID, GRID), -1, np.int16)  # every pose scores 0: all tie
+    assert best_pose(empty, t) == Pose()
+
+
+def test_an_unmoved_template_that_maps_under_the_tails_is_kept_when_the_pose_does_not(monkeypatch):
+    from rosette.vision import templates as T
+    t = _template("B2-15", [(1, "points", [_star(6, 0.55, 1.0)]), (2, "center", [_circle(0.35)])])
+    photo = _posed_photo(t, 0.0, 0.3, 1.2)
+    real = T.tail_consistent_mapping
+    monkeypatch.setattr(T, "tail_consistent_mapping",
+                        lambda labels, tp, tg: real(labels, tp, tg) if tp is t else None)
+    f = T.posed_features(photo, t, tail_groups={1: 5})
+    assert f is not None and f["pose"] == T.Pose() and f["anchored"]
+    # with free_ok the posed free mapping does not beat the unmoved anchored one
+    g = T.posed_features(photo, t, tail_groups={1: 5}, free_ok=True)
+    assert g["pose"] == T.Pose() and g["anchored"]
+
+
+def test_symmetry_is_cached_per_template_shape_not_per_id():
+    from rosette.vision.templates import symmetry
+    star = _template("Z1-15", [(1, "points", [_star(6, 0.55, 1.0)])])
+    disc = _template("Z1-15", [(1, "head", [_circle(1.0)])])
+    assert symmetry(star) >= 5 and symmetry(disc) < 3
