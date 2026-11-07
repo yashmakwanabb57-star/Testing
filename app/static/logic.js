@@ -107,8 +107,27 @@ export function headCandidates(model) {
 // template_id; without a choice, the toggle (the rule-based head when a library head is
 // drawn, else the first-ranked candidate). Tails stay in place; every other head waits
 // in alternatives. Mutates the model; returns it.
+// The head the model draws: a template_id, or 'rules'.
+function drawnHead(model) {
+  const t = model.parts.find((p) => p.role === 'template');
+  return t ? String(t.params.template_id) : 'rules';
+}
+
+// Head fit of the drawn head (model.head_states, rosette/pipeline.py choose_head), or
+// undefined when the model does not record it.
+export function headFitOf(model) {
+  const st = (model.head_states || {})[drawnHead(model)];
+  return st ? st.fit : undefined;
+}
+
+// Template params that stay when the user switches between library heads
+// (rosette/pipeline.py TEMPLATE_PLACEMENT).
+const TEMPLATE_PLACEMENT = ['cx', 'cy', 'r', 'rotation_deg'];
+
 export function switchHead(model, choice) {
   const { rules, cands } = headPool(model);
+  const before = model.parts.find((p) => p.role === 'template');
+  const current = drawnHead(model);
   if (choice === undefined) {
     choice = model.parts.some((p) => p.role === 'template') || !cands.length
       ? 'rules' : String(cands[0].params.template_id);
@@ -117,6 +136,15 @@ export function switchHead(model, choice) {
   if (choice !== 'rules') {
     drawn = cands.filter((p) => String(p.params.template_id) === choice).slice(0, 1);
     if (!drawn.length) throw new Error(`No head ${choice} in the model.`);
+    if (before && drawn[0] !== before) {
+      for (const k of TEMPLATE_PLACEMENT) if (k in before.params) drawn[0].params[k] = before.params[k];
+    }
+  }
+  // head-dependent warnings follow the head (the flagged confidences live on the parts)
+  const states = model.head_states || {};
+  if (Object.keys(states).length) {
+    const old = new Set((states[current] || {}).warnings || []);
+    model.warnings = [...(model.warnings || []).filter((w) => !old.has(w)), ...((states[choice] || {}).warnings || [])];
   }
   const tails = model.parts.filter((p) => p.role === 'tail_stripe');
   model.parts = [...tails, ...drawn];

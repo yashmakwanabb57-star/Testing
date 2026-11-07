@@ -2,7 +2,7 @@
 // Run: node --test tests/js/template.test.mjs (tests/test_js.py runs it when node is on PATH)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { colorQuestions, flagItems, headCandidates, headChoice, partGroups, switchHead, templateText, usesGroup } from '../../app/static/logic.js';
+import { colorQuestions, flagItems, headCandidates, headChoice, headFitOf, partGroups, switchHead, templateText, usesGroup } from '../../app/static/logic.js';
 
 function model(score = 0.8) {
   return {
@@ -108,4 +108,26 @@ test('a picked weak candidate is flagged like any library head', () => {
   const m = pickerModel();
   switchHead(m, 'S57-17');
   assert.ok(flagItems(m, [], false).some((f) => f.key === 'part:template_3' && /weak match/.test(f.text)));
+});
+
+test('switchHead swaps the head-dependent warnings and keeps the library head placement', () => {
+  const m = pickerModel();
+  m.warnings = ['general', 'heads differ'];
+  m.head_states = {
+    'S29-15': { warnings: ['heads differ'], fit: { agreement: 0.8, silhouette: 0.9 } },
+    'S30-15': { warnings: [], fit: { agreement: 0.7, silhouette: 0.85 } },
+    rules: { warnings: ['far: head match 42%'], fit: { agreement: 0.42, silhouette: 0.6 } },
+  };
+  m.parts[1].params.cx = 310;
+  m.parts[1].params.r = 99;
+  switchHead(m, 'S30-15');
+  assert.deepEqual(m.warnings, ['general']);
+  assert.equal(m.parts[1].params.cx, 310);
+  assert.equal(m.parts[1].params.r, 99);
+  switchHead(m, 'rules');
+  assert.deepEqual(m.warnings, ['general', 'far: head match 42%']);
+  assert.deepEqual(headFitOf(m), { agreement: 0.42, silhouette: 0.6 });
+  switchHead(m, 'S29-15');
+  assert.deepEqual(m.warnings, ['general', 'heads differ']);
+  assert.equal(headFitOf({ ...m, head_states: {} }), undefined);
 });

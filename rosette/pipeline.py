@@ -24,6 +24,7 @@ render(model): build -> write_svg -> validate. build may add warnings to the mod
 from __future__ import annotations
 
 import copy
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -86,6 +87,8 @@ TEMPLATE_PART_ID = "template"
 # template_2, template_3) with the rule-based head. Own design among the top 3: 58 of 76.
 TEMPLATE_CANDIDATES = 3
 RULES_HEAD = "rules"
+# Template params that stay when the user switches from one library head to another.
+TEMPLATE_PLACEMENT = ("cx", "cy", "r", "rotation_deg")
 # Template colors follow the tails (H7 fix round 2): a reference category that is also one
 # of the reference's tail Colors k is drawn in the group our tails carry as Color k, the
 # head-only categories follow the overlap (templates.tail_consistent_mapping); the matcher
@@ -253,10 +256,12 @@ def override_allowed(rules: HeadFit | None, library: HeadFit | None, partition: 
     """A grossly failed rule-based head (gross_failure) is replaced by the library head
     below the color floor only when the library outline wins by TEMPLATE_OVERRIDE_GAIN and
     its tail-mapped partition reaches TEMPLATE_OVERRIDE_PARTITION; the partition bar is
-    dropped when the rule-based path drew no head layer (head_layer False)."""
-    return (gross_failure(rules) and library is not None
-            and library.silhouette >= rules.silhouette + TEMPLATE_OVERRIDE_GAIN - 1e-9
-            and (not head_layer or partition >= TEMPLATE_OVERRIDE_PARTITION - 1e-9))
+    dropped when the rule-based path drew no head layer (head_layer False). A rule-based
+    head without a head fit (rules None: nothing drawn in the head) counts as failed."""
+    if library is None or not (rules is None or gross_failure(rules)):
+        return False
+    gain_ok = rules is None or library.silhouette >= rules.silhouette + TEMPLATE_OVERRIDE_GAIN - 1e-9
+    return gain_ok and (not head_layer or partition >= TEMPLATE_OVERRIDE_PARTITION - 1e-9)
 
 
 def library_head_path(rules: HeadFit | None, library: HeadFit | None, partition: float,
@@ -364,17 +369,33 @@ def use_head(model: RosetteModel, choice: str) -> RosetteModel:
     ValueError for a choice the model does not hold."""
     out = copy.deepcopy(model)
     rules, cands = _head_pool(out)
+    before = next((q for q in out.parts if q.role == "template"), None)
+    current = drawn_head(out)
     if choice == RULES_HEAD:
         drawn = rules
     else:
         drawn = [q for q in cands if q.params.get("template_id") == choice][:1]
         if not drawn:
             raise ValueError(f"no head {choice!r} in the model")
+        if before is not None and drawn[0] is not before:  # the user's placement stays
+            for k in TEMPLATE_PLACEMENT:
+                if k in before.params:
+                    drawn[0].params[k] = before.params[k]
     keep = {id(q) for q in drawn}
     out.parts = [q for q in out.parts if q.role == "tail_stripe"] + drawn
     out.alternatives = [q for q in rules + cands if id(q) not in keep]
+    if out.head_states:  # head-dependent warnings follow the head
+        old = set(out.head_states.get(current, {}).get("warnings", []))
+        out.warnings = [w for w in out.warnings if w not in old] + [
+            w for w in out.head_states.get(choice, {}).get("warnings", [])]
     _split_groups(out)
     return out
+
+
+def drawn_head(model: RosetteModel) -> str:
+    """The head the model draws: a template_id, or RULES_HEAD."""
+    t = next((q for q in model.parts if q.role == "template"), None)
+    return str(t.params["template_id"]) if t is not None else RULES_HEAD
 
 
 def use_rules_head(model: RosetteModel) -> RosetteModel:
@@ -386,6 +407,78 @@ def use_rules_head(model: RosetteModel) -> RosetteModel:
     if not cands:
         return copy.deepcopy(model)
     return use_head(model, str(cands[0].params["template_id"]))
+
+
+def _with_head_state(model: RosetteModel, fit: HeadFit | None, cap: bool,
+                     warnings: list[str]) -> tuple[RosetteModel, list[str]]:
+    """The model with its drawn head flagged as analyze flags it (a library head drawn
+    without color agreement capped at FLAGGED_CONF, then the gross head check), and the
+    head-dependent warnings: `warnings` plus those of the check."""
+    m = copy.deepcopy(model)
+    m.warnings = []
+    if cap:
+        for q in m.parts:
+            if q.role == "template":
+                q.confidence = min(q.confidence, FLAGGED_CONF)
+    m = _check_head(m, fit)
+    return m, list(warnings) + m.warnings
+
+
+def choose_head(rules: RosetteModel, lib: RosetteModel | None,
+                fit_of: Callable[[RosetteModel], HeadFit | None],
+                overlap_of: Callable[[RosetteModel, RosetteModel], float | None]) -> tuple[RosetteModel, HeadFit | None]:
+    """Which head analyze draws, and every head's state for the head card. rules: the
+    detected model; lib: with_template's model (or None); fit_of: the head fit of a model
+    (head_fit on the photo); overlap_of: head_overlap. The best library head is drawn on
+    the "floor" and "override" paths (library_head_path), else the rule-based head; on
+    every path the library candidates stay in alternatives. Each head's flagged confidence
+    is stored on its parts and its head-dependent warnings and head fit in
+    model.head_states (keyed by template_id or RULES_HEAD), so use_head can switch with
+    the same flags and checks. Returns the model and the drawn head's fit."""
+    rules_fit = fit_of(rules)
+    if lib is None or not any(q.role == "template" for q in lib.parts):
+        return _check_head(rules, rules_fit), rules_fit
+    base = list(lib.warnings)
+    _, cands = _head_pool(lib)
+    first = cands[0]
+    states: dict[str, dict] = {}
+    conf: dict[str, float] = {}
+    fits: dict[str, HeadFit | None] = {}
+    path = None
+    for q in cands:
+        tid = str(q.params["template_id"])
+        m = use_head(lib, tid)
+        fits[tid] = fit_of(m)
+        part = float(q.params.get("partition", 0.0))
+        if q is first:
+            path = library_head_path(rules_fit, fits[tid], part, has_head_layer(rules))
+        agree = colors_agree(part)
+        overlap = overlap_of(rules, m)
+        differs = ([TEMPLATE_DIFFERS_WARNING.format(iou=overlap)]
+                   if overlap is not None and (overlap < TEMPLATE_DIFFERS_IOU or not agree) else [])
+        checked, warns = _with_head_state(m, fits[tid], not agree, differs)
+        conf.update({x.id: x.confidence for x in checked.parts if x.role != "tail_stripe"})
+        states[tid] = {"warnings": warns, "fit": _fit_json(fits[tid])}
+    colors = ([TEMPLATE_COLORS_WARNING.format(tid=first.params["template_id"])]
+              if path in ("colors", "override") else [])
+    checked, warns = _with_head_state(use_head(lib, RULES_HEAD), rules_fit, False, colors)
+    conf.update({x.id: x.confidence for x in checked.parts if x.role != "tail_stripe"})
+    states[RULES_HEAD] = {"warnings": warns, "fit": _fit_json(rules_fit)}
+    out = copy.deepcopy(lib)
+    for q in out.parts + out.alternatives:
+        if q.id in conf:
+            q.confidence = conf[q.id]
+    choice = str(first.params["template_id"]) if path in ("floor", "override") else RULES_HEAD
+    out.warnings = base
+    out.head_states = {}
+    out = use_head(out, choice)
+    out.head_states = states
+    out.warnings = base + states[choice]["warnings"]
+    return out, (fits[choice] if choice != RULES_HEAD else rules_fit)
+
+
+def _fit_json(fit: HeadFit | None) -> dict | None:
+    return None if fit is None else {"agreement": round(fit.agreement, 4), "silhouette": round(fit.silhouette, 4)}
 
 
 def analyze(data: bytes) -> RosetteModel:
@@ -431,27 +524,10 @@ def analyze_with_fit(data: bytes, template: bool = True,
     p, labels, groups, out, merged, merged_print = d.prepared, d.labels, d.groups, d.model, d.merged, d.merged_print
     used = {q.color_group for q in out.parts} | set(merged)
     fit = head_fit(p, labels, out, merged)
+    lib = None
     if template:
         lib = with_template(out, p.mask, labels, p.head, Frame.of(p), groups, merged, exclude_key=exclude_key)
-        if lib.alternatives:
-            lib_fit = head_fit(p, labels, lib, merged)
-            tmpl = next(q for q in lib.parts if q.role == "template")
-            path = library_head_path(fit, lib_fit, float(tmpl.params.get("partition", 0.0)), has_head_layer(out))
-            if path is not None:
-                agree = path == "floor"
-                if path != "colors":
-                    overlap = head_overlap(out, lib)
-                    out, fit = lib, lib_fit
-                    if not agree:  # drawn because the rule-based head failed: flagged
-                        for q in out.parts:
-                            if q.role == "template":
-                                q.confidence = min(q.confidence, FLAGGED_CONF)
-                    if overlap is not None and (overlap < TEMPLATE_DIFFERS_IOU or not agree):
-                        out.warnings.append(TEMPLATE_DIFFERS_WARNING.format(iou=overlap))
-                else:  # the rule-based head, with the library head ready on the toggle
-                    out = use_rules_head(lib)
-                    out.warnings.append(TEMPLATE_COLORS_WARNING.format(tid=tmpl.params["template_id"]))
-    out = _check_head(out, fit)
+    out, fit = choose_head(out, lib, lambda m: head_fit(p, labels, m, merged), head_overlap)
     by_id = {g.id: g for g in groups}
     for gid in mixed_texture_groups(p, labels, groups):
         if gid in used:

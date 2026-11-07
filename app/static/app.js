@@ -6,7 +6,7 @@ import { applyConfig, glitterPattern, COLOR_INDICES } from './simulator.js';
 import {
   MAX_COUNT, POINT_KINDS, errorText, hex, flagItems,
   downloadBlockers as blockersFor, groupColor, tailGroups, parseValue, tailCheckKey, sourceNotice,
-  convertBlocker, resetForFile, checklistItems, paramShown, headCandidates, switchHead, templateText, usesGroup,
+  convertBlocker, resetForFile, checklistItems, paramShown, headCandidates, headFitOf, switchHead, templateText, usesGroup,
 } from './logic.js';
 
 export { errorText, flagItems, parseValue, tailGroups, hex };
@@ -285,6 +285,8 @@ export const actions = {
   switchHead(choice) {
     const before = state.model.parts.filter((p) => p.role !== 'tail_stripe').map((p) => `part:${p.id}`);
     switchHead(state.model, choice);
+    const fit = headFitOf(state.model);
+    if (fit !== undefined) state.headFit = fit;
     actions.unconfirm(...before, 'check:head');
     views.parts();
     views.groups();

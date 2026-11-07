@@ -342,3 +342,137 @@ def test_without_a_head_layer_the_override_skips_the_partition_bar():
     assert library_head_path(failed, big, low, head_layer=True) == "colors"
     # the gain bar holds either way
     assert not override_allowed(failed, HeadFit(0.2, 0.60 + TEMPLATE_OVERRIDE_GAIN - 0.01), low, head_layer=False)
+
+
+
+# ---------------------------------------------------------------- choose_head (fix round 5)
+
+def _lib_model(partition=0.4, rules=None):
+    """with_template's model over the three synthetic templates (T1-15 first), with the
+    first candidate's partition set."""
+    t, near, far = _three_templates()
+    mask, labels = _labels_like(t, mapping={1: 1, 2: 2, 3: 3})
+    fr = Frame(axis_x=200, top=100, scale=1.0)
+    lib = with_template(rules or _detected(), mask, labels, (200, 200, 100), fr, _groups(), lib=[far, near, t],
+                        min_score=0.0)
+    for q in lib.parts + lib.alternatives:
+        if q.role == "template":
+            q.params["partition"] = partition if q.params["rank"] == 1 else 0.9
+    return lib
+
+
+@pytest.fixture
+def three(monkeypatch):
+    for x in _three_templates()[1:]:
+        monkeypatch.setitem(LIB, x.sid, x)
+
+
+def _fits(**by_head):
+    from rosette.pipeline import HeadFit, drawn_head
+    table = {k.replace("_", "-"): HeadFit(*v) if v else None for k, v in by_head.items()}
+    return lambda m: table[drawn_head(m)]
+
+
+GROSS, FINE = (0.42, 0.60), (0.9, 0.9)
+
+
+def _template_warnings(m):
+    return [w for w in m.warnings if "library head" in w]
+
+
+def test_none_path_keeps_the_three_candidates_and_warns_nothing(three):
+    from rosette.pipeline import RULES_HEAD, choose_head, drawn_head
+    fits = _fits(rules=(0.9, 0.95), T1_15=(0.9, 0.9), T7_15=(0.9, 0.9), T8_15=(0.9, 0.9))
+    m, fit = choose_head(_detected(), _lib_model(0.9), fits, lambda a, b: 0.5)
+    assert drawn_head(m) == RULES_HEAD and fit.silhouette == 0.95
+    assert sorted(q.params["template_id"] for q in m.alternatives if q.role == "template") == [
+        "T1-15", "T7-15", "T8-15"]
+    assert _template_warnings(m) == [] and m.warnings == []
+    assert set(m.head_states) == {"rules", "T1-15", "T7-15", "T8-15"}
+
+
+def test_override_caps_the_library_head_and_warns_that_the_heads_differ(three):
+    from rosette.pipeline import FLAGGED_CONF, choose_head, drawn_head
+    fits = _fits(rules=GROSS, T1_15=(0.8, 0.9), T7_15=(0.8, 0.85), T8_15=(0.8, 0.85))
+    m, fit = choose_head(_detected(), _lib_model(0.4), fits, lambda a, b: 0.85)
+    assert drawn_head(m) == "T1-15" and fit.silhouette == 0.9
+    assert next(q for q in m.parts if q.role == "template").confidence <= FLAGGED_CONF
+    assert any("differ a lot" in w for w in m.warnings)
+    assert not any("far from the photo" in w for w in m.warnings)
+
+
+def test_floor_path_warns_only_when_the_heads_overlap_under_the_bar(three):
+    from rosette.pipeline import TEMPLATE_DIFFERS_IOU, choose_head, drawn_head
+    fits = _fits(rules=FINE, T1_15=(0.9, 0.95), T7_15=(0.9, 0.9), T8_15=(0.9, 0.9))
+    m, _ = choose_head(_detected(), _lib_model(0.9), fits, lambda a, b: TEMPLATE_DIFFERS_IOU + 0.05)
+    assert drawn_head(m) == "T1-15" and m.warnings == []
+    assert next(q for q in m.parts if q.role == "template").confidence >= FLAG_BELOW
+    m, _ = choose_head(_detected(), _lib_model(0.9), fits, lambda a, b: TEMPLATE_DIFFERS_IOU - 0.05)
+    assert [w for w in m.warnings if "differ a lot" in w]
+
+
+def test_colors_path_draws_the_rules_head_keeps_the_candidates_and_warns(three):
+    from rosette.pipeline import RULES_HEAD, choose_head, drawn_head
+    fits = _fits(rules=FINE, T1_15=(0.9, 0.95), T7_15=(0.9, 0.9), T8_15=(0.9, 0.9))
+    m, _ = choose_head(_detected(), _lib_model(0.4), fits, lambda a, b: 0.85)
+    assert drawn_head(m) == RULES_HEAD
+    assert len([q for q in m.alternatives if q.role == "template"]) == 3
+    assert [w for w in m.warnings if "colors do not agree" in w]
+
+
+def test_a_drawn_template_goes_through_the_gross_head_check(three):
+    from rosette.pipeline import FLAGGED_CONF, choose_head, drawn_head
+    tails_only = RosetteModel([_tail()], _groups())
+    fits = _fits(rules=None, T1_15=(0.5, 0.7), T7_15=(0.5, 0.7), T8_15=(0.5, 0.7))
+    m, fit = choose_head(tails_only, _lib_model(0.1, rules=tails_only), fits, lambda a, b: None)
+    # nothing drawn in the head: the override fires without the partition bar
+    assert drawn_head(m) == "T1-15"
+    assert next(q for q in m.parts if q.role == "template").confidence <= FLAGGED_CONF
+    assert [w for w in m.warnings if "far from the photo" in w]
+    assert not [w for w in m.warnings if "rule-based head is drawn" in w]
+
+
+def test_no_head_fit_counts_as_a_failed_rules_head_for_the_override():
+    from rosette.pipeline import HeadFit, library_head_path, override_allowed
+    assert override_allowed(None, HeadFit(0.5, 0.7), 0.1, head_layer=False)
+    assert library_head_path(None, HeadFit(0.5, 0.7), 0.1, head_layer=False) == "override"
+    assert not override_allowed(None, None, 0.9, head_layer=False)
+
+
+def test_switching_heads_swaps_flags_warnings_and_fit(three):
+    from rosette.pipeline import FLAGGED_CONF, choose_head, drawn_head, use_head
+    fits = _fits(rules=GROSS, T1_15=(0.8, 0.9), T7_15=(0.5, 0.7), T8_15=(0.8, 0.85))
+    m, _ = choose_head(_detected(), _lib_model(0.4), fits, lambda a, b: 0.85)
+    differs = [w for w in m.warnings if "differ a lot" in w]
+    rules = use_head(m, "rules")
+    head = next(q for q in rules.parts if q.id == "head")
+    assert head.confidence <= FLAGGED_CONF
+    far = [w for w in rules.warnings if "far from the photo" in w]
+    assert len(far) == 1 and "head match 42%, outline 60%" in far[0]
+    assert not [w for w in rules.warnings if "differ a lot" in w]
+    assert rules.head_states["rules"]["fit"] == {"agreement": 0.42, "silhouette": 0.6}
+    # a picked candidate with a grossly failed fit is flagged with its own numbers
+    second = use_head(rules, "T7-15")
+    assert next(q for q in second.parts if q.role == "template").confidence <= FLAGGED_CONF
+    assert [w for w in second.warnings if "head match 50%, outline 70%" in w]
+    assert not [w for w in second.warnings if "head match 42%" in w]
+    back = use_head(second, "T1-15")
+    assert back.warnings == m.warnings and differs
+    assert RosetteModel.from_json(back.to_json()).head_states == back.head_states
+
+
+def test_switching_between_library_heads_keeps_the_placement(three):
+    from rosette.pipeline import use_head
+    m = _lib_model(0.9)
+    t = next(q for q in m.parts if q.role == "template")
+    t.params.update(cx=310.0, cy=190.0, r=120.0, rotation_deg=15.0)
+    other = next(q for q in use_head(m, "T7-15").parts if q.role == "template")
+    assert (other.params["cx"], other.params["cy"], other.params["r"], other.params["rotation_deg"]) == (
+        310.0, 190.0, 120.0, 15.0)
+
+
+def test_the_library_holds_one_template_per_product_reference_file():
+    from pathlib import Path
+    from rosette.vision.templates import NOT_PRODUCTS, load_library
+    stems = {q.stem for q in (Path(__file__).resolve().parent.parent / "reference" / "svg").glob("*.svg")}
+    assert sorted(t.sid for t in load_library()) == sorted(stems - set(NOT_PRODUCTS))

@@ -194,7 +194,9 @@ def from_json(d: dict) -> list[Template]:
 
 def build_library(svg_dir: Path, path: Path = LIBRARY_PATH) -> list[Template]:
     """Extract every product reference file of svg_dir and write the library cache."""
-    from tools.truth import truth_from_svg  # development step: the points count of each file
+    # tools.truth is a development module (it reads the reference files and needs the repo
+    # checkout); build_library is a development step too, the app only reads the cache.
+    from tools.truth import truth_from_svg  # the points count of each file
 
     lib = []
     for p in sorted(svg_dir.glob("*.svg")):

@@ -85,6 +85,9 @@ class RosetteModel:
     alternatives: list[Part] = field(default_factory=list)
     # Color groups only the parts in alternatives use (not shown while they are hidden).
     alternative_groups: list[ColorGroup] = field(default_factory=list)
+    # Per head of the head card (template_id or "rules"): the warnings that belong to that
+    # head and its head fit on the photo (pipeline.choose_head); use_head swaps them.
+    head_states: dict = field(default_factory=dict)
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -102,4 +105,21 @@ class RosetteModel:
             check_params(q.params)
         return cls(parts=parts, groups=groups, rose=bool(d.get("rose", False)),
                    warnings=list(d.get("warnings", [])), alternatives=alternatives,
-                   alternative_groups=alt_groups)
+                   alternative_groups=alt_groups, head_states=_head_states(d.get("head_states") or {}))
+
+
+def _head_states(d) -> dict:
+    """Validated head_states: {choice: {"warnings": [str], "fit": {agreement, silhouette} | None}}."""
+    if not isinstance(d, dict):
+        raise ValueError("head_states must be an object")
+    out = {}
+    for k, v in d.items():
+        if not isinstance(v, dict) or not all(isinstance(w, str) for w in v.get("warnings", [])):
+            raise ValueError("bad head state")
+        fit = v.get("fit")
+        if fit is not None:
+            fit = {"agreement": float(fit["agreement"]), "silhouette": float(fit["silhouette"])}
+            if not all(math.isfinite(x) for x in fit.values()):
+                raise ValueError("bad head fit")
+        out[str(k)] = {"warnings": list(v.get("warnings", [])), "fit": fit}
+    return out
