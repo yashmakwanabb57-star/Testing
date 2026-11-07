@@ -35,7 +35,7 @@ Choose or drop a photo (it is shown as a preview), press **Convert to SVG**, the
 - **Workbench** - everything on one screen: the photo, the detected model (parts, color groups, Color 1-4 assignment, rose on/off), a live preview of the SVG in the shop's solid and pattern configurations, and edit controls for every part and color. Best for fixing a result.
 - **Guided** - the same controls one step at a time, asking about each color and each part. Best for a quick check.
 
-Heads the per-kind rules cannot build well are drawn from a **library of the reference heads** (H7): the closest reference head is placed on the photo's head circle when its outline fits the photo better than the detected head. The head card then reads "Head shape: from library template <id>, match NN%" and has a button to switch back to the rule-based head (and again to the library head).
+Heads the per-kind rules cannot build well are drawn from a **library of the reference heads** (H7): the closest reference head is placed on the photo's head circle when its outline fits the photo better than the detected head and its colors agree with the photo under the tail colors; otherwise it waits on the head card's toggle. The head card then reads "Head shape: from library template <id>, match NN%" and has a button to switch back to the rule-based head (and again to the library head).
 
 A result is **flagged** when the tool is unsure (a low-confidence color, any part read with low confidence - head, ring, points, center or tail stripes - a part drawn as a placeholder disc, a warning, or a validation issue). Confirm every flagged item before downloading the SVG.
 
@@ -60,7 +60,7 @@ The first command runs the fast suite: `pyproject.toml` already sets `-m "not sl
 
 Runs the pipeline on every photo in `reference/photos` that has a designer SVG listed in `reference/canonical.txt` (34) and compares the result against the designer's file, region by region. It takes a few minutes. `--sheet DIR` saves photo | generated | designer images; `--debug` prints each scored element.
 
-Current scoreboard: success 23 of 34 (the bar is 28), flagged-not-success 9, silently wrong 2 (S46-15, S40-15), errors 0. Each row also reports a shape score (silhouette IoU, whole / head / tail, and a per-layer score); mean whole IoU 0.921 (head 0.847), 27 of 34 at or above 0.90. The UI always asks you to compare the head with the photo (a checklist item, not a flag): the head flag only catches gross head failures.
+Current scoreboard: success 23 of 34 (the bar is 28), flagged-not-success 10, silently wrong 1 (S46-15), errors 0. Each row also reports a shape score (silhouette IoU, whole / head / tail, and a per-layer score); mean whole IoU 0.915 (head 0.827), 23 of 34 at or above 0.90. The UI always asks you to compare the head with the photo (a checklist item, not a flag): the head flag only catches gross head failures.
 
 ## How to test on the shop
 

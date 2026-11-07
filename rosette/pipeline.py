@@ -73,8 +73,11 @@ TEMPLATE_MIN_GAIN = 0.02
 TEMPLATE_MIN_SCORE = 0.0
 TEMPLATE_FLAG_SCORE = FLAG_BELOW
 # When the library head and the rule-based head overlap less than this (silhouette IoU
-# of the two drawn heads), the user is told to compare the head with the photo.
-TEMPLATE_DIFFERS_IOU = 0.7
+# of the two drawn heads), the user is told to compare the head with the photo. Over the
+# 10 photos drawn with a library head (full library, fix round 2) the overlap runs
+# 0.64-0.87; 0.8 warns on 6, among them S40-15 (0.78), whose library head is otherwise
+# unflagged while its color is not right (0.890).
+TEMPLATE_DIFFERS_IOU = 0.8
 TEMPLATE_DIFFERS_WARNING = ("The library head and the rule-based head differ a lot (outline overlap {iou:.0%}) - "
                             "compare the head with the photo and use the head toggle if the other one is closer.")
 TEMPLATE_PART_ID = "template"
