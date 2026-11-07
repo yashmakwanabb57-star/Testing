@@ -251,3 +251,28 @@ def test_a_grossly_failed_rule_based_head_is_replaced_whatever_the_colors():
     assert gross_failure(HeadFit(agreement=0.9, silhouette=0.70))
     assert not gross_failure(HeadFit(agreement=0.62, silhouette=0.79))
     assert not gross_failure(None)
+
+
+def test_the_override_needs_a_large_outline_gain_and_some_color_agreement():
+    from rosette.pipeline import TEMPLATE_OVERRIDE_GAIN, TEMPLATE_OVERRIDE_PARTITION, HeadFit, override_allowed
+    failed = HeadFit(agreement=0.42, silhouette=0.60)
+    big = HeadFit(agreement=0.5, silhouette=0.60 + TEMPLATE_OVERRIDE_GAIN)
+    assert override_allowed(failed, big, TEMPLATE_OVERRIDE_PARTITION)
+    # a small outline gain or a library head whose colors hardly agree: the rules head stays
+    assert not override_allowed(failed, HeadFit(0.5, 0.60 + TEMPLATE_OVERRIDE_GAIN - 0.01), 0.9)
+    assert not override_allowed(failed, big, TEMPLATE_OVERRIDE_PARTITION - 0.01)
+    # only a grossly failed rule-based head is overridden
+    assert not override_allowed(HeadFit(0.9, 0.85), HeadFit(0.9, 1.0), 0.9)
+    assert not override_allowed(failed, None, 0.9)
+
+
+def test_library_head_path_floor_override_or_rules_with_the_warning():
+    from rosette.pipeline import TEMPLATE_MIN_PARTITION, HeadFit, library_head_path
+    failed, fine = HeadFit(0.42, 0.60), HeadFit(0.9, 0.85)
+    assert library_head_path(fine, HeadFit(0.9, 0.88), TEMPLATE_MIN_PARTITION) == "floor"
+    assert library_head_path(fine, HeadFit(0.9, 0.86), 0.9) is None  # outline gain under 0.02
+    assert library_head_path(fine, HeadFit(0.9, 0.95), 0.40) == "colors"  # no gross failure, colors disagree
+    assert library_head_path(failed, HeadFit(0.5, 0.88), 0.40) == "override"
+    assert library_head_path(failed, HeadFit(0.5, 0.65), 0.40) == "colors"  # gain 0.05: rules + warning
+    assert library_head_path(failed, HeadFit(0.5, 0.88), 0.23) == "colors"  # partition under 0.30
+    assert library_head_path(None, HeadFit(0.5, 0.88), 0.9) == "floor"

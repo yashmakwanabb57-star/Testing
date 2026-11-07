@@ -93,6 +93,14 @@ TEMPLATE_PART_ID = "template"
 # check (HEAD_FIT_MIN, HEAD_SILHOUETTE_MIN) is replaced whatever the partition (gross_failure),
 # and the library head is then flagged.
 TEMPLATE_MIN_PARTITION = 0.54
+# Fix round 4: the override needs the library head's outline to win by
+# TEMPLATE_OVERRIDE_GAIN (head_fit silhouette over the rule-based head's) and its
+# tail-mapped partition to reach TEMPLATE_OVERRIDE_PARTITION; otherwise the rule-based head
+# is drawn with the colors warning and the library heads wait on the head card. On the 76
+# photos (full library, docs/pipeline.md H7 fix round 4) this keeps S52-19 (partition
+# 0.282) on its rule-based head, and with it S29-15 (0.231).
+TEMPLATE_OVERRIDE_GAIN = 0.10
+TEMPLATE_OVERRIDE_PARTITION = 0.30
 TEMPLATE_COLORS_WARNING = ("The library head {tid} fits the head outline better, but its colors do not agree "
                            "with the photo under the tail colors - the rule-based head is drawn; compare the head "
                            "with the photo and use the head toggle if the library head is closer.")
@@ -224,6 +232,27 @@ def gross_failure(fit: HeadFit | None) -> bool:
     return fit is not None and (fit.agreement < HEAD_FIT_MIN or fit.silhouette < HEAD_SILHOUETTE_MIN)
 
 
+def override_allowed(rules: HeadFit | None, library: HeadFit | None, partition: float) -> bool:
+    """A grossly failed rule-based head (gross_failure) is replaced by the library head
+    below the color floor only when the library outline wins by TEMPLATE_OVERRIDE_GAIN and
+    its tail-mapped partition reaches TEMPLATE_OVERRIDE_PARTITION."""
+    return (gross_failure(rules) and library is not None
+            and library.silhouette >= rules.silhouette + TEMPLATE_OVERRIDE_GAIN - 1e-9
+            and partition >= TEMPLATE_OVERRIDE_PARTITION - 1e-9)
+
+
+def library_head_path(rules: HeadFit | None, library: HeadFit | None, partition: float) -> str | None:
+    """How the best library head is used: None (its outline does not win, prefer_template),
+    "floor" (its colors agree, colors_agree), "override" (the rule-based head failed,
+    override_allowed: drawn flagged) or "colors" (the rule-based head is drawn with the
+    colors warning, the library head waits on the head card)."""
+    if not prefer_template(rules, library):
+        return None
+    if colors_agree(partition):
+        return "floor"
+    return "override" if override_allowed(rules, library, partition) else "colors"
+
+
 def colors_agree(partition: float) -> bool:
     """The library head's tail-mapped partition agreement reaches TEMPLATE_MIN_PARTITION."""
     return partition >= TEMPLATE_MIN_PARTITION - 1e-9
@@ -348,10 +377,11 @@ def analyze_with_fit(data: bytes, template: bool = True,
         lib = with_template(out, p.mask, labels, p.head, Frame.of(p), groups, merged, exclude_key=exclude_key)
         if lib.alternatives:
             lib_fit = head_fit(p, labels, lib, merged)
-            if prefer_template(fit, lib_fit):
-                tmpl = next(q for q in lib.parts if q.role == "template")
-                agree = colors_agree(float(tmpl.params.get("partition", 0.0)))
-                if agree or gross_failure(fit):
+            tmpl = next(q for q in lib.parts if q.role == "template")
+            path = library_head_path(fit, lib_fit, float(tmpl.params.get("partition", 0.0)))
+            if path is not None:
+                agree = path == "floor"
+                if path != "colors":
                     overlap = head_overlap(out, lib)
                     out, fit = lib, lib_fit
                     if not agree:  # drawn because the rule-based head failed: flagged
