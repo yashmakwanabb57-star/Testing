@@ -79,7 +79,7 @@ def test_compare_judges_covered_element_on_its_visible_part():
 
 
 def test_crash_is_an_error_row_with_all_keys(monkeypatch):
-    def boom(sid):
+    def boom(sid, known=False):
         raise ValueError("no head")
     monkeypatch.setattr(score, "score_one", boom)
     row, = score_all(["X"])
@@ -199,3 +199,26 @@ def test_layer_classifies_our_pieces_around_the_center_we_drew(monkeypatch):
     by_role = {e["role"]: e["iou"] for e in s["layers"]}
     assert by_role["ring"] == pytest.approx(1.0, abs=0.02)
     assert by_role["center"] == pytest.approx(1.0, abs=0.02)
+
+
+def test_generate_leaves_the_photo_s_own_design_out_unless_known(monkeypatch):
+    from tools import score
+    seen = []
+
+    def fake(data, template=True, exclude_key=None):
+        seen.append(exclude_key)
+        raise RuntimeError("stop")
+    monkeypatch.setattr(score, "analyze_with_fit", fake)
+    for known in (False, True):
+        try:
+            score._generate("S36-15B", known=known)
+        except RuntimeError:
+            pass
+    assert seen == ["S36", None]
+
+
+def test_score_all_passes_the_mode_to_each_row(monkeypatch):
+    from tools import score
+    monkeypatch.setattr(score, "score_one", lambda sid, known=False: dict(id=sid, known=known))
+    assert score.score_all(["A"])[0]["known"] is False
+    assert score.score_all(["A"], known=True)[0]["known"] is True

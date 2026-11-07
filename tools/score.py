@@ -1,6 +1,12 @@
 """Photo vs designer scoreboard: the regression gate for pipeline changes.
 
-Usage: .venv/Scripts/python.exe tools/score.py [IDs...] [--sheet DIR] [--debug]
+Usage: .venv/Scripts/python.exe tools/score.py [IDs...] [--sheet DIR] [--debug] [--known]
+
+New image (the headline, H9): each photo is analyzed with its own design (design_key: the
+file and its variants) left out of the head library, as in production where the library
+has no "own design" for a new photo. Known design: the full library (the photo's own
+reference head can be retrieved), printed as a second, labelled column and summary;
+--known makes the full library the headline (and drops the second pass).
 
 For each canonical ID (reference/canonical.txt) with a photo: run the pipeline on
 the photo, rasterize the generated SVG and the designer SVG with category colors
@@ -49,7 +55,8 @@ import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
 
 from rosette.assign import part_area  # noqa: E402
-from rosette.pipeline import analyze, is_flagged, render  # noqa: E402
+from rosette.pipeline import analyze_with_fit, is_flagged, render  # noqa: E402
+from rosette.vision.templates import design_key  # noqa: E402
 from rosette.roles import (category, classify_components, classify_masks, drawn_frame,  # noqa: E402
                            element_masks, render_categories)
 from tools.rasterize import DEFAULT_PALETTE, rasterize  # noqa: E402
@@ -251,8 +258,11 @@ def _detected_counts(model) -> tuple[int, int]:
     return points, int(tails[0].params["tails_count"]) if tails else 0
 
 
-def _generate(sid: str):
-    model = analyze((REF / "photos" / f"{sid}.png").read_bytes())
+def _generate(sid: str, known: bool = False):
+    """The model and render of a photo: its own design left out of the head library (new
+    image), or the full library (known)."""
+    model, _ = analyze_with_fit((REF / "photos" / f"{sid}.png").read_bytes(),
+                                exclude_key=None if known else design_key(sid))
     return model, render(model)
 
 
@@ -268,9 +278,9 @@ ROW_KEYS = ("id", "color_agreement", "pixel_agreement", "iou", "uniform_agreemen
             "stack")
 
 
-def score_one(sid: str) -> dict:
+def score_one(sid: str, known: bool = False) -> dict:
     t = time.perf_counter()
-    model, result = _generate(sid)
+    model, result = _generate(sid, known)
     seconds = time.perf_counter() - t
     designer = (REF / "svg" / f"{sid}.svg").read_text(encoding="utf-8")
     scores = {**compare(designer, result.svg), **shape_compare(designer, result.svg)}
@@ -286,11 +296,11 @@ def score_one(sid: str) -> dict:
                 seconds=seconds, error=None)
 
 
-def score_all(ids: list[str] | None = None) -> list[dict]:
+def score_all(ids: list[str] | None = None, known: bool = False) -> list[dict]:
     rows = []
     for sid in ids or score_ids():
         try:
-            rows.append(score_one(sid))
+            rows.append(score_one(sid, known=known))
         except Exception as e:  # a crashing stage is recorded, not fatal
             row = dict.fromkeys(ROW_KEYS)
             row.update(id=sid, flagged=False, success=False, error=f"{type(e).__name__}: {e}")
@@ -317,6 +327,27 @@ def side_by_side(sid: str) -> np.ndarray:
     return np.concatenate([photo, gap, gen, gap, _designer(sid)], axis=1)
 
 
+def _known_cols(r: dict | None) -> str:
+    if r is None:
+        return f"{'-':>6} {'-':>4} {'-':>5}"
+    if r["error"]:
+        return f"{'ERR':>6} {'-':>4} {'-':>5}"
+    return f"{r['color_agreement']:6.3f} {_yn(r['success']):>4} {r['head_iou']:5.3f}"
+
+
+def _print_summary(rows: list[dict], label: str) -> None:
+    s = summary(rows)
+    done = [r for r in rows if not r["error"]]
+    print(f"[{label}] success {s['success']}  flagged-not-success {s['flagged']}  "
+          f"silently-wrong {s['silent']}  errors {s['errors']}")
+    print(f"[{label}] PASS {s['success']}/{s['n']} (target >= {TARGET:.0%})")
+    if done:
+        print(f"[{label}] color agreement mean {np.mean([r['color_agreement'] for r in done]):.3f}  "
+              f"shape: mean IoU {np.mean([r['shape_iou'] for r in done]):.3f}  head "
+              f"{np.mean([r['head_iou'] for r in done]):.3f}  tail {np.mean([r['tail_iou'] for r in done]):.3f}  "
+              f"shape_ok {sum(r['shape_ok'] for r in done)}/{len(done)} (IoU >= {SHAPE_OK_IOU})")
+
+
 def _yn(v: bool) -> str:
     return "yes" if v else "no"
 
@@ -329,10 +360,15 @@ def main(argv: list[str]) -> int:
         i = argv.index("--sheet")
         sheet = Path(argv[i + 1])
         argv = argv[:i] + argv[i + 2:]
-    rows = score_all(argv or None)
+    known_only = "--known" in argv
+    argv = [a for a in argv if a != "--known"]
+    rows = score_all(argv or None, known=known_only)
+    known = {} if known_only else {r["id"]: r for r in score_all(argv or None, known=True)}
+    print("headline: " + ("known design (full library)" if known_only else
+                          "new image (own design left out of the library); kn* = known design (full library)"))
     print(f"{'ID':10} {'agree':>6} {'pixel':>6} {'iou':>5} {'flag':>4} {'ok':>4} {'points':>7} {'tails':>6} "
           f"{'iss':>3} {'sec':>5} {'uni':>6} {'uok':>4} {'shape':>5} {'headS':>5} {'tailS':>5} {'layer':>5} {'sok':>3} "
-          f"stack (reversed vs designer: above>below)")
+          f"{'knAgr':>6} {'knOk':>4} {'knHd':>5} stack (reversed vs designer: above>below)")
     for r in rows:
         if r["error"]:
             print(f"{r['id']:10} ERROR {r['error']}")
@@ -345,24 +381,21 @@ def main(argv: list[str]) -> int:
               f"{r['uniform_agreement']:6.3f} {_yn(r['success_uniform']):>4} "
               f"{r['shape_iou']:5.3f} {r['head_iou']:5.3f} {r['tail_iou']:5.3f} "
               f"{r['layer_iou'] if r['layer_iou'] is None else round(r['layer_iou'], 3)!s:>5} "
-              f"{_yn(r['shape_ok']):>3} {len(r['stack'])} {' '.join(f'{a}>{b}' for a, b in r['stack'])}")
+              f"{_yn(r['shape_ok']):>3} {_known_cols(known.get(r['id']))} "
+              f"{len(r['stack'])} {' '.join(f'{a}>{b}' for a, b in r['stack'])}")
         if debug:  # per element: designer category, generated winner, winning share, area
             for e in r["elements"]:
                 print(f"    cat {e['category']} -> {e['winner']}  share {e['share']:.2f}  "
                       f"area {e['area']:.0f}  {'ok' if e['ok'] else 'WRONG'}")
-    s = summary(rows)
-    print(f"success {s['success']}  flagged-not-success {s['flagged']}  "
-          f"silently-wrong {s['silent']}  errors {s['errors']}")
-    print(f"PASS {s['success']}/{s['n']} (target >= {TARGET:.0%})")
+    _print_summary(rows, "known design (full library)" if known_only else "new image")
     done = [r for r in rows if not r["error"]]
+    if known:
+        _print_summary(list(known.values()), "known design (full library), reported only")
     if done:
-        print(f"shape: mean IoU {np.mean([r['shape_iou'] for r in done]):.3f}  head "
-              f"{np.mean([r['head_iou'] for r in done]):.3f}  tail {np.mean([r['tail_iou'] for r in done]):.3f}  "
-              f"shape_ok {sum(r['shape_ok'] for r in done)}/{len(done)} (IoU >= {SHAPE_OK_IOU})")
         print(f"stacking: {sum(len(r['stack']) for r in done)} kind pairs reversed vs the designer in "
               f"{sum(bool(r['stack']) for r in done)}/{len(done)} IDs (reported only)")
     uni = sum(bool(r["success_uniform"]) for r in rows if not r["error"])
-    print(f"reported only (not the bar): success under uniform-scale alignment {uni}/{s['n']}")
+    print(f"reported only (not the bar): success under uniform-scale alignment {uni}/{len(rows)}")
     if sheet:
         sheet.mkdir(parents=True, exist_ok=True)
         for r in rows:
