@@ -411,7 +411,7 @@ Head card picker. `templates.rank` lists the matcher's best templates (the decis
 
 Started at d812567. Full notes: `.superpowers/sdd/2026-11-05-rosette-svg-generator/h8-report.md`.
 
-**Choose from the library.** Below the top-3 picker the head card has "Choose from the library": every library template by id with its mined description (`GET /api/library`, `templates.library_index`; the model's candidates first, then the others by id), filtered by typing part of an id (`logic.js libraryChoices`). Analyze still places, fits and flags only the top 3. A pick outside them goes to the server (`pickNeedsServer`, `/api/render` with `head`): `/api/analyze` keeps the prepared photo, labels, groups and detected model (`pipeline.PhotoContext`) in a small in-memory cache (`app/main.py PhotoCache`, the last `PHOTO_CACHE_SIZE` 8 photos, least recently used out) under the model's `photo_token`; `pipeline.add_library_head` places the template on the photo head circle (the current library head's placement is kept), colors it under the tail-bound mapping (else the free overlap mapping, no lobe gate: `templates.score_template`) and checks it exactly like a candidate (`_library_head_state`: head fit, FLAGGED_CONF cap without color agreement, gross head check, heads-differ warning), adds it to the candidates (id `library_<id>`, rank 4 and up) and returns the switched model. Each cache entry holds the photo arrays and the detected model, about 5-15 MB, so the cache holds at most about 120 MB. A template whose tail Colors have no tail group on the photo is colored by the free overlap mapping (`free_colors`): it is flagged (FLAGGED_CONF) with "Library head colors are not anchored to the tails - check every Color on the head card." An unknown id gives 422 "There is no library head with this id", a template none of whose Colors maps onto the photo's groups 422 "This library head cannot be colored with the photo's colors". An unknown token (server restarted, or more than 8 newer photos) gives 422 "The photo for this model is no longer in memory - upload the photo again to choose a head from the library." The part card reads "Head shape: chosen from the library: <id> - <description>". Timings (this machine): analyze A7-15 2.1 s, S29-15 2.6 s (H7 at d812567: 2.9 s, 3.4 s; an eager version that checked all 77 templates at analyze took 14.4 s and 15.5 s with 48-62 KB models), model JSON 3 KB and 6 KB, an on-demand pick 0.5 s including the render. Analyze got faster than H7 because the detected head's render is shared by its fit and overlap and computed once.
+**Choose from the library (H8; since H9 not in the UI).** H8 added a head card control to pick any library head by id. H9 removed it and the top-3 radios from the UI (the tool converts a new image automatically); the server side stays for scripted use and tests: every library template by id with its mined description (`GET /api/library`, `templates.library_index`; the model's candidates first, then the others by id), filtered by typing part of an id (`logic.js libraryChoices`). Analyze still places, fits and flags only the top 3. A pick outside them goes to the server (`pickNeedsServer`, `/api/render` with `head`): `/api/analyze` keeps the prepared photo, labels, groups and detected model (`pipeline.PhotoContext`) in a small in-memory cache (`app/main.py PhotoCache`, the last `PHOTO_CACHE_SIZE` 8 photos, least recently used out) under the model's `photo_token`; `pipeline.add_library_head` places the template on the photo head circle (the current library head's placement is kept), colors it under the tail-bound mapping (else the free overlap mapping, no lobe gate: `templates.score_template`) and checks it exactly like a candidate (`_library_head_state`: head fit, FLAGGED_CONF cap without color agreement, gross head check, heads-differ warning), adds it to the candidates (id `library_<id>`, rank 4 and up) and returns the switched model. Each cache entry holds the photo arrays and the detected model, about 5-15 MB, so the cache holds at most about 120 MB. A template whose tail Colors have no tail group on the photo is colored by the free overlap mapping (`free_colors`): it is flagged (FLAGGED_CONF) with "Library head colors are not anchored to the tails - check every Color on the head card." An unknown id gives 422 "There is no library head with this id", a template none of whose Colors maps onto the photo's groups 422 "This library head cannot be colored with the photo's colors". An unknown token (server restarted, or more than 8 newer photos) gives 422 "The photo for this model is no longer in memory - upload the photo again to choose a head from the library." The part card reads "Head shape: chosen from the library: <id> - <description>". Timings (this machine): analyze A7-15 2.1 s, S29-15 2.6 s (H7 at d812567: 2.9 s, 3.4 s; an eager version that checked all 77 templates at analyze took 14.4 s and 15.5 s with 48-62 KB models), model JSON 3 KB and 6 KB, an on-demand pick 0.5 s including the render. Analyze got faster than H7 because the detected head's render is shared by its fit and overlap and computed once.
 
 **Normalization (evaluated, not kept).** Templates and photo heads are normalized to the outer head radius. S29-15's reference draws its loops much shorter than the photo, so its own star template is too large when normalized that way (own rank 8). Tried, on the 76 cached photos with the full library (own-design top-1 / top-3), then leave-one-out head IoU through the decision rule (`tools/head_templates.decision_row`): inner normalization by the radius holding 35 % or 50 % of the head foreground in the window (`m35`, `m50`), by the center badge's radius (`c`), each alone or as a 5-step scale search between 1 and that ratio (clamped 0.6-1.6).
 
@@ -426,6 +426,52 @@ Started at d812567. Full notes: `.superpowers/sdd/2026-11-05-rosette-svg-generat
 | center search | 48 | 57 | S69-19 (18) | own | | | |
 
 The m35 search gains 2 top-1 (A12-15, S42-15, S49-17 in; S48-17 out) but loses 2 top-3 (S1-15, S10-19, s34-15 out; S49-17 in); its LOO head IoU is +0.0005, its full-library head IoU -0.0003, and it sends S52-19 back to a library head (color 0.908 -> 0.827, whole shape loss over 0.02, against the fix round 4 ruling) and S56-17 loses shape (LOO). Not kept: outer normalization stays. S29-15's own star stays out of reach with every variant (rank 15-19 or not mappable): its reference is not faithful to the photo, which is why the user can now choose any head by id.
+
+## H9: the new-image case is the headline
+
+Started at 79db842. Full notes: `.superpowers/sdd/2026-11-05-rosette-svg-generator/h9-report.md`.
+
+**Why leave-one-out is the headline.** The tool must convert any new image automatically; picking an existing design is not the workflow. For a photo of a new design the head library holds no "own design", so the honest estimate of production is the photo scored with its own design (design_key: the file and its variants) left out of the library. `tools/score.py` now reports that as the headline ("new image") and the full library as a second, labelled column and summary ("known design", `--known` makes it the headline). The scratch 76-photo comparison scripts take the same `--known` switch (default new image). The pipeline itself does not exclude anything.
+
+**Head card.** The head card shows the automatic head only: "Automatic result: library template <id>, match NN%" (or "rule-based head") as its heading, then the template part with its "Template Color k drawn as" selectors, cx/cy/r/rotation, flag and confirm. The head radios and the library chooser are gone from both modes; `use_head`, `/api/render` `head`, `/api/library` and the photo cache stay server-side with their tests.
+
+**Head circle on star heads (attempt, not kept).** On S29-15 `prepare`'s head circle is too high and too small (center y 162 px, r 158 px; the badge sits at about y 212 px, the head reaches about 190-210 px): the lower star arms pass for the tails top (321 px) and the 90-degree symmetry score does not fit a 6-fold star. Rules tried against the reference files' own head circles (`drawn_frame`, 76 photos, units of the rosette height 800; the reference circles are a noisy truth: S35-19 +16.2 and A7-15 +10.1 although right on the photo):
+
+| rule | mean / worst abs error | S29-15 | worsened (change in abs error) |
+|---|---|---|---|
+| current (90-degree symmetry) | 9.2 / 29.2 | -27.5 | - |
+| best of 60/72/90-degree symmetry | 10.4 / 40.4 | +12.5 | S36-15B +36, S57-17 +32, S59-17 +32, S36-15 +30, S17-15 +19 |
+| best of 45/60/72/90 | 9.7 / 40.4 | +12.5 | S36-15B +36, S57-17 +32, S36-15 +30 |
+| 90-degree + half-width penalty 0.2 | 9.3 / 30.6 | -17.4 | S10-19 +13 |
+| 90-degree + half-width penalty 0.3-0.5 | 10.4-10.7 / 54-55 | +12 to -16 | S57-17 +49, S33-15 +27, S36-15B +22 |
+
+No rule improved S29-15 without making another photo worse by more than 13 units, so `prepare` is unchanged; the head circle is a later round.
+
+**Pose search (kept).** `templates.rank` places each template at its best pose on the photo circle: center offset dy -0.2..+0.3 and dx -0.1..+0.1 head radii, scale 0.8-1.25 (`POSE_*`), then the turns within its symmetry period 360/k (k = `templates.symmetry`, the lobes of its whole outline; `POSE_TURNS` 4), then offset and scale again at the best turn; the silhouette IoU picks the pose (`best_pose`, nearest-neighbour warps of the template grid, `pose_grid`), and the full score at that pose and unmoved decides (`posed_features`). The pose is stored on the template part (cx, cy, r, rotation_deg, and pose_dx / pose_dy / pose_scale); a drawn head moved by `RECENTER_MIN` 0.1 or more leaves an information line in `RosetteModel.info` (not a flag) for the head-circle round.
+
+| 76 photos (cached detections) | known top-1 / top-3 | LOO head IoU | full head IoU | LOO color >= 0.9 | LOO color losers | S29-15 pick (own rank) | analyze S29-15 / A7-15 |
+|---|---|---|---|---|---|---|---|
+| unmoved (H8) | 48 / 58 | 0.8476 | 0.8602 | 45 | S30-15, S35-19, S51-19, S61-19 | S57-17 (8) | 2.6 / 2.1 s |
+| pose search | 49 / 57 | 0.8489 | 0.8585 | 46 | S17-15, S30-15, S51-19, S61-19 | S58-17 at dy +0.1, scale 1.25 (9) | 3.3 / 2.3 s |
+
+S29-15 is not fixed by it: its true head is about 0.32 R lower and 1.3x larger than the circle, at the edge of the search range.
+
+**Decision constants on the new-image case (grid, kept as they are).** Grid on the leave-one-out rows at the new poses: TEMPLATE_MIN_PARTITION 0.40-0.70 x TEMPLATE_MIN_GAIN 0-0.04 x TEMPLATE_OVERRIDE_GAIN 0.05-0.20 x TEMPLATE_OVERRIDE_PARTITION 0.20-0.40 (unflagged = template confidence >= 0.6, heads overlap >= 0.8, head fit not gross).
+
+| MIN_PARTITION, MIN_GAIN, OVERRIDE_GAIN, OVERRIDE_PARTITION | LOO head IoU | library heads | color >= 0.9 | color losers (> 0.05 or below 0.9) | shape losers > 0.02 | new unflagged library heads under 0.9 |
+|---|---|---|---|---|---|---|
+| **0.54, 0.02, 0.10, 0.30 (kept)** | 0.8489 | 17 | 46 | S17-15, S30-15, S51-19, S61-19 | - | - |
+| 0.40, 0.02, 0.10, 0.30 | 0.8502 | 19 | 46 | same | - | - |
+| 0.45 or 0.50, 0.02, 0.10, 0.30 | 0.8496 | 18 | 46 | same | - | - |
+| 0.54, 0.00, 0.10, 0.30 | 0.8460 | 30 | 46 | + S11-15, S27-15, S28-15, S53-19 | S27-15, S56-17 | A13-15B, A9-15, S28-15, S8-15 |
+| 0.54, 0.04, 0.10, 0.30 | 0.8486 | 16 | 46 | same | - | - |
+| 0.54, 0.02, 0.10, 0.20 | 0.8512 | 19 | 45 | + S52-19, S57-17 | S52-19 | - |
+| 0.60, 0.02, 0.10, 0.30 | 0.8467 | 14 | 47 | S17-15, S30-15, S51-19 | - | - |
+| 0.40, 0.02, 0.05, 0.20 | 0.8525 | 21 | 45 | + S52-19, S57-17 | S52-19 | - |
+
+The only gain without new losers (partition 0.40) comes from two photos, S1-15B and S69-19, and costs S69-19 0.048 color; ruled out. The override gain changes nothing at the 0.30 partition bar. Every library head drawn for a new image keeps its confidence from the match, the caps and the warnings (a weak match is flagged).
+
+**Scoreboard (34 IDs, `tools/score.py`, after H9).** New image (headline): PASS 23/34, color agreement 0.854, shape 0.920, head 0.844. Known design (full library): PASS 23/34, color 0.859, shape 0.921, head 0.847. Before H9 (new image / known): PASS 22/34 / 23/34, color 0.852 / 0.857, shape 0.920 / 0.922, head 0.846 / 0.851.
 
 ## Final state (Task 16)
 
@@ -456,48 +502,48 @@ Every generated file must satisfy section 3 of the [design spec](superpowers/spe
 
 `app/main.py` (FastAPI, started with `run.bat` or uvicorn on 127.0.0.1:8765) serves `app/static`. **Workbench** shows the photo, the detected model, the solid and pattern previews, edit controls and the flagged items on one screen. **Guided** walks through the same state one question at a time (`guided.js`); switching modes keeps the state. Edits go back through `render`, so the validator runs after every change.
 
-### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H7 fix round 4)
+### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H9)
 
-Re-recorded after H7 fix round 4 (no-head-layer clause; the table equals fix round 3's: S52-19 is not among the 34, S29-15 draws S57-17 again); the last column is the H7 start (1339a24, the H6 table). `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only). IDs drawn with a library head: those listed in the H7 fix round 3 and 4 sections (full library: 22 of 76 photos, among them S35-19 with its own template and S29-15 with S57-17).
+Re-recorded after H9 (09e0555): the columns are the new-image case (each photo's own design left out of the head library, the headline); the last column is the known design (full library) agree / success / headS. `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only).
 
-| ID | agree | uni | success | uni success | shape | headS | stack reversed | before H7 (1339a24) agree / shape / headS |
+| ID | agree | uni | success | uni success | shape | headS | stack reversed | known design agree / success / headS |
 |---|---|---|---|---|---|---|---|---|
-| A10-15B | 0.906 | 0.942 | yes | yes | 0.870 | 0.684 | 0 | 0.906 / 0.870 / 0.684 |
-| A13-15B | 0.187 | 0.187 | no | no | 0.929 | 0.967 | 1 (head>center) | 0.187 / 0.926 / 0.967 |
-| A14-17 | 0.949 | 0.949 | yes | yes | 0.957 | 0.963 | 0 | 0.949 / 0.957 / 0.963 |
-| A15-17 | 0.968 | 0.963 | yes | yes | 0.965 | 0.957 | 0 | 0.968 / 0.965 / 0.957 |
-| A16-17 | 0.837 | 0.926 | no | yes | 0.895 | 0.830 | 0 | 0.837 / 0.895 / 0.830 |
-| A9-15B | 1.000 | 1.000 | yes | yes | 0.939 | 0.828 | 0 | 1.000 / 0.939 / 0.828 |
-| S10-19 | 0.950 | 0.950 | yes | yes | 0.949 | 0.908 | 0 | 0.904 / 0.893 / 0.726 |
-| S13-15 | 0.894 | 0.894 | no | no | 0.962 | 0.928 | 0 | 0.894 / 0.961 / 0.926 |
-| S17-15 | 0.658 | 0.875 | no | no | 0.891 | 0.747 | 0 | 0.687 / 0.863 / 0.599 |
-| S2-15B | 0.687 | 0.687 | no | no | 0.966 | 0.920 | 0 | 0.687 / 0.934 / 0.815 |
-| S26-15 | 0.800 | 0.985 | no | yes | 0.933 | 0.856 | 0 | 0.800 / 0.933 / 0.856 |
-| S28-15 | 0.998 | 0.995 | yes | yes | 0.980 | 0.964 | 1 (star>loop) | 0.998 / 0.980 / 0.964 |
-| S29-15 | 0.257 | 0.293 | no | no | 0.928 | 0.818 | 0 | 0.257 / 0.897 / 0.699 |
-| S30-15 | 0.983 | 0.983 | yes | yes | 0.967 | 0.944 | 0 | 0.975 / 0.900 / 0.759 |
-| S31-15 | 0.929 | 0.966 | yes | yes | 0.929 | 0.838 | 0 | 0.929 / 0.929 / 0.838 |
-| S33-15 | 0.905 | 0.905 | yes | yes | 0.955 | 0.890 | 0 | 0.905 / 0.955 / 0.890 |
-| S35-19 | 0.944 | 0.950 | yes | yes | 0.914 | 0.811 | 0 | 0.959 / 0.900 / 0.768 |
-| S37-15 | 0.949 | 0.936 | yes | yes | 0.905 | 0.825 | 0 | 0.949 / 0.905 / 0.825 |
-| S40-15 | 0.890 | 0.882 | no | no | 0.930 | 0.888 | 0 | 0.890 / 0.883 / 0.763 |
-| S41-15 | 0.925 | 0.932 | yes | yes | 0.906 | 0.914 | 0 | 0.925 / 0.906 / 0.914 |
-| S43-15 | 1.000 | 1.000 | yes | yes | 0.953 | 0.926 | 0 | 1.000 / 0.953 / 0.926 |
-| S45-15 | 0.935 | 0.935 | yes | yes | 0.926 | 0.809 | 0 | 0.935 / 0.926 / 0.809 |
-| S46-15 | 0.751 | 0.936 | no | yes | 0.835 | 0.660 | 0 | 0.751 / 0.835 / 0.660 |
-| S5-15 | 0.910 | 0.988 | yes | yes | 0.852 | 0.734 | 0 | 0.910 / 0.852 / 0.734 |
-| S53-19 | 0.513 | 0.513 | no | no | 0.763 | 0.814 | 0 | 0.513 / 0.763 / 0.814 |
-| S56-17B | 0.988 | 1.000 | yes | yes | 0.909 | 0.848 | 0 | 0.979 / 0.879 / 0.755 |
-| S58-17 | 0.972 | 0.986 | yes | yes | 0.941 | 0.869 | 0 | 1.000 / 0.931 / 0.839 |
-| S67-19 | 0.964 | 0.964 | yes | yes | 0.947 | 0.861 | 0 | 0.964 / 0.947 / 0.861 |
-| S68-19 | 0.966 | 0.620 | yes | no | 0.885 | 0.676 | 0 | 0.966 / 0.885 / 0.676 |
-| S69-19 | 0.993 | 0.988 | yes | yes | 0.920 | 0.759 | 0 | 0.993 / 0.920 / 0.759 |
-| S70-19 | 0.956 | 0.956 | yes | yes | 0.957 | 0.939 | 0 | 0.956 / 0.957 / 0.939 |
-| S8-15 | 0.640 | 0.640 | no | no | 0.936 | 0.841 | 0 | 0.640 / 0.936 / 0.841 |
-| S80-22 | 0.989 | 1.000 | yes | yes | 0.934 | 0.878 | 0 | 0.989 / 0.934 / 0.878 |
-| s34-15 | 0.956 | 0.951 | yes | yes | 0.928 | 0.844 | 1 (backing>star) | 0.956 / 0.928 / 0.844 |
+| A10-15B | 0.906 | 0.942 | yes | yes | 0.870 | 0.684 | 0 | 0.906 / yes / 0.684 |
+| A13-15B | 0.187 | 0.187 | no | no | 0.929 | 0.967 | 1 (head>center) | 0.187 / no / 0.967 |
+| A14-17 | 0.949 | 0.949 | yes | yes | 0.957 | 0.963 | 0 | 0.949 / yes / 0.963 |
+| A15-17 | 0.968 | 0.963 | yes | yes | 0.965 | 0.957 | 0 | 0.968 / yes / 0.957 |
+| A16-17 | 0.837 | 0.926 | no | yes | 0.895 | 0.830 | 0 | 0.837 / no / 0.830 |
+| A9-15B | 1.000 | 1.000 | yes | yes | 0.939 | 0.828 | 0 | 1.000 / yes / 0.828 |
+| S10-19 | 0.950 | 0.950 | yes | yes | 0.902 | 0.780 | 0 | 0.987 / yes / 0.812 |
+| S13-15 | 0.894 | 0.894 | no | no | 0.962 | 0.928 | 0 | 0.894 / no / 0.928 |
+| S17-15 | 0.599 | 0.843 | no | no | 0.886 | 0.730 | 0 | 0.669 / no / 0.738 |
+| S2-15B | 0.687 | 0.687 | no | no | 0.945 | 0.853 | 0 | 0.687 / no / 0.920 |
+| S26-15 | 0.800 | 0.985 | no | yes | 0.933 | 0.856 | 0 | 0.800 / no / 0.856 |
+| S28-15 | 0.998 | 0.995 | yes | yes | 0.980 | 0.964 | 1 (star>loop) | 0.998 / yes / 0.964 |
+| S29-15 | 0.265 | 0.254 | no | no | 0.931 | 0.815 | 0 | 0.265 / no / 0.815 |
+| S30-15 | 0.907 | 0.907 | yes | yes | 0.963 | 0.934 | 0 | 0.983 / yes / 0.944 |
+| S31-15 | 0.929 | 0.966 | yes | yes | 0.929 | 0.838 | 0 | 0.929 / yes / 0.838 |
+| S33-15 | 0.905 | 0.905 | yes | yes | 0.955 | 0.890 | 0 | 0.905 / yes / 0.890 |
+| S35-19 | 0.963 | 0.963 | yes | yes | 0.927 | 0.845 | 0 | 0.942 / yes / 0.805 |
+| S37-15 | 0.949 | 0.936 | yes | yes | 0.905 | 0.825 | 0 | 0.949 / yes / 0.825 |
+| S40-15 | 0.893 | 0.889 | no | no | 0.927 | 0.879 | 0 | 0.893 / no / 0.879 |
+| S41-15 | 0.925 | 0.932 | yes | yes | 0.906 | 0.914 | 0 | 0.925 / yes / 0.914 |
+| S43-15 | 1.000 | 1.000 | yes | yes | 0.953 | 0.926 | 0 | 1.000 / yes / 0.926 |
+| S45-15 | 0.935 | 0.935 | yes | yes | 0.926 | 0.809 | 0 | 0.935 / yes / 0.809 |
+| S46-15 | 0.751 | 0.936 | no | yes | 0.835 | 0.660 | 0 | 0.751 / no / 0.660 |
+| S5-15 | 0.910 | 0.988 | yes | yes | 0.852 | 0.734 | 0 | 0.910 / yes / 0.734 |
+| S53-19 | 0.513 | 0.513 | no | no | 0.763 | 0.814 | 0 | 0.513 / no / 0.814 |
+| S56-17B | 0.969 | 0.963 | yes | yes | 0.902 | 0.817 | 0 | 0.988 / yes / 0.848 |
+| S58-17 | 0.972 | 0.986 | yes | yes | 0.940 | 0.868 | 0 | 0.972 / yes / 0.868 |
+| S67-19 | 0.964 | 0.964 | yes | yes | 0.947 | 0.861 | 0 | 0.964 / yes / 0.861 |
+| S68-19 | 0.966 | 0.620 | yes | no | 0.885 | 0.676 | 0 | 0.966 / yes / 0.676 |
+| S69-19 | 0.993 | 0.988 | yes | yes | 0.920 | 0.759 | 0 | 0.993 / yes / 0.759 |
+| S70-19 | 0.956 | 0.956 | yes | yes | 0.957 | 0.939 | 0 | 0.956 / yes / 0.939 |
+| S8-15 | 0.640 | 0.640 | no | no | 0.936 | 0.841 | 0 | 0.640 / no / 0.841 |
+| S80-22 | 0.989 | 1.000 | yes | yes | 0.934 | 0.878 | 0 | 0.989 / yes / 0.878 |
+| s34-15 | 0.956 | 0.951 | yes | yes | 0.928 | 0.844 | 1 (backing>star) | 0.956 / yes / 0.844 |
 
-Official (per-axis), tools/score.py summary: `success 23  flagged-not-success 10  silently-wrong 1  errors 0` / `PASS 23/34 (target >= 80%)` / `shape: mean IoU 0.922  head 0.851  tail 0.955  shape_ok 27/34 (IoU >= 0.9)` / `stacking: 3 kind pairs reversed vs the designer in 3/34 IDs (reported only)` / `reported only (not the bar): success under uniform-scale alignment 25/34`. The per-axis column is the metric and the bar; the uniform column only explains misses.
+Official (per-axis), tools/score.py summary: new image `success 23  flagged-not-success 10  silently-wrong 1  errors 0` / `PASS 23/34 (target >= 80%)` / `color agreement mean 0.854  shape: mean IoU 0.920  head 0.844  tail 0.955  shape_ok 27/34`; known design (reported only) `PASS 23/34`, color 0.859, shape 0.921, head 0.847, shape_ok 27/34; `stacking: 3 kind pairs reversed vs the designer in 3/34 IDs (reported only)` / `success under uniform-scale alignment 25/34` (reported only).
 
 Flagged although correct: 21 of the 23 successes; S28-15 and S43-15 are unflagged successes with visibly wrong heads (see 5b). S46-15 is silent again: its head fit (0.82 agreement, 0.94 outline) is not a gross failure; its miss is the scorer alignment effect described below.
 
