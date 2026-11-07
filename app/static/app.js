@@ -6,7 +6,7 @@ import { applyConfig, glitterPattern, COLOR_INDICES } from './simulator.js';
 import {
   MAX_COUNT, POINT_KINDS, errorText, hex, flagItems,
   downloadBlockers as blockersFor, groupColor, tailGroups, parseValue, tailCheckKey, sourceNotice,
-  convertBlocker, resetForFile, checklistItems, paramShown, headCandidates, headFitOf, libraryChoices, switchHead, templateText, usesGroup,
+  convertBlocker, resetForFile, checklistItems, paramShown, headCandidates, headFitOf, libraryChoices, pickNeedsServer, renderBody, switchHead, templateText, usesGroup,
 } from './logic.js';
 
 export { errorText, flagItems, parseValue, tailGroups, hex };
@@ -78,6 +78,7 @@ export const state = {
   issues: [],
   flagged: false, // server is_flagged of the last render
   headFit: null, // head fit measured at conversion (information, not a flag)
+  library: [], // every library template [{id, description}] (/api/library), loaded once
   confirmed: new Set(), // flag keys the user confirmed
   invalid: new Set(), // input field keys holding an invalid value
   analyzing: false,
@@ -124,12 +125,15 @@ export const api = {
     form.append('file', file, file.name);
     return request('/api/analyze', { method: 'POST', body: form });
   },
-  render(model) {
+  render(model, head) {
     return request('/api/render', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model }),
+      body: renderBody(model, head),
     });
+  },
+  library() {
+    return request('/api/library', { method: 'GET' });
   },
 };
 
@@ -165,6 +169,7 @@ export const actions = {
         model: res.model, svg: res.svg, issues: res.issues || [], flagged: !!res.flagged,
         filename: res.filename, headFit: res.head_fit || null,
       });
+      actions.loadLibrary();
       state.sim.touched.clear();
       state.sim.pattern = false;
       state.sim.rose = !!res.model.rose;
@@ -291,6 +296,47 @@ export const actions = {
     views.parts();
     views.groups();
     actions.scheduleRender();
+  },
+
+  // A library head the model does not hold: the server places it on the analyzed photo,
+  // checks and flags it like a candidate and returns the switched model.
+  async pickLibraryHead(choice) {
+    if (!pickNeedsServer(state.model, choice)) return actions.switchHead(choice);
+    const before = state.model.parts.filter((p) => p.role !== 'tail_stripe').map((p) => `part:${p.id}`);
+    clearTimeout(state.render.timer);
+    const seq = ++state.render.seq;
+    Object.assign(state.render, { dirty: false, inFlight: true });
+    views.status();
+    try {
+      const res = await api.render(JSON.parse(JSON.stringify(state.model)), choice);
+      if (seq !== state.render.seq) return;
+      Object.assign(state, { model: res.model, svg: res.svg, issues: res.issues || [], flagged: !!res.flagged });
+      const fit = headFitOf(state.model);
+      if (fit !== undefined) state.headFit = fit;
+      state.render.error = null;
+      hideError();
+      actions.unconfirm(...before, 'check:head');
+      views.parts();
+      views.groups();
+    } catch (e) {
+      if (seq !== state.render.seq) return;
+      showError(e.message);
+    } finally {
+      if (seq === state.render.seq) {
+        state.render.inFlight = false;
+        views.afterRender();
+      }
+    }
+  },
+
+  async loadLibrary() {
+    if (state.library.length) return;
+    try {
+      state.library = (await api.library()).templates || [];
+      if (state.model) views.parts();
+    } catch {
+      state.library = []; // the chooser then lists the candidates only
+    }
   },
 
   // A template part's reference Color c is drawn in color group groupId.
@@ -559,8 +605,8 @@ function headPicker(choices) {
 let libraryFilter = '';
 function libraryChooser() {
   const list = el('select', { class: 'library-list', size: 6, 'aria-label': 'Library templates',
-    onchange: (ev) => { if (ev.target.value) actions.switchHead(ev.target.value); } });
-  const fill = () => list.replaceChildren(...libraryChoices(state.model, libraryFilter)
+    onchange: (ev) => { if (ev.target.value) actions.pickLibraryHead(ev.target.value); } });
+  const fill = () => list.replaceChildren(...libraryChoices(state.model, state.library, libraryFilter)
     .map((c) => el('option', { value: c.choice, text: c.text })));
   fill();
   const search = el('input', { type: 'search', value: libraryFilter, placeholder: 'Type part of an id',

@@ -186,19 +186,48 @@ def test_render_draws_the_head_picked_on_the_head_card():
     assert client.post("/api/render", json={"model": model, "head": "S99-15"}).status_code == 422
 
 
-def test_render_takes_a_library_head_outside_the_top_3():
-    model = _picker_model()
-    model["library_heads"] = [{"id": "library_S36-15", "role": "template", "params": {
-        "template_id": "S36-15", "cx": 300, "cy": 200, "r": 150, "rotation_deg": 0, "score": 0.4, "rank": 7,
-        "description": "6 points, center", "group_1": 1, "group_2": 2}, "color_group": 1, "z": 10,
-        "confidence": 0.5}]
-    model["warnings"] = ["general"]
-    model["head_states"] = {"A1-15": {"warnings": [], "fit": None},
-                            "S36-15": {"warnings": ["far: S36-15"], "fit": {"agreement": 0.5, "silhouette": 0.7}}}
-    model["parts"][1]["params"]["cx"] = 305
-    body = client.post("/api/render", json={"model": model, "head": "S36-15"}).json()
+def test_photo_cache_keeps_the_last_photos_only():
+    from app.main import PhotoCache
+    c = PhotoCache(size=2)
+    a, b = c.put("A"), c.put("B")
+    assert a != b and c.get(a) == "A"
+    d = c.put("D")  # a was used last after b: b goes
+    assert c.get(b) is None and c.get(a) == "A" and c.get(d) == "D"
+    assert c.get("") is None and c.get("nope") is None
+
+
+def test_library_lists_every_template_by_id():
+    from rosette.vision.templates import load_library
+    body = client.get("/api/library").json()
+    ids = [t["id"] for t in body["templates"]]
+    assert ids == sorted(t.sid for t in load_library()) and all(t["description"] for t in body["templates"])
+
+
+def test_analyze_gives_a_photo_token_and_a_small_model():
+    body = _post("S46-15.png", _png()).json()
+    assert body["model"]["photo_token"]
+    assert len(json.dumps(body["model"])) < 20000
+
+
+def test_render_places_a_library_head_outside_the_candidates_on_the_cached_photo():
+    first = _post("S46-15.png", _png()).json()
+    model = first["model"]
+    pool = {p["params"]["template_id"] for p in model["parts"] + model["alternatives"] if p["role"] == "template"}
+    tid = next(t["id"] for t in client.get("/api/library").json()["templates"] if t["id"] not in pool)
+    r = client.post("/api/render", json={"model": model, "head": tid})
+    assert r.status_code == 200, r.text
+    body = r.json()
     drawn = [p for p in body["model"]["parts"] if p["role"] == "template"]
-    assert [p["params"]["template_id"] for p in drawn] == ["S36-15"]
-    assert drawn[0]["params"]["cx"] == 305 and drawn[0]["confidence"] == 0.5
-    assert body["model"]["warnings"] == ["general", "far: S36-15"]
-    assert body["model"]["library_heads"] == [] and body["issues"] == [] and body["flagged"]
+    assert [p["params"]["template_id"] for p in drawn] == [tid]
+    assert drawn[0]["params"]["rank"] > 3 and tid in body["model"]["head_states"]
+    assert body["issues"] == []
+
+
+def test_render_with_an_unknown_photo_token_asks_for_the_photo_again():
+    from app.main import PHOTO_EXPIRED
+    model = _picker_model()
+    model["photo_token"] = "gone"
+    r = client.post("/api/render", json={"model": model, "head": "S36-15"})
+    assert r.status_code == 422 and r.json()["detail"] == PHOTO_EXPIRED
+    # a candidate needs no photo
+    assert client.post("/api/render", json={"model": model, "head": "A6-15"}).status_code == 200

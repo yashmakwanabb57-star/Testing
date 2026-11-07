@@ -1,5 +1,7 @@
 """Library heads (H7): a `template` part drawn from reference pieces, and the switch
 between the template and the rule-based head."""
+import copy
+
 import numpy as np
 import pytest
 
@@ -490,54 +492,76 @@ def _five_templates():
 
 @pytest.fixture
 def five(monkeypatch):
-    for x in _five_templates()[1:]:
+    import rosette.pipeline as pipe
+    lib = {x.sid: x for x in _five_templates()}
+    for x in lib.values():
         monkeypatch.setitem(LIB, x.sid, x)
+    monkeypatch.setattr(pipe, "template_by_id", lambda tid: lib.get(tid))
+    return lib
 
 
-def _five_model():
-    t, near, far, disc, small = _five_templates()
+def _photo():
+    """A synthetic photo of T1-15 (px head circle (200, 200, 100)) as a PhotoContext."""
+    from types import SimpleNamespace
+    from rosette.pipeline import PhotoContext
+    t = _five_templates()[0]
     mask, labels = _labels_like(t, mapping={1: 1, 2: 2, 3: 3})
-    fr = Frame(axis_x=200, top=100, scale=1.0)
-    return with_template(_detected(), mask, labels, (200, 200, 100), fr, _groups(),
-                         lib=[disc, far, small, near, t], min_score=0.0)
+    p = SimpleNamespace(mask=mask, head=(200, 200, 100), axis_x=200, scale=1.0)
+    return PhotoContext(p, labels, _groups(), {}, _detected())
 
 
-def test_every_library_template_outside_the_top_3_waits_in_library_heads(five):
-    m = _five_model()
+def _analyzed(five):
+    """with_template over the five templates on the synthetic photo (top 3 only)."""
+    ctx = _photo()
+    fr = Frame.of(ctx.prepared)
+    return with_template(ctx.rules, ctx.prepared.mask, ctx.labels, ctx.prepared.head, fr, _groups(),
+                         lib=list(five.values()), min_score=0.0), ctx
+
+
+def test_analyze_keeps_only_the_top_3_candidates(five):
+    m, _ = _analyzed(five)
     cands = [q.params["template_id"] for q in m.parts + m.alternatives if q.role == "template"]
     assert len(cands) == 3 and "T9-15" not in cands
-    lib = {q.params["template_id"]: q for q in m.library_heads}
-    assert set(lib) | set(cands) == {"T1-15", "T7-15", "T8-15", "T9-15", "T10-15"}
-    q = lib["T9-15"]  # the disc, gated out of the matcher's ranking, is still offered
-    assert q.role == "template" and q.params["description"] and q.params["rank"] > 3
-    assert (q.params["cx"], q.params["cy"], q.params["r"]) == (300, 125, 100)
-    assert RosetteModel.from_json(m.to_json()).library_heads == m.library_heads
+    assert not hasattr(m, "library_heads")
 
 
-def test_use_head_takes_a_library_head_by_id_like_a_candidate(five):
-    from rosette.pipeline import drawn_head, use_head
-    m = _five_model()
+def test_a_library_head_outside_the_candidates_is_placed_and_checked_on_demand(five):
+    from rosette.pipeline import add_library_head, drawn_head, use_head
+    m, ctx = _analyzed(five)
     t = next(q for q in m.parts if q.role == "template")
     t.params.update(cx=310.0, r=110.0)
-    picked = use_head(m, "T9-15")
+    picked = add_library_head(m, "T9-15", ctx)
     assert drawn_head(picked) == "T9-15"
     drawn = next(q for q in picked.parts if q.role == "template")
+    assert drawn.id == "library_T9-15" and drawn.params["rank"] > 3 and drawn.params["description"]
     assert (drawn.params["cx"], drawn.params["r"]) == (310.0, 110.0)  # the user's placement stays
-    assert "T9-15" not in [q.params["template_id"] for q in picked.library_heads]
+    assert "T9-15" in picked.head_states and picked.head_states["T9-15"]["fit"] is not None
     assert render(picked).issues == []
-    # it joins the candidates: back and forth works
+    # it joins the candidates: back and forth works without the photo
     assert drawn_head(use_head(use_head(picked, "rules"), "T9-15")) == "T9-15"
+    # a candidate id just switches; an unknown id is an error
+    assert drawn_head(add_library_head(m, "T7-15", ctx)) == "T7-15"
     with pytest.raises(ValueError):
-        use_head(m, "T99-15")
+        add_library_head(m, "T99-15", ctx)
 
 
-def test_library_heads_are_checked_and_flagged_like_the_candidates(five):
-    from rosette.pipeline import FLAGGED_CONF, HeadFit, choose_head, drawn_head, use_head
-    fits = {"rules": HeadFit(0.9, 0.9), "T9-15": HeadFit(0.5, 0.7)}
-    m, _ = choose_head(_detected(), _five_model(), lambda x: fits.get(drawn_head(x), HeadFit(0.9, 0.9)),
-                       lambda a, b: 0.9)
-    assert {"T9-15", "T10-15"} <= set(m.head_states)
-    picked = use_head(m, "T9-15")
-    assert next(q for q in picked.parts if q.role == "template").confidence <= FLAGGED_CONF
-    assert [w for w in picked.warnings if "head match 50%, outline 70%" in w]
-    assert picked.head_states["T9-15"]["fit"] == {"agreement": 0.5, "silhouette": 0.7}
+def test_a_chosen_library_head_gets_the_same_state_as_a_candidate(five):
+    """Same path as the picker: an analyzed candidate dropped from the model and chosen
+    again from the library gets the same placement, confidence, warnings and fit."""
+    from rosette.pipeline import add_library_head, choose_head, drawn_head, head_fit, head_overlap, use_head
+    m, ctx = _analyzed(five)
+    p = ctx.prepared
+    analyzed, _ = choose_head(ctx.rules, m, lambda x: head_fit(p, ctx.labels, x, {}), head_overlap)
+    ref = use_head(analyzed, "T8-15")
+    dropped = copy.deepcopy(analyzed)
+    dropped.alternatives = [q for q in dropped.alternatives if q.params.get("template_id") != "T8-15"]
+    dropped.head_states = {k: v for k, v in dropped.head_states.items() if k != "T8-15"}
+    again = add_library_head(dropped, "T8-15", ctx)
+    assert drawn_head(again) == drawn_head(ref) == "T8-15"
+    a = next(q for q in again.parts if q.role == "template")
+    b = next(q for q in ref.parts if q.role == "template")
+    assert a.confidence == b.confidence
+    assert {k: a.params[k] for k in ("cx", "cy", "r", "group_1", "group_2", "group_3")} == {
+        k: b.params[k] for k in ("cx", "cy", "r", "group_1", "group_2", "group_3")}
+    assert again.head_states["T8-15"] == ref.head_states["T8-15"]
+    assert again.warnings == ref.warnings

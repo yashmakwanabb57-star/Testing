@@ -39,7 +39,8 @@ from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_group
 from .vision.parts import detect_parts
 from .vision.parts_common import Frame
 from .vision.prepare import Prepared, prepare
-from .vision.templates import describe, load_library, photo_grid, rank, relabel_map, score_all
+from .vision.templates import (describe, load_library, photo_grid, rank, relabel_map, score_template,
+                               template_by_id)
 from .writer import write_svg
 
 # Head fit gross-failure bars, from the 76 reference photos (docs/pipeline.md). Layer
@@ -314,14 +315,6 @@ def with_template(model: RosetteModel, mask: np.ndarray, labels: np.ndarray, hea
     for i, q in enumerate(cands):
         q.id = TEMPLATE_PART_ID if i == 0 else f"{TEMPLATE_PART_ID}_{i + 1}"
         q.params["rank"] = i + 1
-    taken = {q.params["template_id"] for q in cands}
-    rest = [(t, f) for t, f in score_all(grid, lib, _tail_groups(out)) if t.sid not in taken
-            and (exclude_key is None or t.key != exclude_key)]
-    library = [q for q in (_template_part(t, f, have, circle) for t, f in rest) if q is not None]
-    for i, q in enumerate(library):
-        q.id = f"{LIBRARY_PART_ID}_{q.params['template_id']}"
-        q.params["rank"] = len(cands) + i + 1
-    out.library_heads = library
     out.alternatives = [q for q in out.parts if q.role != "tail_stripe"] + cands[1:]
     out.parts = [q for q in out.parts if q.role == "tail_stripe"] + cands[:1]
     _split_groups(out)
@@ -379,11 +372,6 @@ def use_head(model: RosetteModel, choice: str) -> RosetteModel:
     head waits in alternatives. Color groups follow the parts that use them. Raises
     ValueError for a choice the model does not hold."""
     out = copy.deepcopy(model)
-    if choice != RULES_HEAD:  # a template from the library chooser joins the candidates
-        found = [q for q in out.library_heads if q.params.get("template_id") == choice][:1]
-        if found:
-            out.library_heads = [q for q in out.library_heads if q is not found[0]]
-            out.alternatives = out.alternatives + found
     rules, cands = _head_pool(out)
     before = next((q for q in out.parts if q.role == "template"), None)
     current = drawn_head(out)
@@ -461,27 +449,22 @@ def choose_head(rules: RosetteModel, lib: RosetteModel | None,
     conf: dict[str, float] = {}
     fits: dict[str, HeadFit | None] = {}
     path = None
-    for q in cands + list(lib.library_heads):
+    for q in cands:
         tid = str(q.params["template_id"])
         m = use_head(lib, tid)
         fits[tid] = fit_of(m)
-        part = float(q.params.get("partition", 0.0))
         if q is first:
-            path = library_head_path(rules_fit, fits[tid], part, has_head_layer(rules))
-        agree = colors_agree(part)
-        overlap = overlap_of(rules, m)
-        differs = ([TEMPLATE_DIFFERS_WARNING.format(iou=overlap)]
-                   if overlap is not None and (overlap < TEMPLATE_DIFFERS_IOU or not agree) else [])
-        checked, warns = _with_head_state(m, fits[tid], not agree, differs)
-        conf.update({x.id: x.confidence for x in checked.parts if x.role != "tail_stripe"})
-        states[tid] = {"warnings": warns, "fit": _fit_json(fits[tid])}
+            path = library_head_path(rules_fit, fits[tid], float(q.params.get("partition", 0.0)),
+                                     has_head_layer(rules))
+        c, states[tid] = _library_head_state(rules, m, q, fits[tid], overlap_of)
+        conf.update(c)
     colors = ([TEMPLATE_COLORS_WARNING.format(tid=first.params["template_id"])]
               if path in ("colors", "override") else [])
     checked, warns = _with_head_state(use_head(lib, RULES_HEAD), rules_fit, False, colors)
     conf.update({x.id: x.confidence for x in checked.parts if x.role != "tail_stripe"})
     states[RULES_HEAD] = {"warnings": warns, "fit": _fit_json(rules_fit)}
     out = copy.deepcopy(lib)
-    for q in out.parts + out.alternatives + out.library_heads:
+    for q in out.parts + out.alternatives:
         if q.id in conf:
             q.confidence = conf[q.id]
     choice = str(first.params["template_id"]) if path in ("floor", "override") else RULES_HEAD
@@ -491,6 +474,66 @@ def choose_head(rules: RosetteModel, lib: RosetteModel | None,
     out.head_states = states
     out.warnings = base + states[choice]["warnings"]
     return out, (fits[choice] if choice != RULES_HEAD else rules_fit)
+
+
+def _library_head_state(rules: RosetteModel, m: RosetteModel, q: Part, fit: HeadFit | None,
+                        overlap_of) -> tuple[dict[str, float], dict]:
+    """A library head's flags as if drawn (m draws it): the FLAGGED_CONF cap without color
+    agreement, the heads-differ warning (overlap with the rule-based head under
+    TEMPLATE_DIFFERS_IOU, or no color agreement), the gross head check. Returns the
+    drawn parts' confidences by id and the head state (warnings, fit)."""
+    agree = colors_agree(float(q.params.get("partition", 0.0)))
+    overlap = overlap_of(rules, m)
+    differs = ([TEMPLATE_DIFFERS_WARNING.format(iou=overlap)]
+               if overlap is not None and (overlap < TEMPLATE_DIFFERS_IOU or not agree) else [])
+    checked, warns = _with_head_state(m, fit, not agree, differs)
+    return ({x.id: x.confidence for x in checked.parts if x.role != "tail_stripe"},
+            {"warnings": warns, "fit": _fit_json(fit)})
+
+
+@dataclass
+class PhotoContext:
+    """What a library head chosen after analyze needs of the photo (the server keeps it
+    under the model's photo_token): the prepared photo, its color labels and groups, the
+    label ids assign merged away and the detected (rule-based) model."""
+    prepared: Prepared
+    labels: np.ndarray
+    groups: list
+    merged: dict[int, int]
+    rules: RosetteModel
+
+
+def add_library_head(model: RosetteModel, tid: str, ctx: PhotoContext) -> RosetteModel:
+    """The model drawing library template tid, chosen on the head card outside the
+    candidates: placed on the photo head circle (the current library head's placement
+    is kept by use_head), colored under the tail-bound mapping (or the free one), and
+    checked like the candidates (_library_head_state). Raises ValueError for an unknown
+    id or a template none of whose Colors maps onto a model group."""
+    t = template_by_id(tid)
+    if t is None:
+        raise ValueError(f"no library template {tid!r}")
+    _, cands = _head_pool(model)
+    if any(q.params.get("template_id") == tid for q in cands):
+        return use_head(model, tid)
+    p, rules = ctx.prepared, ctx.rules
+    grid = photo_grid(p.mask, ctx.labels, p.head, relabel_map(rules, ctx.groups, ctx.merged))
+    f = score_template(grid, t, _tail_groups(rules))
+    fr = Frame.of(p)
+    circle = (round(fr.x(p.head[0]), 3), round(fr.y(p.head[1]), 3), round(fr.d(p.head[2]), 3))
+    part = _template_part(t, f, {g.id for g in rules.groups}, circle)
+    if part is None:
+        raise ValueError(f"library template {tid!r} cannot be colored on this photo")
+    part.id = f"{LIBRARY_PART_ID}_{tid}"
+    part.params["rank"] = max([int(q.params.get("rank", 1)) for q in cands] + [TEMPLATE_CANDIDATES]) + 1
+    out = copy.deepcopy(model)
+    out.alternatives = out.alternatives + [part]
+    m = use_head(out, tid)
+    conf, state = _library_head_state(rules, m, part, head_fit(p, ctx.labels, m, ctx.merged), head_overlap)
+    out.head_states = {**out.head_states, tid: state}
+    for q in out.alternatives:
+        if q.id in conf:
+            q.confidence = conf[q.id]
+    return use_head(out, tid)
 
 
 def _fit_json(fit: HeadFit | None) -> dict | None:
@@ -536,10 +579,17 @@ def analyze_with_fit(data: bytes, template: bool = True,
                      exclude_key: str | None = None) -> tuple[RosetteModel, HeadFit | None]:
     """analyze, plus the head fit measurement (None without head parts). template: try
     a library head (with_template); exclude_key: leave-one-out evaluation only."""
+    model, fit, _ = analyze_with_context(data, template, exclude_key)
+    return model, fit
+
+
+def analyze_with_context(data: bytes, template: bool = True,
+                         exclude_key: str | None = None) -> tuple[RosetteModel, HeadFit | None, PhotoContext]:
+    """analyze_with_fit, plus the PhotoContext add_library_head needs later."""
     d = detect(data)
     p, labels, groups, out, merged, merged_print = d.prepared, d.labels, d.groups, d.model, d.merged, d.merged_print
+    ctx = PhotoContext(p, labels, groups, merged, copy.deepcopy(out))
     used = {q.color_group for q in out.parts} | set(merged)
-    fit = head_fit(p, labels, out, merged)
     lib = None
     if template:
         lib = with_template(out, p.mask, labels, p.head, Frame.of(p), groups, merged, exclude_key=exclude_key)
@@ -564,7 +614,7 @@ def analyze_with_fit(data: bytes, template: bool = True,
         if gid in used:
             out.warnings.append(f"Color {hex_rgb(by_id[gid].rgb)} may be print on the center badge (a logo) "
                                 "rather than a ribbon color - check the colors and the center.")
-    return out, fit
+    return out, fit, ctx
 
 
 def render(model: RosetteModel) -> RenderResult:

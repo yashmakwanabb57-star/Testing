@@ -351,16 +351,18 @@ def rank(labels: np.ndarray, lib, exclude_key: str | None = None, weights=None,
     return scored[:n]
 
 
-def score_all(labels: np.ndarray, lib, tail_groups: dict[int, int] | None = None) -> list[tuple[Template, dict]]:
-    """Every template scored for the head card's library chooser, best first: no lobe
-    gate, the tail-bound mapping where the template has one (tail_consistent_mapping),
-    else the free overlap mapping, so each template can be drawn."""
-    out = []
-    for t in lib:
-        mapping = tail_consistent_mapping(labels, t, tail_groups) if tail_groups else None
-        out.append((t, features(labels, t.grid, None, mapping)))
-    out.sort(key=lambda tf: -tf[1]["score"])
-    return out
+def score_template(labels: np.ndarray, t: Template, tail_groups: dict[int, int] | None = None) -> dict:
+    """One template scored for the head card's library chooser: no lobe gate, the
+    tail-bound mapping where the template has one (tail_consistent_mapping), else the free
+    overlap mapping, so any template can be drawn."""
+    mapping = tail_consistent_mapping(labels, t, tail_groups) if tail_groups else None
+    return features(labels, t.grid, None, mapping)
+
+
+@lru_cache(maxsize=4)
+def library_index(path: Path = LIBRARY_PATH) -> tuple[tuple[str, str], ...]:
+    """(template id, description) of every library template, by id (the chooser's list)."""
+    return tuple(sorted((t.sid, describe(t)) for t in load_library(path)))
 
 
 # ---------------------------------------------------------------- description

@@ -132,28 +132,37 @@ export function headFitOf(model) {
 // (rosette/pipeline.py TEMPLATE_PLACEMENT).
 const TEMPLATE_PLACEMENT = ['cx', 'cy', 'r', 'rotation_deg'];
 
-// "Choose from the library": the matcher's candidates first (by rank), then every other
-// template by id; filter keeps the ids containing it (case and spaces ignored).
-export function libraryChoices(model, filter = '') {
+// "Choose from the library": the model's library heads first (by rank), then every other
+// template of library (/api/library: [{id, description}]) by id; filter keeps the ids
+// containing it (case and spaces ignored).
+export function libraryChoices(model, library = [], filter = '') {
   if (!model) return [];
   const { cands } = headPool(model);
-  const rest = [...(model.library_heads || [])]
-    .sort((a, b) => String(a.params.template_id).localeCompare(String(b.params.template_id)));
+  const have = new Set(cands.map((p) => String(p.params.template_id)));
+  const text = (id, d) => `${id}${d ? ' - ' + d : ''}`;
+  const all = [
+    ...cands.map((p) => ({ choice: String(p.params.template_id), text: text(p.params.template_id, p.params.description) })),
+    ...[...library].filter((t) => !have.has(String(t.id)))
+      .sort((a, b) => String(a.id).localeCompare(String(b.id)))
+      .map((t) => ({ choice: String(t.id), text: text(t.id, t.description) })),
+  ];
   const f = String(filter).trim().toLowerCase();
-  return [...cands, ...rest]
-    .filter((p) => !f || String(p.params.template_id).toLowerCase().includes(f))
-    .map((p) => ({ choice: String(p.params.template_id),
-      text: `${p.params.template_id}${p.params.description ? ' - ' + p.params.description : ''}` }));
+  return all.filter((c) => !f || c.choice.toLowerCase().includes(f));
+}
+
+// A library head the model does not hold yet: the server places and checks it on the
+// analyzed photo (/api/render with head, rosette/pipeline.py add_library_head).
+export function pickNeedsServer(model, choice) {
+  if (!model || choice === 'rules') return false;
+  return !headPool(model).cands.some((p) => String(p.params.template_id) === choice);
+}
+
+// Body of /api/render: the model, and the head to draw when the server picks it.
+export function renderBody(model, head) {
+  return JSON.stringify(head === undefined ? { model } : { model, head });
 }
 
 export function switchHead(model, choice) {
-  if (choice !== undefined && choice !== 'rules') { // a library template joins the candidates
-    const found = (model.library_heads || []).find((p) => String(p.params.template_id) === choice);
-    if (found) {
-      model.library_heads = model.library_heads.filter((p) => p !== found);
-      model.alternatives = [...(model.alternatives || []), found];
-    }
-  }
   const { rules, cands } = headPool(model);
   const before = model.parts.find((p) => p.role === 'template');
   const current = drawnHead(model);
