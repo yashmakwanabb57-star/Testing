@@ -242,3 +242,21 @@ def test_symmetry_is_cached_per_template_shape_not_per_id():
     star = _template("Z1-15", [(1, "points", [_star(6, 0.55, 1.0)])])
     disc = _template("Z1-15", [(1, "head", [_circle(1.0)])])
     assert symmetry(star) >= 5 and symmetry(disc) < 3
+
+
+def test_library_cache_is_not_stale_for_a_file_whose_head_circle_prepare_fits():
+    # the cache holds templates normalized on prepare's head circle of each reference
+    # render; S57-17's is the H10 silhouette fit (its symmetry circle sits at the top of
+    # the rose), so a cache built before that change differs here
+    from pathlib import Path
+
+    from rosette.vision.templates import LIBRARY_PATH, template_by_id
+    svg = (Path(__file__).resolve().parent.parent / "reference" / "svg" / "S57-17.svg").read_text(encoding="utf-8")
+    fresh = extract_template("S57-17", svg)
+    cached = template_by_id("S57-17", LIBRARY_PATH)
+    assert cached is not None
+    assert [(p.category, p.role) for p in cached.pieces] == [(p.category, p.role) for p in fresh.pieces]
+    for a, b in zip(cached.pieces, fresh.pieces):
+        assert len(a.rings) == len(b.rings)
+        for ra, rb in zip(a.rings, b.rings):
+            assert ra.shape == rb.shape and np.allclose(ra, rb, atol=1e-3)
