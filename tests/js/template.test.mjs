@@ -2,7 +2,7 @@
 // Run: node --test tests/js/template.test.mjs (tests/test_js.py runs it when node is on PATH)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { colorQuestions, flagItems, headCandidates, headChoice, automaticHeadText, headFitOf, libraryChoices, libraryOverride, pickNeedsServer, renderBody, partGroups, switchHead, templateText, usesGroup } from '../../app/static/logic.js';
+import { colorQuestions, flagItems, headCandidates, headChoice, automaticHeadText, headFitOf, renderBody, partGroups, switchHead, templateText, usesGroup } from '../../app/static/logic.js';
 
 function model(score = 0.8) {
   return {
@@ -132,54 +132,16 @@ test('switchHead swaps the head-dependent warnings and keeps the library head pl
   assert.equal(headFitOf({ ...m, head_states: {} }), undefined);
 });
 
-// H8: the library chooser (the list comes from /api/library; ids outside the candidates
-// are placed and checked by the server).
-const LIBRARY = [
-  { id: 'S9-19', description: '4 loops, 6-point star, center' },
-  { id: 'A1-15', description: 'disc, center' },
-  { id: 'S29-15', description: '6 loops, 6 kites, 12 strips, 6-point star, ring, center' },
-  { id: 'S11a-15', description: '2 points, 10 kites, ring, center' },
-];
-
-test('libraryChoices lists the candidates first, then every other template by id, filtered', () => {
-  const c = libraryChoices(pickerModel(), LIBRARY);
-  assert.deepEqual(c.map((x) => x.choice), ['S29-15', 'S30-15', 'S57-17', 'A1-15', 'S11a-15', 'S9-19']);
-  assert.equal(c[3].text, 'A1-15 - disc, center');
-  assert.equal(c[0].text, 'S29-15 - 6 loops, 6 kites, ring, center');
-  assert.deepEqual(libraryChoices(pickerModel(), LIBRARY, 's1').map((x) => x.choice), ['S11a-15']);
-  assert.deepEqual(libraryChoices(pickerModel(), LIBRARY, ' 9-19 ').map((x) => x.choice), ['S9-19']);
-  assert.ok(c.every((x) => !/[–—]/.test(x.text)));
-  assert.deepEqual(libraryChoices(null, LIBRARY), []);
-});
-
-test('a pick outside the candidates goes to the server, a candidate switches locally', () => {
+// H9 (amended): the head card shows the automatic head only; no picker in the UI.
+test('the head card heading names the automatic head', () => {
+  assert.equal(automaticHeadText(pickerModel(), 'S29-15'), 'Automatic result: library template S29-15, match 80%');
   const m = pickerModel();
-  assert.equal(pickNeedsServer(m, 'S9-19'), true);
-  assert.equal(pickNeedsServer(m, 'S30-15'), false);
-  assert.equal(pickNeedsServer(m, 'rules'), false);
-  // the server's answer: the chosen head joins the candidates, then it switches locally
-  const t = { id: 'library_S9-19', role: 'template', params: { template_id: 'S9-19', cx: 300, cy: 150, r: 120, rotation_deg: 0, score: 0.3, rank: 4, description: '4 loops, 6-point star, center', group_1: 1 }, color_group: 1, z: 10, confidence: 0.5 };
-  m.alternatives.push(t);
-  assert.equal(pickNeedsServer(m, 'S9-19'), false);
-  switchHead(m, 'S9-19');
-  assert.equal(templateText(m.parts.find((p) => p.role === 'template')), 'Head shape: chosen from the library: S9-19 - 4 loops, 6-point star, center');
-  assert.ok(headCandidates(m).some((x) => x.choice === 'S9-19' && x.drawn));
-  assert.equal(renderBody(m, 'S9-19'), JSON.stringify({ model: m, head: 'S9-19' }));
-  assert.equal(renderBody(m), JSON.stringify({ model: m }));
-});
-
-// H9: the automatic result first, the library chooser as a closed manual override.
-test('the library chooser is a closed manual override under the automatic result', () => {
-  const o = libraryOverride(pickerModel(), LIBRARY);
-  assert.equal(o.label, 'Other library heads (manual override)');
-  assert.equal(o.open, false);
-  assert.equal(o.choices.length, 6);
-  assert.equal(automaticHeadText(pickerModel(), 'S29-15'), 'Automatic result: library template S29-15, match 80% (drawn)');
-  const m = pickerModel();
-  switchHead(m, 'S30-15');
+  switchHead(m, 'S30-15'); // a head switched through the API (use_head) is not the automatic one
   assert.equal(automaticHeadText(m, 'S29-15'), 'Automatic result: library template S29-15, match 80% (not drawn: another head is picked)');
   switchHead(m, 'rules');
-  assert.equal(automaticHeadText(m, 'rules'), 'Automatic result: rule-based head (drawn)');
+  assert.equal(automaticHeadText(m, 'rules'), 'Automatic result: rule-based head');
   assert.equal(automaticHeadText(m, null), '');
-  for (const t of [o.label, automaticHeadText(m, 'S29-15')]) assert.ok(!/[–—]/.test(t));
+  assert.ok(!/[\u2013\u2014]/.test(automaticHeadText(m, 'S29-15')));
+  assert.equal(renderBody(m, 'S9-19'), JSON.stringify({ model: m, head: 'S9-19' }));
+  assert.equal(renderBody(m), JSON.stringify({ model: m }));
 });

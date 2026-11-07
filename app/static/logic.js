@@ -132,49 +132,16 @@ export function headFitOf(model) {
 // (rosette/pipeline.py TEMPLATE_PLACEMENT).
 const TEMPLATE_PLACEMENT = ['cx', 'cy', 'r', 'rotation_deg'];
 
-// "Choose from the library": the model's library heads first (by rank), then every other
-// template of library (/api/library: [{id, description}]) by id; filter keeps the ids
-// containing it (case and spaces ignored).
-export function libraryChoices(model, library = [], filter = '') {
-  if (!model) return [];
-  const { cands } = headPool(model);
-  const have = new Set(cands.map((p) => String(p.params.template_id)));
-  const text = (id, d) => `${id}${d ? ' - ' + d : ''}`;
-  const all = [
-    ...cands.map((p) => ({ choice: String(p.params.template_id), text: text(p.params.template_id, p.params.description) })),
-    ...[...library].filter((t) => !have.has(String(t.id)))
-      .sort((a, b) => String(a.id).localeCompare(String(b.id)))
-      .map((t) => ({ choice: String(t.id), text: text(t.id, t.description) })),
-  ];
-  const f = String(filter).trim().toLowerCase();
-  return all.filter((c) => !f || c.choice.toLowerCase().includes(f));
-}
-
-// The head card's library chooser is a manual override (H9: a new image is converted
-// automatically): closed by default, under the automatic result and the top-3 picker.
-export const OVERRIDE_LABEL = 'Other library heads (manual override)';
-
-export function libraryOverride(model, library = [], filter = '') {
-  return { label: OVERRIDE_LABEL, open: false, choices: libraryChoices(model, library, filter) };
-}
-
 // The head the conversion chose (choice: 'rules' or a template_id, kept from the analyze
 // response) and whether it is the one drawn now; '' without a choice.
 export function automaticHeadText(model, choice) {
   if (!model || !choice) return '';
-  const drawn = drawnHead(model) === choice ? ' (drawn)' : ' (not drawn: another head is picked)';
+  const drawn = drawnHead(model) === choice ? '' : ' (not drawn: another head is picked)';
   if (choice === 'rules') return `Automatic result: rule-based head${drawn}`;
   const p = headPool(model).cands.find((q) => String(q.params.template_id) === choice);
   const score = p ? Number(p.params.score) : NaN;
   const pct = Number.isFinite(score) ? `, match ${Math.round(score * 100)}%` : '';
   return `Automatic result: library template ${choice}${pct}${drawn}`;
-}
-
-// A library head the model does not hold yet: the server places and checks it on the
-// analyzed photo (/api/render with head, rosette/pipeline.py add_library_head).
-export function pickNeedsServer(model, choice) {
-  if (!model || choice === 'rules') return false;
-  return !headPool(model).cands.some((p) => String(p.params.template_id) === choice);
 }
 
 // Body of /api/render: the model, and the head to draw when the server picks it.

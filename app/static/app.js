@@ -6,7 +6,7 @@ import { applyConfig, glitterPattern, COLOR_INDICES } from './simulator.js';
 import {
   MAX_COUNT, POINT_KINDS, errorText, hex, flagItems,
   downloadBlockers as blockersFor, groupColor, tailGroups, parseValue, tailCheckKey, sourceNotice,
-  convertBlocker, resetForFile, checklistItems, paramShown, headCandidates, headFitOf, automaticHeadText, libraryOverride, pickNeedsServer, renderBody, switchHead, templateText, usesGroup,
+  convertBlocker, resetForFile, checklistItems, paramShown, automaticHeadText, renderBody, templateText, usesGroup,
 } from './logic.js';
 
 export { errorText, flagItems, parseValue, tailGroups, hex };
@@ -78,7 +78,6 @@ export const state = {
   issues: [],
   flagged: false, // server is_flagged of the last render
   headFit: null, // head fit measured at conversion (information, not a flag)
-  library: [], // every library template [{id, description}] (/api/library), loaded once
   headDefault: null, // the head the conversion chose ('rules' or a template_id)
   confirmed: new Set(), // flag keys the user confirmed
   invalid: new Set(), // input field keys holding an invalid value
@@ -133,9 +132,7 @@ export const api = {
       body: renderBody(model, head),
     });
   },
-  library() {
-    return request('/api/library', { method: 'GET' });
-  },
+
 };
 
 // ---------------------------------------------------------------- actions
@@ -172,9 +169,7 @@ export const actions = {
         headDefault: (res.model.parts.find((p) => p.role === 'template') || { params: { template_id: 'rules' } })
           .params.template_id,
       });
-      libraryOpen = false;
-      libraryFilter = '';
-      actions.loadLibrary();
+
       state.sim.touched.clear();
       state.sim.pattern = false;
       state.sim.rose = !!res.model.rose;
@@ -288,62 +283,6 @@ export const actions = {
     rebuildParts(field);
     actions.scheduleRender();
     return true;
-  },
-
-  // Draw the head picked on the head card: 'rules' or a library candidate's template_id
-  // (the other heads wait in model.alternatives).
-  switchHead(choice) {
-    const before = state.model.parts.filter((p) => p.role !== 'tail_stripe').map((p) => `part:${p.id}`);
-    switchHead(state.model, choice);
-    const fit = headFitOf(state.model);
-    if (fit !== undefined) state.headFit = fit;
-    actions.unconfirm(...before, 'check:head');
-    views.parts();
-    views.groups();
-    actions.scheduleRender();
-  },
-
-  // A library head the model does not hold: the server places it on the analyzed photo,
-  // checks and flags it like a candidate and returns the switched model.
-  async pickLibraryHead(choice) {
-    if (!pickNeedsServer(state.model, choice)) return actions.switchHead(choice);
-    const before = state.model.parts.filter((p) => p.role !== 'tail_stripe').map((p) => `part:${p.id}`);
-    clearTimeout(state.render.timer);
-    const seq = ++state.render.seq;
-    Object.assign(state.render, { dirty: false, inFlight: true });
-    views.download();
-    views.status();
-    try {
-      const res = await api.render(JSON.parse(JSON.stringify(state.model)), choice);
-      if (seq !== state.render.seq) return;
-      Object.assign(state, { model: res.model, svg: res.svg, issues: res.issues || [], flagged: !!res.flagged });
-      const fit = headFitOf(state.model);
-      if (fit !== undefined) state.headFit = fit;
-      state.render.error = null;
-      hideError();
-      actions.unconfirm(...before, 'check:head');
-      views.parts();
-      views.groups();
-    } catch (e) {
-      if (seq !== state.render.seq) return;
-      showError(e.message);
-      views.parts(); // the library list shows the drawn head again
-    } finally {
-      if (seq === state.render.seq) {
-        state.render.inFlight = false;
-        views.afterRender();
-      }
-    }
-  },
-
-  async loadLibrary() {
-    if (state.library.length) return;
-    try {
-      state.library = (await api.library()).templates || [];
-      if (state.model) views.parts();
-    } catch {
-      state.library = []; // the chooser then lists the candidates only
-    }
   },
 
   // A template part's reference Color c is drawn in color group groupId.
@@ -594,41 +533,10 @@ function partCard(p) {
   return card;
 }
 
-// Head card picker: the rule-based head and the library candidates (best match first).
-function headPicker(choices) {
-  const name = 'head-pick';
-  const rows = choices.map((c) => el('label', { class: 'pick' },
-    el('input', { type: 'radio', name, value: c.choice, checked: c.drawn,
-      onchange: () => actions.switchHead(c.choice) }),
-    el('span', { text: c.text })));
+// Head card heading (H9): the head the conversion chose; there is no picker in the UI.
+function headHeading() {
   const auto = automaticHeadText(state.model, state.headDefault);
-  return el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('strong', { text: 'Head shape' })),
-    auto ? el('p', { class: 'head-auto', text: auto }) : null,
-    el('p', { class: 'muted', text: 'Pick the head closest to the photo:' }),
-    ...rows, libraryChooser());
-}
-
-// "Choose from the library": every template by id (the matcher's top 3 first), filtered
-// by typing part of an id; picking one draws it like a picker choice.
-let libraryFilter = '';
-let libraryOpen = false; // the manual override stays closed until the user opens it
-function libraryChooser() {
-  const o = libraryOverride(state.model, state.library, libraryFilter);
-  const list = el('select', { class: 'library-list', size: 6, 'aria-label': 'Library templates',
-    onchange: (ev) => { if (ev.target.value) actions.pickLibraryHead(ev.target.value); } });
-  const drawn = (state.model.parts.find((p) => p.role === 'template') || { params: {} }).params.template_id;
-  const fill = () => list.replaceChildren(...libraryChoices(state.model, state.library, libraryFilter)
-    .map((c) => el('option', { value: c.choice, text: c.text, selected: c.choice === String(drawn) })));
-  fill();
-  const search = el('input', { type: 'search', value: libraryFilter, placeholder: 'Type part of an id',
-    'aria-label': 'Filter the library by id',
-    oninput: (ev) => { libraryFilter = ev.target.value; fill(); } });
-  const box = el('details', { class: 'library-chooser', open: libraryOpen || o.open,
-    ontoggle: (ev) => { libraryOpen = ev.target.open; } },
-  el('summary', { text: o.label }),
-  el('label', { class: 'param wide' }, el('span', { text: 'Filter by id' }), search), list);
-  return box;
+  return auto ? el('div', { class: 'card' }, el('p', { class: 'head-auto', text: auto })) : null;
 }
 
 function tailCard(parts, n) {
@@ -801,8 +709,8 @@ export const views = {
     const cards = [];
     const tails = tailGroups(state.model);
     const tailFirst = new Map(tails.map((ps, n) => [ps[0], n]));
-    const choices = headCandidates(state.model);
-    if (choices.length) cards.push(headPicker(choices));
+    const heading = headHeading();
+    if (heading) cards.push(heading);
     for (const p of state.model.parts) {
       if (p.role !== 'tail_stripe') cards.push(partCard(p));
       else if (tailFirst.has(p)) cards.push(tailCard(tails[tailFirst.get(p)], tailFirst.get(p)));
