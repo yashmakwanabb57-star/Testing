@@ -565,3 +565,23 @@ def test_a_chosen_library_head_gets_the_same_state_as_a_candidate(five):
         k: b.params[k] for k in ("cx", "cy", "r", "group_1", "group_2", "group_3")}
     assert again.head_states["T8-15"] == ref.head_states["T8-15"]
     assert again.warnings == ref.warnings
+
+
+def test_a_library_head_colored_without_the_tails_is_capped_and_warned(five, monkeypatch):
+    import rosette.pipeline as pipe
+    from rosette.pipeline import FLAGGED_CONF, FREE_COLORS_WARNING, add_library_head
+    # its tail Colors 1, 2 and 4 have no tail group on the photo (our tails carry Color 3 only)
+    free = Template("T11-15", "T11", five["T1-15"].pieces, tail_categories=(1, 2, 4))
+    lib = {**five, "T11-15": free}
+    monkeypatch.setitem(LIB, "T11-15", free)
+    monkeypatch.setattr(pipe, "template_by_id", lambda tid: lib.get(tid))
+    m, ctx = _analyzed(five)
+    picked = add_library_head(m, "T11-15", ctx)
+    drawn = next(q for q in picked.parts if q.role == "template")
+    assert drawn.params["partition"] > 0.9  # the free mapping fits the photo perfectly...
+    assert drawn.confidence <= FLAGGED_CONF  # ...but does not follow the tails
+    assert FREE_COLORS_WARNING in picked.warnings and FREE_COLORS_WARNING in picked.head_states["T11-15"]["warnings"]
+    assert "-" in FREE_COLORS_WARNING and not any(c in FREE_COLORS_WARNING for c in "–—")
+    # an anchored one gets neither
+    anchored = add_library_head(m, "T9-15", ctx)
+    assert FREE_COLORS_WARNING not in anchored.warnings

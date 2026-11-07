@@ -88,7 +88,7 @@ TEMPLATE_PART_ID = "template"
 # template_2, template_3) with the rule-based head. Own design among the top 3: 58 of 76.
 TEMPLATE_CANDIDATES = 3
 RULES_HEAD = "rules"
-# Part id prefix of the other library templates (model.library_heads, H8).
+# Part id prefix of a library template chosen outside the candidates (add_library_head, H8).
 LIBRARY_PART_ID = "library"
 # Template params that stay when the user switches from one library head to another.
 TEMPLATE_PLACEMENT = ("cx", "cy", "r", "rotation_deg")
@@ -117,6 +117,9 @@ TEMPLATE_OVERRIDE_PARTITION = 0.30
 # missing head is worse than any mappable library head, whose colors the user can fix on
 # the head card. The gain bar still applies and the library head is flagged.
 HEAD_LAYER_ROLES = ("head", "ring", "points")
+# A library head chosen from the library whose tail Colors have no tail group on the photo is
+# colored by the free overlap mapping (param free_colors 1): flagged, with this warning.
+FREE_COLORS_WARNING = "Library head colors are not anchored to the tails - check every Color on the head card."
 TEMPLATE_COLORS_WARNING = ("The library head {tid} fits the head outline better, but its colors do not agree "
                            "with the photo under the tail colors - the rule-based head is drawn; compare the head "
                            "with the photo and pick a library head on the head card if one is closer.")
@@ -482,13 +485,24 @@ def _library_head_state(rules: RosetteModel, m: RosetteModel, q: Part, fit: Head
     agreement, the heads-differ warning (overlap with the rule-based head under
     TEMPLATE_DIFFERS_IOU, or no color agreement), the gross head check. Returns the
     drawn parts' confidences by id and the head state (warnings, fit)."""
-    agree = colors_agree(float(q.params.get("partition", 0.0)))
+    free = bool(q.params.get("free_colors"))
+    agree = colors_agree(float(q.params.get("partition", 0.0))) and not free
     overlap = overlap_of(rules, m)
     differs = ([TEMPLATE_DIFFERS_WARNING.format(iou=overlap)]
                if overlap is not None and (overlap < TEMPLATE_DIFFERS_IOU or not agree) else [])
+    if free:
+        differs = [FREE_COLORS_WARNING] + differs
     checked, warns = _with_head_state(m, fit, not agree, differs)
     return ({x.id: x.confidence for x in checked.parts if x.role != "tail_stripe"},
             {"warnings": warns, "fit": _fit_json(fit)})
+
+
+class UnknownHead(ValueError):
+    """No library template has this id."""
+
+
+class UncoloredHead(ValueError):
+    """A library template none of whose Colors maps onto a model group."""
 
 
 @dataclass
@@ -511,7 +525,7 @@ def add_library_head(model: RosetteModel, tid: str, ctx: PhotoContext) -> Rosett
     id or a template none of whose Colors maps onto a model group."""
     t = template_by_id(tid)
     if t is None:
-        raise ValueError(f"no library template {tid!r}")
+        raise UnknownHead(f"no library template {tid!r}")
     _, cands = _head_pool(model)
     if any(q.params.get("template_id") == tid for q in cands):
         return use_head(model, tid)
@@ -522,7 +536,9 @@ def add_library_head(model: RosetteModel, tid: str, ctx: PhotoContext) -> Rosett
     circle = (round(fr.x(p.head[0]), 3), round(fr.y(p.head[1]), 3), round(fr.d(p.head[2]), 3))
     part = _template_part(t, f, {g.id for g in rules.groups}, circle)
     if part is None:
-        raise ValueError(f"library template {tid!r} cannot be colored on this photo")
+        raise UncoloredHead(f"library template {tid!r} cannot be colored on this photo")
+    if not f.get("anchored", True):
+        part.params["free_colors"] = 1
     part.id = f"{LIBRARY_PART_ID}_{tid}"
     part.params["rank"] = max([int(q.params.get("rank", 1)) for q in cands] + [TEMPLATE_CANDIDATES]) + 1
     out = copy.deepcopy(model)

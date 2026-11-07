@@ -231,3 +231,24 @@ def test_render_with_an_unknown_photo_token_asks_for_the_photo_again():
     assert r.status_code == 422 and r.json()["detail"] == PHOTO_EXPIRED
     # a candidate needs no photo
     assert client.post("/api/render", json={"model": model, "head": "A6-15"}).status_code == 200
+
+
+def test_render_names_an_unknown_head_before_the_photo_cache():
+    from app.main import UNKNOWN_HEAD
+    model = _picker_model()
+    model["photo_token"] = "gone"
+    r = client.post("/api/render", json={"model": model, "head": "S99-15"})
+    assert r.status_code == 422 and r.json()["detail"] == UNKNOWN_HEAD
+
+
+def test_render_says_when_a_library_head_cannot_be_colored(monkeypatch):
+    import app.main as main
+    from rosette.pipeline import UncoloredHead
+
+    def no_colors(model, tid, ctx):
+        raise UncoloredHead("no colors")
+    model = _picker_model()
+    model["photo_token"] = main.photos.put(object())
+    monkeypatch.setattr(main, "add_library_head", no_colors)
+    r = client.post("/api/render", json={"model": model, "head": "S36-15"})
+    assert r.status_code == 422 and r.json()["detail"] == main.UNCOLORED_HEAD

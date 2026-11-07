@@ -354,9 +354,12 @@ def rank(labels: np.ndarray, lib, exclude_key: str | None = None, weights=None,
 def score_template(labels: np.ndarray, t: Template, tail_groups: dict[int, int] | None = None) -> dict:
     """One template scored for the head card's library chooser: no lobe gate, the
     tail-bound mapping where the template has one (tail_consistent_mapping), else the free
-    overlap mapping, so any template can be drawn."""
+    overlap mapping, so any template can be drawn. "anchored" is False when the free
+    mapping was used: the head's colors then do not follow the tails."""
     mapping = tail_consistent_mapping(labels, t, tail_groups) if tail_groups else None
-    return features(labels, t.grid, None, mapping)
+    f = features(labels, t.grid, None, mapping)
+    f["anchored"] = mapping is not None
+    return f
 
 
 @lru_cache(maxsize=4)

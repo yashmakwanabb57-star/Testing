@@ -17,8 +17,9 @@ from PIL import Image
 from pydantic import BaseModel
 
 from rosette.model import RosetteModel
-from rosette.pipeline import RULES_HEAD, add_library_head, analyze_with_context, is_flagged, render, use_head
-from rosette.vision.templates import library_index
+from rosette.pipeline import (RULES_HEAD, UncoloredHead, add_library_head, analyze_with_context, is_flagged, render,
+                              use_head)
+from rosette.vision.templates import library_index, template_by_id
 from rosette.vision.prepare import UNREADABLE, InputError
 
 MAX_UPLOAD = 25 * 1024 * 1024
@@ -27,6 +28,8 @@ UNSUPPORTED = "Unsupported file type. Use PNG, WEBP, JPG or JPEG."
 INVALID_MODEL = "The model data is invalid."
 PHOTO_EXPIRED = ("The photo for this model is no longer in memory - upload the photo again to choose a "
                  "head from the library.")
+UNKNOWN_HEAD = "There is no library head with this id - pick a head from the list."
+UNCOLORED_HEAD = "This library head cannot be colored with the photo's colors - pick another head."
 # Analyzed photos kept for library heads chosen later (PhotoCache): the last few uploads.
 PHOTO_CACHE_SIZE = 8
 EXTENSIONS = {".png", ".webp", ".jpg", ".jpeg"}
@@ -147,11 +150,15 @@ def api_render(req: RenderRequest) -> dict:
         log.exception("render failed for submitted model")
         raise HTTPException(422, INVALID_MODEL) from None
     if req.head is not None and req.head != RULES_HEAD and not _holds(model, req.head):
-        ctx = photos.get(model.photo_token)  # a library head outside the candidates
+        if template_by_id(req.head) is None:  # a library head outside the candidates
+            raise HTTPException(422, UNKNOWN_HEAD)
+        ctx = photos.get(model.photo_token)
         if ctx is None:
             raise HTTPException(422, PHOTO_EXPIRED)
         try:
             model = add_library_head(model, req.head, ctx)
+        except UncoloredHead:
+            raise HTTPException(422, UNCOLORED_HEAD) from None
         except Exception:
             log.exception("library head failed for submitted model")
             raise HTTPException(422, INVALID_MODEL) from None

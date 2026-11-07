@@ -306,6 +306,7 @@ export const actions = {
     clearTimeout(state.render.timer);
     const seq = ++state.render.seq;
     Object.assign(state.render, { dirty: false, inFlight: true });
+    views.download();
     views.status();
     try {
       const res = await api.render(JSON.parse(JSON.stringify(state.model)), choice);
@@ -321,6 +322,7 @@ export const actions = {
     } catch (e) {
       if (seq !== state.render.seq) return;
       showError(e.message);
+      views.parts(); // the library list shows the drawn head again
     } finally {
       if (seq === state.render.seq) {
         state.render.inFlight = false;
@@ -606,8 +608,9 @@ let libraryFilter = '';
 function libraryChooser() {
   const list = el('select', { class: 'library-list', size: 6, 'aria-label': 'Library templates',
     onchange: (ev) => { if (ev.target.value) actions.pickLibraryHead(ev.target.value); } });
+  const drawn = (state.model.parts.find((p) => p.role === 'template') || { params: {} }).params.template_id;
   const fill = () => list.replaceChildren(...libraryChoices(state.model, state.library, libraryFilter)
-    .map((c) => el('option', { value: c.choice, text: c.text })));
+    .map((c) => el('option', { value: c.choice, text: c.text, selected: c.choice === String(drawn) })));
   fill();
   const search = el('input', { type: 'search', value: libraryFilter, placeholder: 'Type part of an id',
     'aria-label': 'Filter the library by id',
