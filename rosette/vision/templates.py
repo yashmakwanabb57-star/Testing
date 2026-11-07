@@ -323,7 +323,16 @@ def choose(labels: np.ndarray, lib, exclude_key: str | None = None, weights=None
     (a design_key) are skipped (leave-one-out evaluation). tail_groups (our tail Color ->
     group): each template is scored under the tail-bound mapping it would be drawn with
     (tail_consistent_mapping), and one that cannot be mapped is skipped."""
-    best = None
+    best = rank(labels, lib, exclude_key, weights, gate, tail_groups, n=1)
+    return best[0] if best else None
+
+
+def rank(labels: np.ndarray, lib, exclude_key: str | None = None, weights=None,
+         gate: float | None = LOBE_GATE, tail_groups: dict[int, int] | None = None,
+         n: int = 3) -> list[tuple[Template, dict]]:
+    """The n best-scoring templates (and their features), best first, under the rules of
+    choose (lobe gate, exclude_key, tail-bound mapping); ties keep library order."""
+    scored = []
     for t in lib:
         if exclude_key is not None and t.key == exclude_key:
             continue
@@ -335,9 +344,96 @@ def choose(labels: np.ndarray, lib, exclude_key: str | None = None, weights=None
         f = features(labels, t.grid, weights, mapping)
         if gate is not None and abs(f["lobes_photo"] - f["lobes_template"]) > gate + 1e-6:
             continue
-        if best is None or f["score"] > best[1]["score"]:
-            best = (t, f)
-    return best
+        scored.append((t, f))
+    scored.sort(key=lambda tf: -tf[1]["score"])  # stable: ties keep library order
+    return scored[:n]
+
+
+# ---------------------------------------------------------------- description
+
+# Words of describe(), in the order they are listed, with their singular forms.
+_WORDS = (("loops", "loop"), ("points", "point"), ("kites", "kite"), ("strips", "strip"), ("trims", "trim"))
+# A piece away from the center: an outline STRIP_ASPECT times longer than wide is a strip,
+# one filling under TRIM_SOLIDITY of its convex hull a trim (a hollow edge piece); a piece
+# as wide at its outer end (the outer OUTER_END of its radial reach) as LOOP_END of its
+# full angular width is a loop, a tapered one with at most four corners a kite, else a point.
+STRIP_ASPECT, TRIM_SOLIDITY, OUTER_END, LOOP_END = 4.0, 0.6, 0.15, 0.5
+# A piece around the center reaching past DISC_REACH head radii is a disc, else a center;
+# with STAR_MIN_LOBES or more lobes deeper than STAR_DEPTH (outer / inner radius) a star.
+# (Three or fewer runs come from the notch the tails cut into the lower head.)
+DISC_REACH, STAR_MIN_LOBES, STAR_DEPTH = 0.65, 4, 1.3
+
+
+def _center_lobes(outer: np.ndarray, bins: int = 180) -> tuple[int, float]:
+    """(lobe count, max / min radius) of an outline around the head center: runs of the
+    angular radius profile above the middle radius."""
+    nxt = np.roll(outer, -1, axis=0)
+    t = np.linspace(0, 1, 8, endpoint=False)[None, :, None]
+    dense = (outer[:, None, :] * (1 - t) + nxt[:, None, :] * t).reshape(-1, 2)
+    b = np.minimum(((np.arctan2(dense[:, 1], dense[:, 0]) + np.pi) / (2 * np.pi) * bins).astype(int), bins - 1)
+    prof = np.full(bins, -np.inf)
+    np.maximum.at(prof, b, np.hypot(dense[:, 0], dense[:, 1]))
+    ok = np.isfinite(prof)
+    if ok.sum() < 3:
+        return 0, 1.0
+    idx = np.arange(bins)
+    prof = np.interp(idx, idx[ok], prof[ok], period=bins)
+    lo, hi = float(prof.min()), float(prof.max())
+    above = prof > (lo + hi) / 2
+    runs = 0 if above.all() else int(np.sum(above & ~np.roll(above, 1)))
+    return runs, hi / max(lo, 1e-9)
+
+
+def _piece_word(p: Piece) -> str | None:
+    outer = p.rings[0].astype(np.float32)
+    area = abs(cv2.contourArea(outer))
+    if area < 1e-4:
+        return None
+    rad = np.hypot(outer[:, 0], outer[:, 1])
+    if cv2.pointPolygonTest(outer.reshape(-1, 1, 2), (0.0, 0.0), False) >= 0:
+        lobes, depth = _center_lobes(p.rings[0])
+        if lobes >= STAR_MIN_LOBES and depth >= STAR_DEPTH:
+            return f"{lobes}-point star"
+        if len(p.rings) > 1:
+            return "ring"
+        return "center" if rad.max() <= DISC_REACH else "disc"
+    w, h = cv2.minAreaRect(outer)[1]
+    if max(w, h) >= STRIP_ASPECT * max(min(w, h), 1e-9):
+        return "strips"
+    if area / max(cv2.contourArea(cv2.convexHull(outer)), 1e-9) < TRIM_SOLIDITY:
+        return "trims"
+    ang = np.arctan2(outer[:, 1], outer[:, 0])
+    off = np.angle(np.exp(1j * (ang - np.angle(np.exp(1j * ang).mean()))))
+    lo, hi = rad.min(), rad.max()
+    end = rad >= hi - OUTER_END * (hi - lo)
+    if np.ptp(off[end]) >= LOOP_END * np.ptp(off):
+        return "loops"
+    corners = len(cv2.approxPolyDP(outer, 0.04 * max(w, h), True))
+    return "kites" if corners <= 4 else "points"
+
+
+def describe(t: Template) -> str:
+    """A one-line description of a template's head pieces for the head card, for example
+    "6 loops, 6 kites, ring, center" (a piece repeated with the same outline counts once)."""
+    seen: set = set()
+    counts: dict[str, int] = {}
+    for p in t.pieces:
+        key = (p.category, p.rings[0].round(3).tobytes())
+        if key in seen:
+            continue
+        seen.add(key)
+        w = _piece_word(p)
+        if w:
+            counts[w] = counts.get(w, 0) + 1
+    out = []
+    for plural, single in _WORDS:
+        if counts.get(plural):
+            out.append(f"{counts[plural]} {single if counts[plural] == 1 else plural}")
+    for w in sorted(k for k in counts if k.endswith("star")) + ["disc", "ring", "center"]:
+        n = counts.get(w, 0)
+        if n:
+            out.append(w if n == 1 else f"{n} {w}s")
+    return ", ".join(out)
 
 
 def photo_grid(mask: np.ndarray, labels: np.ndarray, head: tuple[float, float, float],

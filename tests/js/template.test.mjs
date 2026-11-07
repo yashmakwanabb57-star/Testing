@@ -2,7 +2,7 @@
 // Run: node --test tests/js/template.test.mjs (tests/test_js.py runs it when node is on PATH)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { colorQuestions, flagItems, headChoice, partGroups, switchHead, templateText, usesGroup } from '../../app/static/logic.js';
+import { colorQuestions, flagItems, headCandidates, headChoice, partGroups, switchHead, templateText, usesGroup } from '../../app/static/logic.js';
 
 function model(score = 0.8) {
   return {
@@ -64,4 +64,48 @@ test('switchHead moves the hidden head colors out of the colors list and back', 
 test('a weak template match is flagged, a good one is not', () => {
   assert.ok(flagItems(model(0.45), [], false).some((f) => f.key === 'part:template' && /weak match/.test(f.text)));
   assert.ok(!flagItems(model(0.8), [], false).some((f) => f.key === 'part:template'));
+});
+
+// The head card's picker (fix round 4): the rule-based head and the library candidates.
+function pickerModel() {
+  const m = model(0.8);
+  m.parts[1].params = { ...m.parts[1].params, rank: 1, points: 6, description: '6 loops, 6 kites, ring, center' };
+  m.alternatives.push({ id: 'template_3', role: 'template', params: { template_id: 'S57-17', cx: 300, cy: 150, r: 120, rotation_deg: 0, score: 0.55, rank: 3, group_1: 0 }, color_group: 0, z: 10, confidence: 0.55 });
+  m.alternatives.push({ id: 'template_2', role: 'template', params: { template_id: 'S30-15', cx: 300, cy: 150, r: 120, rotation_deg: 0, score: 0.7, rank: 2, group_1: 1, group_2: 2 }, color_group: 1, z: 10, confidence: 0.7 });
+  m.alternative_groups = [{ id: 2, rgb: [1, 2, 3], pattern: false, texture: 1, area: 0.1, category: 2, confidence: 0.9 }];
+  return m;
+}
+
+test('headCandidates lists the rule-based head and the library candidates by rank', () => {
+  const c = headCandidates(pickerModel());
+  assert.deepEqual(c.map((x) => x.choice), ['rules', 'S29-15', 'S30-15', 'S57-17']);
+  assert.deepEqual(c.map((x) => x.drawn), [false, true, false, false]);
+  assert.equal(c[1].text, 'Library template S29-15 - match 80%, 6 points - 6 loops, 6 kites, ring, center');
+  assert.equal(c[2].text, 'Library template S30-15 - match 70%');
+  assert.equal(c[0].text, 'Rule-based head (the detected parts)');
+  assert.ok(c.every((x) => !/[–—]/.test(x.text)));
+  assert.deepEqual(headCandidates({ ...model(), parts: model().parts.slice(0, 1), alternatives: [] }), []);
+});
+
+test('switchHead draws the picked candidate, the others wait, colors follow', () => {
+  const m = pickerModel();
+  switchHead(m, 'S30-15');
+  assert.deepEqual(m.parts.map((p) => p.id), ['t0', 'template_2']);
+  assert.deepEqual(m.alternatives.map((p) => p.id).sort(), ['head', 'template', 'template_3']);
+  assert.deepEqual(m.groups.map((g) => g.id), [0, 1, 2]);
+  assert.equal(headChoice(m), 'template');
+  assert.equal(headCandidates(m).find((x) => x.drawn).choice, 'S30-15');
+  switchHead(m, 'rules');
+  assert.deepEqual(m.parts.map((p) => p.id), ['t0', 'head']);
+  assert.deepEqual(m.alternative_groups.map((g) => g.id), [1, 2]);
+  // the toggle without a choice goes back to the best match (rank 1)
+  switchHead(m);
+  assert.deepEqual(m.parts.map((p) => p.id), ['t0', 'template']);
+  assert.throws(() => switchHead(m, 'S99-15'));
+});
+
+test('a picked weak candidate is flagged like any library head', () => {
+  const m = pickerModel();
+  switchHead(m, 'S57-17');
+  assert.ok(flagItems(m, [], false).some((f) => f.key === 'part:template_3' && /weak match/.test(f.text)));
 });

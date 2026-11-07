@@ -80,7 +80,8 @@ class RosetteModel:
     rose: bool = False
     warnings: list[str] = field(default_factory=list)
     # Parts kept in the model but not drawn: with a library head (role "template", H7)
-    # the detected head parts wait here so the user can switch back to them.
+    # the detected head parts wait here so the user can switch back to them, and so do the
+    # other library candidates of the head card (pipeline.use_head).
     alternatives: list[Part] = field(default_factory=list)
     # Color groups only the parts in alternatives use (not shown while they are hidden).
     alternative_groups: list[ColorGroup] = field(default_factory=list)

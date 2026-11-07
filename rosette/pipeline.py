@@ -38,7 +38,7 @@ from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_group
 from .vision.parts import detect_parts
 from .vision.parts_common import Frame
 from .vision.prepare import Prepared, prepare
-from .vision.templates import choose, load_library, photo_grid, relabel_map
+from .vision.templates import describe, load_library, photo_grid, rank, relabel_map
 from .writer import write_svg
 
 # Head fit gross-failure bars, from the 76 reference photos (docs/pipeline.md). Layer
@@ -81,6 +81,11 @@ TEMPLATE_DIFFERS_IOU = 0.8
 TEMPLATE_DIFFERS_WARNING = ("The library head and the rule-based head differ a lot (outline overlap {iou:.0%}) - "
                             "compare the head with the photo and use the head toggle if the other one is closer.")
 TEMPLATE_PART_ID = "template"
+# Library heads offered on the head card (fix round 4): the matcher's TEMPLATE_CANDIDATES best
+# templates; the first is the decision rule's, the others wait in alternatives (ids
+# template_2, template_3) with the rule-based head. Own design among the top 3: 58 of 76.
+TEMPLATE_CANDIDATES = 3
+RULES_HEAD = "rules"
 # Template colors follow the tails (H7 fix round 2): a reference category that is also one
 # of the reference's tail Colors k is drawn in the group our tails carry as Color k, the
 # head-only categories follow the overlap (templates.tail_consistent_mapping); the matcher
@@ -267,32 +272,45 @@ def with_template(model: RosetteModel, mask: np.ndarray, labels: np.ndarray, hea
                   exclude_key: str | None = None, min_score: float | None = None) -> RosetteModel:
     """A copy of the model whose head is the best library template (one `template` part,
     the detected head parts kept in `alternatives`) when its score is at least min_score
-    (TEMPLATE_MIN_SCORE), else an unchanged copy. head: the photo's head circle (px);
-    exclude_key skips a design (leave-one-out evaluation only)."""
+    (TEMPLATE_MIN_SCORE), else an unchanged copy. The next best templates (up to
+    TEMPLATE_CANDIDATES in all, also at least min_score) wait in `alternatives` too, for
+    the head card. head: the photo's head circle (px); exclude_key skips a design
+    (leave-one-out evaluation only)."""
     out = copy.deepcopy(model)
     lib = load_library() if lib is None else lib
     have = {g.id for g in out.groups}
     if not lib or not have:
         return out
     grid = photo_grid(mask, labels, head, relabel_map(out, groups, merged))
-    best = choose(grid, lib, exclude_key, tail_groups=_tail_groups(out))
-    if best is None or best[1]["score"] < (TEMPLATE_MIN_SCORE if min_score is None else min_score):
+    floor = TEMPLATE_MIN_SCORE if min_score is None else min_score
+    ranked = [tf for tf in rank(grid, lib, exclude_key, tail_groups=_tail_groups(out), n=TEMPLATE_CANDIDATES)
+              if tf[1]["score"] >= floor]
+    circle = (round(frame.x(head[0]), 3), round(frame.y(head[1]), 3), round(frame.d(head[2]), 3))
+    cands = [q for q in (_template_part(t, f, have, circle) for t, f in ranked) if q is not None]
+    if not cands:
         return out
-    t, f = best
-    mapping = {c: g for c, g in f["mapping"].items() if g in have}
-    if not mapping:
-        return out
-    first = next(pc.category for pc in t.pieces if pc.category in mapping)
-    params: dict = {"template_id": t.sid, "cx": round(frame.x(head[0]), 3), "cy": round(frame.y(head[1]), 3),
-                    "r": round(frame.d(head[2]), 3), "rotation_deg": 0.0, "score": round(f["score"], 3),
-                    "partition": round(f["partition"], 3), "points": int(t.points)}
-    for c in t.categories:
-        params[f"group_{c}"] = int(mapping.get(c, mapping[first]))
-    part = Part(TEMPLATE_PART_ID, "template", params, int(mapping[first]), 10, template_confidence(f["score"]))
-    out.alternatives = [q for q in out.parts if q.role != "tail_stripe"]
-    out.parts = [q for q in out.parts if q.role == "tail_stripe"] + [part]
+    for i, q in enumerate(cands):
+        q.id = TEMPLATE_PART_ID if i == 0 else f"{TEMPLATE_PART_ID}_{i + 1}"
+        q.params["rank"] = i + 1
+    out.alternatives = [q for q in out.parts if q.role != "tail_stripe"] + cands[1:]
+    out.parts = [q for q in out.parts if q.role == "tail_stripe"] + cands[:1]
     _split_groups(out)
     return out
+
+
+def _template_part(t, f: dict, have: set[int], circle: tuple[float, float, float]) -> Part | None:
+    """The template part of a matched template on the photo head circle (canvas cx, cy, r),
+    or None when none of its categories maps onto a model group."""
+    mapping = {c: g for c, g in f["mapping"].items() if g in have}
+    if not mapping:
+        return None
+    first = next(pc.category for pc in t.pieces if pc.category in mapping)
+    params: dict = {"template_id": t.sid, "cx": circle[0], "cy": circle[1], "r": circle[2], "rotation_deg": 0.0,
+                    "score": round(f["score"], 3), "partition": round(f["partition"], 3), "points": int(t.points),
+                    "description": describe(t)}
+    for c in t.categories:
+        params[f"group_{c}"] = int(mapping.get(c, mapping[first]))
+    return Part(TEMPLATE_PART_ID, "template", params, int(mapping[first]), 10, template_confidence(f["score"]))
 
 
 def _tail_groups(model: RosetteModel) -> dict[int, int]:
@@ -318,16 +336,42 @@ def _split_groups(model: RosetteModel) -> None:
     model.alternative_groups = [g for g in pool if g.id not in used]
 
 
-def use_rules_head(model: RosetteModel) -> RosetteModel:
-    """The model with the detected head parts drawn instead of the template (and the
-    template kept in alternatives); the other way round when it already draws them.
-    Color groups follow the parts that use them."""
+def _head_pool(model: RosetteModel) -> tuple[list[Part], list[Part]]:
+    """(detected head parts, library candidates by rank) over drawn parts and alternatives."""
+    pool = [q for q in model.parts if q.role != "tail_stripe"] + list(model.alternatives)
+    cands = sorted((q for q in pool if q.role == "template"), key=lambda q: int(q.params.get("rank", 1)))
+    return [q for q in pool if q.role != "template"], cands
+
+
+def use_head(model: RosetteModel, choice: str) -> RosetteModel:
+    """The model drawing the head the user picked on the head card: RULES_HEAD (the
+    detected head parts) or the template_id of one of the library candidates; every other
+    head waits in alternatives. Color groups follow the parts that use them. Raises
+    ValueError for a choice the model does not hold."""
     out = copy.deepcopy(model)
-    tails = [q for q in out.parts if q.role == "tail_stripe"]
-    drawn = [q for q in out.parts if q.role != "tail_stripe"]
-    out.parts, out.alternatives = tails + out.alternatives, drawn
+    rules, cands = _head_pool(out)
+    if choice == RULES_HEAD:
+        drawn = rules
+    else:
+        drawn = [q for q in cands if q.params.get("template_id") == choice][:1]
+        if not drawn:
+            raise ValueError(f"no head {choice!r} in the model")
+    keep = {id(q) for q in drawn}
+    out.parts = [q for q in out.parts if q.role == "tail_stripe"] + drawn
+    out.alternatives = [q for q in rules + cands if id(q) not in keep]
     _split_groups(out)
     return out
+
+
+def use_rules_head(model: RosetteModel) -> RosetteModel:
+    """The toggle: the detected head parts when the model draws a library head, else the
+    first-ranked library head (the decision rule's choice)."""
+    if any(q.role == "template" for q in model.parts):
+        return use_head(model, RULES_HEAD)
+    _, cands = _head_pool(model)
+    if not cands:
+        return copy.deepcopy(model)
+    return use_head(model, str(cands[0].params["template_id"]))
 
 
 def analyze(data: bytes) -> RosetteModel:

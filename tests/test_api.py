@@ -149,3 +149,38 @@ def test_analyze_sends_head_fit_as_information():
     fit = body["head_fit"]
     assert set(fit) == {"agreement", "silhouette"}
     assert 0 < fit["agreement"] <= fit["silhouette"] <= 1
+
+
+def _picker_model() -> dict:
+    """Tails, the drawn library head A1-15 and, waiting on the head card, the rule-based
+    head and the second candidate A6-15 (both in the real library)."""
+    from rosette.model import ColorGroup, Part, RosetteModel
+    tail = Part("t0", "tail_stripe", {"tail_index": 0, "stripe_index": 0, "tails_count": 1, "top_y": 250,
+                                      "bottom_y": 800, "top_width": 80, "bottom_width": 120, "spread_deg": 0,
+                                      "stripes": "1"}, 1, 0, 1.0)
+
+    def tmpl(pid, tid, rank):
+        return Part(pid, "template", {"template_id": tid, "cx": 300, "cy": 200, "r": 150, "rotation_deg": 0,
+                                      "score": 0.7, "rank": rank, "group_1": 1, "group_2": 2, "group_3": 2}, 1, 10, 0.7)
+
+    groups = [ColorGroup(1, (200, 30, 30), False, 0.1, 0.5, 1, 0.9), ColorGroup(2, (30, 30, 200), False, 0.1, 0.3, 2, 0.9)]
+    head = Part("head", "head", {"cx": 300, "cy": 200, "r": 150, "pinked": 1}, 2, 10, 0.4)
+    return RosetteModel([tail, tmpl("template", "A1-15", 1)], groups,
+                        alternatives=[head, tmpl("template_2", "A6-15", 2)]).to_json()
+
+
+def test_render_draws_the_head_picked_on_the_head_card():
+    model = _picker_model()
+    plain = client.post("/api/render", json={"model": model}).json()
+    assert "model" not in plain
+    r = client.post("/api/render", json={"model": model, "head": "A6-15"})
+    assert r.status_code == 200
+    body = r.json()
+    drawn = [p for p in body["model"]["parts"] if p["role"] != "tail_stripe"]
+    assert [p["params"]["template_id"] for p in drawn] == ["A6-15"]
+    assert sorted(p["id"] for p in body["model"]["alternatives"]) == ["head", "template"]
+    assert body["issues"] == [] and body["svg"] != plain["svg"]
+    rules = client.post("/api/render", json={"model": body["model"], "head": "rules"}).json()
+    assert [p["id"] for p in rules["model"]["parts"]] == ["t0", "head"]
+    assert rules["issues"] == []
+    assert client.post("/api/render", json={"model": model, "head": "S99-15"}).status_code == 422

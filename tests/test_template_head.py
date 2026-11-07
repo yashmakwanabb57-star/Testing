@@ -276,3 +276,49 @@ def test_library_head_path_floor_override_or_rules_with_the_warning():
     assert library_head_path(failed, HeadFit(0.5, 0.65), 0.40) == "colors"  # gain 0.05: rules + warning
     assert library_head_path(failed, HeadFit(0.5, 0.88), 0.23) == "colors"  # partition under 0.30
     assert library_head_path(None, HeadFit(0.5, 0.88), 0.9) == "floor"
+
+
+def _three_templates():
+    t = LIB["T1-15"]
+    near = Template("T7-15", "T7", [Piece(2, "points", [_star(6, 0.7, 0.95)]), *t.pieces[1:]])
+    far = Template("T8-15", "T8", [Piece(2, "points", [_star(6, 0.75, 0.85)]), *t.pieces[1:]])
+    return t, near, far
+
+
+def test_with_template_keeps_the_next_two_candidates_in_alternatives():
+    t, near, far = _three_templates()
+    mask, labels = _labels_like(t, mapping={1: 1, 2: 2, 3: 3})
+    fr = Frame(axis_x=200, top=100, scale=1.0)
+    out = with_template(_detected(), mask, labels, (200, 200, 100), fr, _groups(), lib=[far, near, t], min_score=0.5)
+    drawn = next(q for q in out.parts if q.role == "template")
+    assert drawn.id == "template" and drawn.params["template_id"] == "T1-15" and drawn.params["rank"] == 1
+    cands = [q for q in out.alternatives if q.role == "template"]
+    assert [q.params["template_id"] for q in cands] == ["T7-15", "T8-15"]
+    assert [q.params["rank"] for q in cands] == [2, 3] and [q.id for q in cands] == ["template_2", "template_3"]
+    assert all(q.params["description"] for q in [drawn, *cands])
+    assert drawn.params["score"] >= cands[0].params["score"] >= cands[1].params["score"]
+    assert [p.id for p in out.alternatives if p.role != "template"] == ["head", "u"]
+    assert RosetteModel.from_json(out.to_json()).alternatives == out.alternatives
+
+
+def test_use_head_draws_the_picked_candidate_or_the_rules_head(monkeypatch):
+    from rosette.pipeline import use_head
+    t, near, far = _three_templates()
+    for x in (near, far):
+        monkeypatch.setitem(LIB, x.sid, x)
+    mask, labels = _labels_like(t, mapping={1: 1, 2: 2, 3: 3})
+    fr = Frame(axis_x=200, top=100, scale=1.0)
+    out = with_template(_detected(), mask, labels, (200, 200, 100), fr, _groups(), lib=[far, near, t], min_score=0.5)
+    picked = use_head(out, "T8-15")
+    assert [q.params.get("template_id") for q in picked.parts if q.role != "tail_stripe"] == ["T8-15"]
+    assert sorted(q.params["template_id"] for q in picked.alternatives if q.role == "template") == ["T1-15", "T7-15"]
+    assert render(picked).issues == []
+    rules = use_head(picked, "rules")
+    assert [q.id for q in rules.parts] == ["t0", "head", "u"]
+    assert len([q for q in rules.alternatives if q.role == "template"]) == 3
+    # the toggle goes back to the decision rule's choice (rank 1)
+    back = use_rules_head(rules)
+    assert next(q for q in back.parts if q.role == "template").params["template_id"] == "T1-15"
+    assert use_rules_head(back).parts == rules.parts
+    with pytest.raises(ValueError):
+        use_head(out, "nope")

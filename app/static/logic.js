@@ -72,13 +72,55 @@ export function headChoice(model) {
   return model.parts.some((p) => p.role === 'template') ? 'template' : 'rules';
 }
 
-// Swap the drawn head parts with the ones kept in alternatives (rosette/pipeline.py
-// use_rules_head): tails stay in place. Mutates the model; returns it.
-export function switchHead(model) {
+// The heads the model holds: the detected head parts and the library candidates by rank
+// (rosette/pipeline.py _head_pool).
+function headPool(model) {
+  const pool = [...model.parts.filter((p) => p.role !== 'tail_stripe'), ...(model.alternatives || [])];
+  const rank = (p) => Number(p.params.rank ?? 1);
+  const cands = pool.filter((p) => p.role === 'template').sort((a, b) => rank(a) - rank(b));
+  return { rules: pool.filter((p) => p.role !== 'template'), cands };
+}
+
+// Head card picker line of one library candidate.
+export function candidateText(p) {
+  const score = Number(p.params.score);
+  const pct = Number.isFinite(score) ? `${Math.round(score * 100)}%` : '-';
+  const pts = Number(p.params.points) > 0 ? `, ${p.params.points} points` : '';
+  const desc = p.params.description ? ` - ${p.params.description}` : '';
+  return `Library template ${p.params.template_id} - match ${pct}${pts}${desc}`;
+}
+
+// The head card's choices: the rule-based head, then the library candidates by rank;
+// empty when the model holds no library head. choice is what switchHead takes.
+export function headCandidates(model) {
+  if (!model) return [];
+  const { cands } = headPool(model);
+  if (!cands.length) return [];
+  const drawn = new Set(model.parts);
+  return [
+    { choice: 'rules', text: 'Rule-based head (the detected parts)', drawn: headChoice(model) === 'rules' },
+    ...cands.map((p) => ({ choice: String(p.params.template_id), text: candidateText(p), drawn: drawn.has(p) })),
+  ];
+}
+
+// Draw the picked head (rosette/pipeline.py use_head): 'rules' or a candidate's
+// template_id; without a choice, the toggle (the rule-based head when a library head is
+// drawn, else the first-ranked candidate). Tails stay in place; every other head waits
+// in alternatives. Mutates the model; returns it.
+export function switchHead(model, choice) {
+  const { rules, cands } = headPool(model);
+  if (choice === undefined) {
+    choice = model.parts.some((p) => p.role === 'template') || !cands.length
+      ? 'rules' : String(cands[0].params.template_id);
+  }
+  let drawn = rules;
+  if (choice !== 'rules') {
+    drawn = cands.filter((p) => String(p.params.template_id) === choice).slice(0, 1);
+    if (!drawn.length) throw new Error(`No head ${choice} in the model.`);
+  }
   const tails = model.parts.filter((p) => p.role === 'tail_stripe');
-  const drawn = model.parts.filter((p) => p.role !== 'tail_stripe');
-  model.parts = [...tails, ...(model.alternatives || [])];
-  model.alternatives = drawn;
+  model.parts = [...tails, ...drawn];
+  model.alternatives = [...rules, ...cands].filter((p) => !drawn.includes(p));
   // color groups follow the parts that use them (rosette/pipeline.py _split_groups)
   const pool = [...model.groups, ...(model.alternative_groups || [])].sort((a, b) => a.id - b.id);
   const used = new Set(model.parts.flatMap((p) => partGroups(p)));

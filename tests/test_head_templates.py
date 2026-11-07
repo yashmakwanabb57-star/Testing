@@ -4,9 +4,9 @@ import numpy as np
 import pytest
 
 from rosette.model import ColorGroup, RosetteModel
-from rosette.vision.templates import (GRID, Piece, Template, choose, design_key, extract_template, features,
-                                      from_json, partition, photo_grid, raster, relabel_map, tail_consistent_mapping,
-                                      to_json)
+from rosette.vision.templates import (GRID, Piece, Template, choose, describe, design_key, extract_template,
+                                      features, from_json, partition, photo_grid, rank, raster, relabel_map,
+                                      tail_consistent_mapping, to_json)
 
 
 def test_design_key_groups_variants_and_sizes():
@@ -136,3 +136,45 @@ def test_relabel_map_sends_merged_and_unused_labels_to_model_groups():
     labels = np.array([[0, 1], [3, 2]])
     grid = photo_grid(np.ones((2, 2), bool), labels, (0.5, 0.5, 0.01), relabel_map(model, groups, {3: 2}))
     assert set(np.unique(grid)) <= {-1, 0, 2}
+
+
+def test_rank_lists_the_best_templates_first_and_choose_is_its_head():
+    disc = _template("A1-15", [(1, "head", [_circle(1.0)]), (2, "center", [_circle(0.35)])])
+    star = _template("B2-15", [(1, "points", [_star(6, 0.55, 1.0)]), (2, "center", [_circle(0.35)])])
+    star5 = _template("C3-15", [(1, "points", [_star(6, 0.65, 0.9)]), (2, "center", [_circle(0.35)])])
+    photo = np.where(star.grid == 1, 4, np.where(star.grid == 2, 9, -1)).astype(np.int16)
+    ranked = rank(photo, [disc, star5, star], gate=None, n=3)
+    assert [t.sid for t, _ in ranked] == ["B2-15", "C3-15", "A1-15"]
+    assert [f["score"] for _, f in ranked] == sorted((f["score"] for _, f in ranked), reverse=True)
+    assert [t.sid for t, _ in rank(photo, [disc, star5, star], gate=None, n=2)] == ["B2-15", "C3-15"]
+    assert choose(photo, [disc, star5, star], gate=None)[0].sid == "B2-15"
+    assert rank(photo, [disc], n=3) == []  # the lobe gate leaves nothing
+
+
+def _kite(angle, r_in, r_out, half=0.12):
+    a = np.array([[r_in, 0], [(r_in + r_out) / 2, half], [r_out, 0], [(r_in + r_out) / 2, -half]])
+    c, s = np.cos(angle), np.sin(angle)
+    return a @ np.array([[c, s], [-s, c]])
+
+
+def _loop(angle, r_in, r_out, half=0.2):
+    # a block whose outer end is as wide as its inner end
+    t = np.linspace(-half, half, 9)
+    a = np.concatenate([[[r_in, -half]], np.stack([np.full(9, r_out), t], 1), [[r_in, half]]])
+    c, s = np.cos(angle), np.sin(angle)
+    return a @ np.array([[c, s], [-s, c]])
+
+
+def test_describe_counts_the_template_pieces_by_shape():
+    six = [i * np.pi / 3 for i in range(6)]
+    pieces = ([(2, "points", [_loop(a, 0.5, 0.95)]) for a in six]
+              + [(3, "points", [_kite(a + np.pi / 6, 0.5, 0.95)]) for a in six]
+              + [(1, "ring", [_circle(0.55), _circle(0.4)]), (3, "center", [_circle(0.3)])])
+    assert describe(_template("D1-15", pieces)) == "6 loops, 6 kites, ring, center"
+    star = _template("E1-15", [(1, "points", [_star(6, 0.55, 1.0)]), (2, "center", [_circle(0.35)])])
+    assert describe(star) == "6-point star, center"
+    disc = _template("F1-15", [(1, "head", [_circle(1.0)]), (2, "center", [_circle(0.35)]),
+                                (2, "center", [_circle(0.35)])])
+    assert describe(disc) == "disc, center"  # a repeated piece counts once
+    one = _template("G1-15", [(1, "points", [_kite(0.0, 0.5, 0.95)]), (2, "center", [_circle(0.3)])])
+    assert describe(one) == "1 kite, center"

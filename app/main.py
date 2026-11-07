@@ -14,7 +14,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 from rosette.model import RosetteModel
-from rosette.pipeline import analyze_with_fit, is_flagged, render
+from rosette.pipeline import analyze_with_fit, is_flagged, render, use_head
 from rosette.vision.prepare import UNREADABLE, InputError
 
 MAX_UPLOAD = 25 * 1024 * 1024
@@ -32,6 +32,9 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 class RenderRequest(BaseModel):
     model: Any
+    # The head picked on the head card: "rules" or a library candidate's template_id
+    # (rosette.pipeline.use_head); the response then carries the switched model.
+    head: str | None = None
 
 
 def download_name(upload_name: str) -> str:
@@ -93,9 +96,13 @@ def api_analyze(file: UploadFile) -> dict:
 def api_render(req: RenderRequest) -> dict:
     try:
         model = RosetteModel.from_json(req.model)
+        if req.head is not None:
+            model = use_head(model, req.head)
         result = render(model)
     except Exception:
         log.exception("render failed for submitted model")
         raise HTTPException(422, INVALID_MODEL) from None
-    return {"svg": result.svg, "issues": _issues(result.issues),
-            "flagged": is_flagged(model, result.issues)}
+    out = {"svg": result.svg, "issues": _issues(result.issues), "flagged": is_flagged(model, result.issues)}
+    if req.head is not None:
+        out["model"] = model.to_json()
+    return out

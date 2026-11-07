@@ -6,7 +6,7 @@ import { applyConfig, glitterPattern, COLOR_INDICES } from './simulator.js';
 import {
   MAX_COUNT, POINT_KINDS, errorText, hex, flagItems,
   downloadBlockers as blockersFor, groupColor, tailGroups, parseValue, tailCheckKey, sourceNotice,
-  convertBlocker, resetForFile, checklistItems, paramShown, headChoice, switchHead, templateText, usesGroup,
+  convertBlocker, resetForFile, checklistItems, paramShown, headCandidates, switchHead, templateText, usesGroup,
 } from './logic.js';
 
 export { errorText, flagItems, parseValue, tailGroups, hex };
@@ -280,10 +280,11 @@ export const actions = {
     return true;
   },
 
-  // Library head <-> rule-based head (the other one waits in model.alternatives).
-  switchHead() {
+  // Draw the head picked on the head card: 'rules' or a library candidate's template_id
+  // (the other heads wait in model.alternatives).
+  switchHead(choice) {
     const before = state.model.parts.filter((p) => p.role !== 'tail_stripe').map((p) => `part:${p.id}`);
-    switchHead(state.model);
+    switchHead(state.model, choice);
     actions.unconfirm(...before, 'check:head');
     views.parts();
     views.groups();
@@ -534,12 +535,21 @@ function partCard(p) {
       el('span', { class: 'conf muted', text: `${Math.round(p.confidence * 100)}%` })),
     ...colors,
     grid);
-  if (p.role === 'template') {
-    card.append(el('button', { type: 'button', class: 'btn small', text: 'Use the rule-based head instead',
-      onclick: () => actions.switchHead() }));
-  }
   card.append(el('p', { class: 'flag-text', text: 'Please confirm' }), confirmBox(key));
   return card;
+}
+
+// Head card picker: the rule-based head and the library candidates (best match first).
+function headPicker(choices) {
+  const name = 'head-pick';
+  const rows = choices.map((c) => el('label', { class: 'pick' },
+    el('input', { type: 'radio', name, value: c.choice, checked: c.drawn,
+      onchange: () => actions.switchHead(c.choice) }),
+    el('span', { text: c.text })));
+  return el('div', { class: 'card' },
+    el('div', { class: 'card-head' }, el('strong', { text: 'Head shape' }),
+      el('span', { class: 'muted', text: ' pick the head closest to the photo' })),
+    ...rows);
 }
 
 function tailCard(parts, n) {
@@ -712,13 +722,8 @@ export const views = {
     const cards = [];
     const tails = tailGroups(state.model);
     const tailFirst = new Map(tails.map((ps, n) => [ps[0], n]));
-    if (headChoice(state.model) === 'rules') {
-      const t = state.model.alternatives.find((p) => p.role === 'template');
-      cards.push(el('div', { class: 'card' },
-        el('p', { class: 'muted', text: `${templateText(t)} (not used: the rule-based head is drawn).` }),
-        el('button', { type: 'button', class: 'btn small', text: 'Use the library head instead',
-          onclick: () => actions.switchHead() })));
-    }
+    const choices = headCandidates(state.model);
+    if (choices.length) cards.push(headPicker(choices));
     for (const p of state.model.parts) {
       if (p.role !== 'tail_stripe') cards.push(partCard(p));
       else if (tailFirst.has(p)) cards.push(tailCard(tails[tailFirst.get(p)], tailFirst.get(p)));
