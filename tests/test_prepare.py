@@ -138,3 +138,143 @@ def test_canvas_to_px(s46):
     x, y = canvas_to_px(s46, 400, 425)
     assert x == pytest.approx(s46.axis_x + 100 * s46.scale)
     assert y == pytest.approx(top + 400 * s46.scale)
+
+
+# ---------------------------------------------------------------- H10: head circle fit
+
+def _synthetic(head: str, *, cy: float = 230.0, r: float = 180.0, tails_top: float = 330.0,
+               tails_half_top: float = 110.0, tails_half_bottom: float = 170.0,
+               k: int = 12, inner: float = 0.55, loop_to: float = 0.0) -> np.ndarray:
+    """RGB 600x1200: straight tails (a trapezoid from tails_top to the bottom) under a
+    head centered on x=300: 'disc', 'star' (k tips at r, valleys at inner * r) or
+    'loop' (a disc with one narrow loop reaching loop_to * r at -60 degrees)."""
+    import cv2
+    img = np.full((1200, 600, 3), 255, np.uint8)
+    tails = np.array([[300 - tails_half_top, tails_top], [300 + tails_half_top, tails_top],
+                      [300 + tails_half_bottom, 1150], [300 - tails_half_bottom, 1150]], np.int32)
+    cv2.fillPoly(img, [tails], (40, 60, 170))
+    if head == "star":
+        a = np.radians(-90 + np.arange(2 * k) * 180.0 / k)
+        rad = np.where(np.arange(2 * k) % 2 == 0, r, inner * r)
+        pts = np.stack([300 + rad * np.cos(a), cy + rad * np.sin(a)], 1)
+        cv2.fillPoly(img, [np.rint(pts).astype(np.int32)], (200, 40, 50))
+        cv2.circle(img, (300, int(cy)), int(0.3 * r), (240, 200, 40), -1)
+    else:
+        cv2.circle(img, (300, int(cy)), int(r), (200, 40, 50), -1)
+        cv2.circle(img, (300, int(cy)), int(0.3 * r), (240, 200, 40), -1)
+        if head == "loop":
+            t = np.radians(-60)
+            mid = (300 + 0.5 * (1 + loop_to) * r * np.cos(t), cy + 0.5 * (1 + loop_to) * r * np.sin(t))
+            cv2.ellipse(img, (int(mid[0]), int(mid[1])), (int(0.5 * (loop_to - 0.6) * r), int(0.12 * r)),
+                        -60, 0, 360, (200, 40, 50), -1)
+    return img
+
+
+def _prep(img: np.ndarray):
+    return prepare(_png(Image.fromarray(img)))
+
+
+def _mask_bounds(p):
+    rows = np.flatnonzero(p.mask.any(axis=1))
+    return int(rows[0]), int(rows[-1])
+
+
+def test_tails_start_on_disc_over_straight_tails():
+    from rosette.vision.prepare import _tails_start
+    p = _prep(_synthetic("disc"))
+    top, bottom = _mask_bounds(p)
+    t = _tails_start(p.mask, top, bottom)
+    # the tails' side edges leave the head outline where the circle crosses x = 300 +- tails half-width
+    want = 230 + np.sqrt(180 ** 2 - 110 ** 2)
+    assert t == pytest.approx(want, abs=12)
+
+
+def test_tails_start_is_under_star_arms_that_stick_out_over_the_tails():
+    from rosette.vision.prepare import _tails_start
+    p = _prep(_synthetic("star", tails_half_top=60))
+    top, bottom = _mask_bounds(p)
+    t = _tails_start(p.mask, top, bottom)
+    # the lowest arms beside the tails (tips at 165 and 195 degrees from the top) end near
+    # cy + r cos(30); the tails start below them, not in the arms
+    assert t >= 230 + 180 * np.cos(np.radians(30)) - 12
+
+
+def test_fit_disc_head_over_straight_tails():
+    from rosette.vision.prepare import _fit_head, _tails_start
+    p = _prep(_synthetic("disc"))
+    top, bottom = _mask_bounds(p)
+    cy, r, _ = _fit_head(p.mask, p.axis_x, top, _tails_start(p.mask, top, bottom))
+    assert cy == pytest.approx(230, abs=4) and r == pytest.approx(180, abs=4)
+
+
+def test_fit_star_with_deep_concavities_is_the_circle_around_the_star():
+    from rosette.vision.prepare import _fit_head, _tails_start
+    for k in (6, 12):
+        p = _prep(_synthetic("star", k=k, inner=0.5, tails_half_top=60))
+        top, bottom = _mask_bounds(p)
+        cy, r, _ = _fit_head(p.mask, p.axis_x, top, _tails_start(p.mask, top, bottom))
+        assert cy == pytest.approx(230, abs=6), k
+        assert r == pytest.approx(180, abs=6), k
+
+
+def test_fit_radius_is_not_inflated_by_one_long_loop():
+    from rosette.vision.prepare import _fit_head, _tails_start
+    p = _prep(_synthetic("loop", r=170, loop_to=1.5))
+    top, bottom = _mask_bounds(p)
+    cy, r, _ = _fit_head(p.mask, p.axis_x, top, _tails_start(p.mask, top, bottom))
+    assert r == pytest.approx(170, abs=5)
+    assert cy == pytest.approx(230, abs=5)
+
+
+def test_prepare_takes_the_fit_on_a_star_whose_arms_pass_for_tails():
+    # a deep 12-point star with long arms over narrow tails: the head circle is the
+    # circle around the star (center on the badge), and the tails start under it
+    p = _prep(_synthetic("star", k=12, inner=0.45, tails_half_top=50, tails_half_bottom=120))
+    cx, cy, r = p.head
+    assert cx == pytest.approx(300, abs=3)
+    assert cy == pytest.approx(230, abs=10) and r == pytest.approx(180, abs=10)
+    assert p.tails_top_y >= cy + r
+
+
+def test_prepare_keeps_the_symmetry_circle_when_the_fit_agrees():
+    from rosette.vision.prepare import _head
+    p = _prep(_synthetic("disc"))
+    top, bottom = _mask_bounds(p)
+    assert p.head == pytest.approx(_head(p.mask, p.axis_x, top, bottom))
+
+
+def test_prepare_takes_the_fit_when_the_symmetry_circle_is_far_too_small(monkeypatch):
+    # the symmetry score locked onto an inner structure (S29-15: the star's lower arms
+    # taken for the tails top): a circle well inside the head is replaced by the fit
+    import rosette.vision.prepare as prep
+    img = _synthetic("star", k=12, inner=0.5, tails_half_top=60)
+    real = prep._head
+    monkeypatch.setattr(prep, "_head", lambda m, ax, top, bottom: (ax, top + 120.0, 120.0))
+    p = _prep(img)
+    cx, cy, r = p.head
+    assert cy == pytest.approx(230, abs=6) and r == pytest.approx(180, abs=6)
+    assert p.tails_top_y == pytest.approx(np.floor(cy + r) + 1)
+    # a symmetry circle the fit agrees with (radius within FIT_TAKEOVER) is kept
+    monkeypatch.setattr(prep, "_head", lambda m, ax, top, bottom: (ax, top + 160.0, 160.0))
+    assert _prep(img).head == pytest.approx((p.axis_x, _mask_bounds(p)[0] + 160.0, 160.0))
+    monkeypatch.setattr(prep, "_head", real)
+
+
+def test_prepare_does_not_take_a_fit_with_little_coverage(monkeypatch):
+    # a vote that collects little of the outline (sparse tips, a cut through a star's
+    # arms) is not trusted over the symmetry circle, however large its radius
+    import rosette.vision.prepare as prep
+    img = _synthetic("disc")
+    monkeypatch.setattr(prep, "_head", lambda m, ax, top, bottom: (ax, top + 120.0, 120.0))
+    monkeypatch.setattr(prep, "_fit_head", lambda m, ax, top, tails: (300.0, 260.0, prep.FIT_MIN_COVERAGE - 0.01))
+    p = _prep(img)
+    assert p.head[2] == pytest.approx(120.0)
+    monkeypatch.setattr(prep, "_fit_head", lambda m, ax, top, tails: (300.0, 260.0, prep.FIT_MIN_COVERAGE))
+    assert _prep(img).head[2] == pytest.approx(260.0)
+
+
+def test_fit_coverage_of_a_disc_cut_by_the_tails():
+    from rosette.vision.prepare import _fit_head, _tails_start
+    p = _prep(_synthetic("disc"))
+    top, bottom = _mask_bounds(p)
+    assert _fit_head(p.mask, p.axis_x, top, _tails_start(p.mask, top, bottom))[2] > 0.6

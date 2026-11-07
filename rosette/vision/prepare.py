@@ -52,6 +52,35 @@ HEAD_PROFILE_FRAC = 0.4
 HEAD_R_MIN_RATIO, HEAD_R_MAX_RATIO = 0.75, 1.3
 # Symmetry is scored in a ring from (1 - m) to (1 + m) head radii, straddling the outline.
 HEAD_RING_MARGIN = 0.15
+# Tails start (H10): the tails' outer side edges are followed upward from this share of the
+# mask height (below every head of the 76 photos, whose tails start at 0.27-0.44).
+TAILS_TRACK_FROM = 0.7
+# Each row's edges are predicted by lines fitted to TAILS_FIT_ROWS rows starting
+# TAILS_GAP_ROWS below it. On the 76 photos' tails (rows 0.55-0.85 of the height) such a
+# prediction misses by at most 2.2 px (median 1.0) and the edges slope at most 0.27 px/row.
+TAILS_FIT_ROWS, TAILS_GAP_ROWS = 60, 40
+# An edge off its prediction by more than this many px, on TAILS_RUN_ROWS consecutive rows,
+# is no longer a tail edge (about 3x the worst tail miss).
+TAILS_EDGE_TOL, TAILS_RUN_ROWS = 6.0, 3
+# Head fit: hull vertices this share of the head height above the tails start are dropped
+# (the cut through the tails is not head outline).
+FIT_CUT_MARGIN = 0.03
+# A hull vertex weighs half the angle to its neighbours, each gap capped at this many
+# degrees (a gap is a long hull chord: a loop or the tails, not outline).
+FIT_GAP_CAP_DEG = 15.0
+# A vertex supports a circle when its distance is within this share of the radius.
+FIT_TOL = 0.04
+# The fit's coverage counts the angle between consecutive on-circle vertices up to this
+# many degrees (the tips of a 6-point star are 60 apart).
+FIT_COVER_GAP_DEG = 60.0
+# The fitted circle replaces the symmetry circle when its radius is at least this
+# multiple of the symmetry radius: the symmetry score has locked onto an inner structure
+# (S29-15's star arms: 1.38). Heads whose two radii agree keep the symmetry circle.
+FIT_TAKEOVER = 1.25
+# ... and only when its coverage (`_coverage`) is at least this share of a full turn
+# (the takeovers on the 76 photos and reference renders: 0.67-0.94; broken fits through
+# a 6-point star's arms, s34-15 photo and S80-22 reference: 0.31 and 0.29).
+FIT_MIN_COVERAGE = 0.5
 
 NO_ROSETTE = "No rosette found in the image."
 UNREADABLE = "Could not read the image file."
@@ -201,6 +230,105 @@ def _head(mask: np.ndarray, ax: float, top: int, bottom: int) -> tuple[float, fl
     return ax, cy, cy - top
 
 
+def _tails_start(mask: np.ndarray, top: int, bottom: int) -> int | None:
+    """First row (scanning up from the bottom) of the tails: above it the silhouette's
+    outer side edges stop running on straight lines.
+
+    Tail edges are near-straight with slowly changing width; where the head starts,
+    one edge jumps out (head or star arms wider than the tails) or in (tails wider than
+    the head) within a few rows. Each row is tested against lines fitted to tail rows
+    TAILS_GAP_ROWS below it, so a gradual curve cannot drag the lines along.
+    None when no such row exists or the tails are too short to follow.
+    """
+    ys = np.arange(top, bottom + 1)
+    sub = mask[top:bottom + 1]
+    has = sub.any(axis=1)
+    left = np.where(has, sub.argmax(axis=1), np.nan)
+    right = np.where(has, sub.shape[1] - 1 - sub[:, ::-1].argmax(axis=1), np.nan)
+    i0 = int(TAILS_TRACK_FROM * (bottom - top))
+    if i0 + TAILS_GAP_ROWS + TAILS_FIT_ROWS > len(ys):
+        return None
+    run = 0
+    for i in range(i0 - 1, -1, -1):
+        w = slice(i + TAILS_GAP_ROWS, i + TAILS_GAP_ROWS + TAILS_FIT_ROWS)
+        yy = ys[w].astype(float)
+        if np.isnan(left[w]).any() or np.isnan(left[i]):
+            return None
+        a, b = np.polyfit(yy, left[w], 1)
+        c, d = np.polyfit(yy, right[w], 1)
+        off = (abs(left[i] - (a * ys[i] + b)) > TAILS_EDGE_TOL
+               or abs(right[i] - (c * ys[i] + d)) > TAILS_EDGE_TOL)
+        run = run + 1 if off else 0
+        if run >= TAILS_RUN_ROWS:
+            return int(ys[i + TAILS_RUN_ROWS - 1]) + 1
+    return None
+
+
+def _fit_head(mask: np.ndarray, ax: float, top: int, tails: int) -> tuple[float, float, float]:
+    """(cy, r, coverage) of the circle (center on the axis) fitted to the head's outer
+    boundary: the convex hull of the silhouette above the tails start.
+
+    The hull bridges a star's concavities, so its vertices are the tips (the circle
+    around the star). Each vertex votes with the angle it spans around the candidate
+    center; a long loop is one vertex with capped gaps, an outlier the vote ignores. For
+    each center row the best radius is the one whose FIT_TOL band collects the most
+    angle. The third value is the fit's coverage (`_coverage`).
+    """
+    cnts, _ = cv2.findContours(mask[:tails].astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    hull = cv2.convexHull(np.vstack([c[:, 0, :] for c in cnts]))[:, 0, :].astype(float)
+    keep = hull[:, 1] < tails - FIT_CUT_MARGIN * (tails - top)
+    x, y = hull[keep, 0] - ax, hull[keep, 1]
+    if len(x) < 3:
+        return float(tails), 0.0, 0.0
+    cap = np.radians(FIT_GAP_CAP_DEG)
+
+    def weights(cy: float) -> np.ndarray:
+        th = np.arctan2(y - cy, x)
+        o = np.argsort(th)
+        gaps = np.minimum(np.diff(np.concatenate([th[o], th[o][:1] + 2 * np.pi])), cap)
+        wt = np.empty_like(th)
+        wt[o] = 0.5 * (gaps + np.roll(gaps, 1))
+        return wt
+
+    def vote(cy: float) -> tuple[float, float]:
+        d = np.hypot(x, y - cy)
+        rs = np.arange(max(1.0, d.min()), d.max() + 1.0, 1.0)
+        inside = np.abs(d[None, :] - rs[:, None]) <= FIT_TOL * rs[:, None]
+        score = inside.astype(float) @ weights(cy)
+        j = int(np.argmax(score))
+        return float(score[j]) / (2 * np.pi), float(rs[j])
+
+    lo = top + 0.2 * (tails - top)
+    (_, r), cy = max(((vote(c), c) for c in np.arange(lo, tails, 2.0)), key=lambda t: t[0][0])
+    # the vote's band leaves the center a few px loose: least squares on its inliers
+    # (x^2 + y^2 = 2 cy y + (r^2 - cy^2), weighted by angle), inliers re-chosen each pass
+    for _ in range(3):
+        wt = weights(cy)
+        inl = np.abs(np.hypot(x, y - cy) - r) <= FIT_TOL * r
+        if inl.sum() < 3:
+            break
+        sw = np.sqrt(wt[inl])
+        a = np.stack([2 * y[inl], np.ones(int(inl.sum()))], 1) * sw[:, None]
+        sol = np.linalg.lstsq(a, (x[inl] ** 2 + y[inl] ** 2) * sw, rcond=None)[0]
+        if sol[1] + sol[0] ** 2 <= 0:
+            break
+        cy, r = float(sol[0]), float(np.sqrt(sol[1] + sol[0] ** 2))
+    return float(cy), float(r), _coverage(x, y, cy, r)
+
+
+def _coverage(x: np.ndarray, y: np.ndarray, cy: float, r: float) -> float:
+    """Share of a full turn around (0, cy) spanned by consecutive hull vertices that both
+    lie on the circle (within FIT_TOL), each gap counted up to FIT_COVER_GAP_DEG: a chord
+    between two star tips counts, the gap over a loop or the tails does not."""
+    th = np.arctan2(y - cy, x)
+    o = np.argsort(th)
+    th = th[o]
+    on = (np.abs(np.hypot(x, y - cy) - r) <= FIT_TOL * r)[o]
+    gaps = np.diff(np.concatenate([th, th[:1] + 2 * np.pi]))
+    both = on & np.roll(on, -1)
+    return float(np.minimum(gaps, np.radians(FIT_COVER_GAP_DEG))[both].sum() / (2 * np.pi))
+
+
 def prepare(data: bytes) -> Prepared:
     """Decode, normalize to WORK_HEIGHT rows and localize the rosette."""
     rgb, alpha = _decode(data)
@@ -218,6 +346,11 @@ def prepare(data: bytes) -> Prepared:
         raise InputError(NO_ROSETTE)
     ax = _axis(mask)
     head = _head(mask, ax, top, bottom)
+    tails = _tails_start(mask, top, bottom)
+    if tails is not None:
+        cy, r, coverage = _fit_head(mask, ax, top, tails)
+        if r >= FIT_TAKEOVER * head[2] and coverage >= FIT_MIN_COVERAGE:
+            head = (ax, cy, r)
     tails_top = min(float(bottom), float(np.floor(head[1] + head[2]) + 1))
     return Prepared(rgb=np.ascontiguousarray(rgb, dtype=np.uint8), mask=mask, axis_x=ax,
                     head=head, tails_top_y=tails_top, bottom_y=float(bottom),
