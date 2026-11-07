@@ -7,6 +7,9 @@ kept as they are); the rose is on iff a center part was found.
 A plain group that looks partly patterned on the tails (colors.mixed_texture_groups)
 is warned: a patterned ribbon may have been merged into it. A small patterned color on
 the center badge that is not clearly enclosed (colors.badge_print_unsure) is warned too.
+Library head (H7): when a reference head from the library fits the photo's outline
+better than the detected head (with_template, TEMPLATE_MIN_GAIN), it is drawn instead and
+the detected head parts wait in the model's alternatives (use_rules_head switches back).
 Head fit (head_fit): our head parts (every part but the tail stripes) are rendered and
 compared with the photo's color labels inside the head circle. The measurement is
 information for the UI (analyze_with_fit returns it; the API sends it as head_fit);
@@ -27,7 +30,7 @@ import numpy as np
 
 from .assign import FLAG_BELOW, FLAGGED_CONF, assign, hex_rgb
 from .build import build
-from .model import RosetteModel
+from .model import Part, RosetteModel
 from .roles import PAD_FRAC, render_categories
 from .tidy import drop_specks, merge_tail_slivers
 from .validate import Issue, validate
@@ -35,6 +38,7 @@ from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_group
 from .vision.parts import detect_parts
 from .vision.parts_common import Frame
 from .vision.prepare import Prepared, prepare
+from .vision.templates import choose, load_library, photo_grid, relabel_map
 from .writer import write_svg
 
 # Head fit gross-failure bars, from the 76 reference photos (docs/pipeline.md). Layer
@@ -56,6 +60,21 @@ _RENDER_H = 850
 _FIT_COLORS = {1: "#ff0000", 2: "#0000ff", 3: "#00c000", 4: "#ff00ff"}
 
 
+# Library heads (H7, rosette/vision/templates.py). The best-matching reference head is
+# drawn instead of the detected head parts when its outline fits the photo better: its
+# head_fit silhouette IoU is at least TEMPLATE_MIN_GAIN above the rule-based head's. On
+# the 76 photos (leave-one-out, docs/pipeline.md H7) the match score itself does not
+# predict which head is better (low scores are the hard photos where the rules fail
+# too), the silhouette difference does (correlation 0.63 with the head IoU gain), and
+# 0.02 gives the highest LOO head IoU with one ID losing more than 0.02. No score floor
+# (TEMPLATE_MIN_SCORE 0). The template part's confidence is its match score, so a match
+# under FLAG_BELOW (0.6) is flagged for the user.
+TEMPLATE_MIN_GAIN = 0.02
+TEMPLATE_MIN_SCORE = 0.0
+TEMPLATE_FLAG_SCORE = FLAG_BELOW
+TEMPLATE_PART_ID = "template"
+
+
 @dataclass
 class HeadFit:
     agreement: float  # share of the region's foreground union with the same color group
@@ -68,10 +87,16 @@ class RenderResult:
     issues: list[Issue] = field(default_factory=list)
 
 
+def _part_groups(q) -> set[int]:
+    if q.role == "template":
+        return {q.color_group} | {int(v) for k, v in q.params.items() if k.startswith("group_")}
+    return {q.color_group}
+
+
 def _head_render(model: RosetteModel) -> np.ndarray | None:
     """Group id per canvas pixel (-1 none) of the model's head parts, or None."""
     head = [q for q in model.parts if q.role != "tail_stripe"]
-    gids = sorted({q.color_group for q in head})
+    gids = sorted({g for q in head for g in _part_groups(q)})
     if not head or len(gids) > len(_FIT_COLORS):
         return None
     cat = {gid: i + 1 for i, gid in enumerate(gids)}
@@ -140,7 +165,7 @@ def _check_head(model: RosetteModel, fit: HeadFit | None) -> RosetteModel:
     if not (bad_layers or bad_outline):
         return out
     for q in out.parts:
-        if q.role == "head":
+        if q.role in ("head", "template"):
             q.confidence = min(q.confidence, FLAGGED_CONF)
     what = []
     if bad_layers:
@@ -152,12 +177,77 @@ def _check_head(model: RosetteModel, fit: HeadFit | None) -> RosetteModel:
     return out
 
 
+def prefer_template(rules: HeadFit | None, library: HeadFit | None) -> bool:
+    """Draw the library head: its silhouette beats the detected head's by TEMPLATE_MIN_GAIN
+    (or the detected model has no head parts to measure)."""
+    if library is None:
+        return False
+    return rules is None or library.silhouette >= rules.silhouette + TEMPLATE_MIN_GAIN - 1e-9
+
+
+def template_confidence(score: float) -> float:
+    return round(float(min(1.0, max(0.0, FLAG_BELOW + score - TEMPLATE_FLAG_SCORE))), 3)
+
+
+def with_template(model: RosetteModel, mask: np.ndarray, labels: np.ndarray, head: tuple[float, float, float],
+                  frame: Frame, groups: list, merged: dict[int, int] | None = None, lib=None,
+                  exclude_key: str | None = None, min_score: float | None = None) -> RosetteModel:
+    """A copy of the model whose head is the best library template (one `template` part,
+    the detected head parts kept in `alternatives`) when its score is at least min_score
+    (TEMPLATE_MIN_SCORE), else an unchanged copy. head: the photo's head circle (px);
+    exclude_key skips a design (leave-one-out evaluation only)."""
+    out = copy.deepcopy(model)
+    lib = load_library() if lib is None else lib
+    have = {g.id for g in out.groups}
+    if not lib or not have:
+        return out
+    grid = photo_grid(mask, labels, head, relabel_map(out, groups, merged))
+    best = choose(grid, lib, exclude_key)
+    if best is None or best[1]["score"] < (TEMPLATE_MIN_SCORE if min_score is None else min_score):
+        return out
+    t, f = best
+    mapping = {c: g for c, g in f["mapping"].items() if g in have}
+    if not mapping:
+        return out
+    first = next(pc.category for pc in t.pieces if pc.category in mapping)
+    params: dict = {"template_id": t.sid, "cx": round(frame.x(head[0]), 3), "cy": round(frame.y(head[1]), 3),
+                    "r": round(frame.d(head[2]), 3), "rotation_deg": 0.0, "score": round(f["score"], 3)}
+    for c in t.categories:
+        params[f"group_{c}"] = int(mapping.get(c, mapping[first]))
+    part = Part(TEMPLATE_PART_ID, "template", params, int(mapping[first]), 10, template_confidence(f["score"]))
+    out.alternatives = [q for q in out.parts if q.role != "tail_stripe"]
+    out.parts = [q for q in out.parts if q.role == "tail_stripe"] + [part]
+    return out
+
+
+def use_rules_head(model: RosetteModel) -> RosetteModel:
+    """The model with the detected head parts drawn instead of the template (and the
+    template kept in alternatives); the other way round when it already draws them."""
+    out = copy.deepcopy(model)
+    tails = [q for q in out.parts if q.role == "tail_stripe"]
+    drawn = [q for q in out.parts if q.role != "tail_stripe"]
+    out.parts, out.alternatives = tails + out.alternatives, drawn
+    return out
+
+
 def analyze(data: bytes) -> RosetteModel:
     return analyze_with_fit(data)[0]
 
 
-def analyze_with_fit(data: bytes) -> tuple[RosetteModel, HeadFit | None]:
-    """analyze, plus the head fit measurement (None without head parts)."""
+@dataclass
+class Detection:
+    """What analyze sees of one photo before the head checks: the prepared photo, its
+    color labels and groups, the assigned model and the label ids assign merged away."""
+    prepared: Prepared
+    labels: np.ndarray
+    groups: list
+    model: RosetteModel
+    merged: dict[int, int]
+    merged_print: list
+
+
+def detect(data: bytes) -> Detection:
+    """prepare -> pixel_groups -> detect_parts -> tidy -> RosetteModel -> assign."""
     p = prepare(data)
     merged_print: list = []
     labels, groups = pixel_groups(p, merged=merged_print)
@@ -172,7 +262,23 @@ def analyze_with_fit(data: bytes) -> tuple[RosetteModel, HeadFit | None]:
     assert [q.id for q in model.parts] == [q.id for q in out.parts]
     merged = {a.color_group: b.color_group for a, b in zip(model.parts, out.parts)
               if a.color_group != b.color_group}
+    return Detection(p, labels, groups, out, merged, merged_print)
+
+
+def analyze_with_fit(data: bytes, template: bool = True,
+                     exclude_key: str | None = None) -> tuple[RosetteModel, HeadFit | None]:
+    """analyze, plus the head fit measurement (None without head parts). template: try
+    a library head (with_template); exclude_key: leave-one-out evaluation only."""
+    d = detect(data)
+    p, labels, groups, out, merged, merged_print = d.prepared, d.labels, d.groups, d.model, d.merged, d.merged_print
+    used = {q.color_group for q in out.parts} | set(merged)
     fit = head_fit(p, labels, out, merged)
+    if template:
+        lib = with_template(out, p.mask, labels, p.head, Frame.of(p), groups, merged, exclude_key=exclude_key)
+        if lib.alternatives:
+            lib_fit = head_fit(p, labels, lib, merged)
+            if prefer_template(fit, lib_fit):
+                out, fit = lib, lib_fit
     out = _check_head(out, fit)
     by_id = {g.id: g for g in groups}
     for gid in mixed_texture_groups(p, labels, groups):

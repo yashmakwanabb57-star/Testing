@@ -6,7 +6,7 @@ import { applyConfig, glitterPattern, COLOR_INDICES } from './simulator.js';
 import {
   MAX_COUNT, POINT_KINDS, errorText, hex, flagItems,
   downloadBlockers as blockersFor, groupColor, tailGroups, parseValue, tailCheckKey, sourceNotice,
-  convertBlocker, resetForFile, checklistItems, paramShown,
+  convertBlocker, resetForFile, checklistItems, paramShown, headChoice, switchHead, templateText, usesGroup,
 } from './logic.js';
 
 export { errorText, flagItems, parseValue, tailGroups, hex };
@@ -46,7 +46,7 @@ const CHECKS = [
 
 const ROLE_LABELS = {
   head: 'Head', ring: 'Ring', points: 'Points', center: 'Center',
-  tail_stripe: 'Tails', unknown: 'Unrecognised shape',
+  tail_stripe: 'Tails', unknown: 'Unrecognised shape', template: 'Head (library)',
 };
 
 // Editable params per role. type: num | int | kind | bool.
@@ -59,6 +59,8 @@ const PARAMS = {
     ['edge_width', 'Edge strip width', 'num'],
     ['cx', 'Center x', 'num'], ['cy', 'Center y', 'num']],
   center: [['r', 'Radius', 'num'], ['cx', 'Center x', 'num'], ['cy', 'Center y', 'num']],
+  template: [['r', 'Head radius', 'num'], ['cx', 'Center x', 'num'], ['cy', 'Center y', 'num'],
+    ['rotation_deg', 'Rotation (deg)', 'num']],
   unknown: [['r', 'Radius', 'num'], ['cx', 'Center x', 'num'], ['cy', 'Center y', 'num']],
   tail_stripe: [['tails_count', 'Tails', 'int'], ['top_y', 'Top y', 'num'], ['bottom_y', 'Bottom y', 'num'],
     ['top_width', 'Top width', 'num'], ['bottom_width', 'Bottom width', 'num'], ['spread_deg', 'Spread (deg)', 'num']],
@@ -278,6 +280,23 @@ export const actions = {
     return true;
   },
 
+  // Library head <-> rule-based head (the other one waits in model.alternatives).
+  switchHead() {
+    const before = state.model.parts.filter((p) => p.role !== 'tail_stripe').map((p) => `part:${p.id}`);
+    switchHead(state.model);
+    actions.unconfirm(...before, 'check:head');
+    views.parts();
+    views.groups();
+    actions.scheduleRender();
+  },
+
+  // A template part's reference Color c is drawn in color group groupId.
+  setTemplateGroup(part, c, groupId) {
+    part.params[`group_${c}`] = groupId;
+    actions.unconfirm(`part:${part.id}`);
+    actions.scheduleRender();
+  },
+
   setPartGroup(parts, groupId) {
     for (const p of parts) p.color_group = groupId;
     const tails = parts.some((p) => p.role === 'tail_stripe') ? tailConfirmations() : [];
@@ -466,6 +485,7 @@ function markInvalid(target, ok) {
 }
 
 function partSummary(p) {
+  if (p.role === 'template') return ` ${templateText(p)}`;
   const summary = p.role === 'points' ? `${p.params.kind} x ${p.params.count}` : '';
   return ` ${p.id}${summary ? ' - ' + summary : ''}`;
 }
@@ -498,14 +518,26 @@ function partCard(p) {
       else if (ok) card.querySelector('.part-summary').textContent = partSummary(p);
     }));
   }
+  const colors = p.role === 'template'
+    ? Object.keys(p.params).filter((k) => /^group_\d$/.test(k)).sort().map((k) => {
+      const c = Number(k.slice(6));
+      return el('label', { class: 'param wide' }, el('span', { text: `Template Color ${c} drawn as` }),
+        el('select', { onchange: (ev) => actions.setTemplateGroup(p, c, Number(ev.target.value)) },
+          ...groupOptions(Number(p.params[k]))));
+    })
+    : [el('label', { class: 'param wide' }, el('span', { text: 'Color group' }),
+      el('select', { onchange: (ev) => actions.setPartGroup([p], Number(ev.target.value)) }, ...groupOptions(p.color_group)))];
   const card = el('div', { class: 'card', 'data-flag': key },
     el('div', { class: 'card-head' },
       el('strong', { text: ROLE_LABELS[p.role] || p.role }),
       el('span', { class: 'muted part-summary', text: partSummary(p) }),
       el('span', { class: 'conf muted', text: `${Math.round(p.confidence * 100)}%` })),
-    el('label', { class: 'param wide' }, el('span', { text: 'Color group' }),
-      el('select', { onchange: (ev) => actions.setPartGroup([p], Number(ev.target.value)) }, ...groupOptions(p.color_group))),
+    ...colors,
     grid);
+  if (p.role === 'template') {
+    card.append(el('button', { type: 'button', class: 'btn small', text: 'Use the rule-based head instead',
+      onclick: () => actions.switchHead() }));
+  }
   card.append(el('p', { class: 'flag-text', text: 'Please confirm' }), confirmBox(key));
   return card;
 }
@@ -680,6 +712,13 @@ export const views = {
     const cards = [];
     const tails = tailGroups(state.model);
     const tailFirst = new Map(tails.map((ps, n) => [ps[0], n]));
+    if (headChoice(state.model) === 'rules') {
+      const t = state.model.alternatives.find((p) => p.role === 'template');
+      cards.push(el('div', { class: 'card' },
+        el('p', { class: 'muted', text: `${templateText(t)} (not used: the rule-based head is drawn).` }),
+        el('button', { type: 'button', class: 'btn small', text: 'Use the library head instead',
+          onclick: () => actions.switchHead() })));
+    }
     for (const p of state.model.parts) {
       if (p.role !== 'tail_stripe') cards.push(partCard(p));
       else if (tailFirst.has(p)) cards.push(tailCard(tails[tailFirst.get(p)], tailFirst.get(p)));
@@ -696,7 +735,7 @@ export const views = {
     }
     box.replaceChildren(...state.model.groups.map((g) => {
       const key = `group:${g.id}`;
-      const uses = state.model.parts.filter((p) => p.color_group === g.id).length;
+      const uses = state.model.parts.filter((p) => usesGroup(p, g.id)).length;
       return el('div', { class: 'card group', 'data-flag': key },
         el('div', { class: 'card-head' },
           el('span', { class: 'swatch', style: `background:${hex(g.rgb)}`, title: hex(g.rgb) }),

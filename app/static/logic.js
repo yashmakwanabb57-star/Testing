@@ -38,7 +38,48 @@ export const hex = (rgb) => '#' + rgb.map((v) => Math.round(v).toString(16).padS
 const LOW_TEXT = {
   head: 'head read with low confidence', ring: 'ring read with low confidence',
   points: 'points read with low confidence', center: 'center read with low confidence',
+  template: 'library head shape is a weak match',
 };
+
+// ------------------------------------------------------------ library heads (H7)
+
+// The part that uses a color group: a template part maps reference Colors to groups
+// in params group_1..group_4 (rosette/build.py template_groups).
+export function partGroups(p) {
+  if (p.role !== 'template') return [p.color_group];
+  const out = new Set([p.color_group]);
+  for (const [k, v] of Object.entries(p.params)) if (k.startsWith('group_')) out.add(Number(v));
+  return [...out];
+}
+
+export function usesGroup(p, gid) {
+  return partGroups(p).includes(gid);
+}
+
+// Head card text of a library head.
+export function templateText(p) {
+  const score = Number(p.params.score);
+  const pct = Number.isFinite(score) ? `${Math.round(score * 100)}%` : '-';
+  return `Head shape: from library template ${p.params.template_id}, match ${pct}`;
+}
+
+// Which head the model draws: 'template', 'rules', or null when it has no choice.
+export function headChoice(model) {
+  if (!model) return null;
+  const all = [...model.parts, ...(model.alternatives || [])];
+  if (!all.some((p) => p.role === 'template')) return null;
+  return model.parts.some((p) => p.role === 'template') ? 'template' : 'rules';
+}
+
+// Swap the drawn head parts with the ones kept in alternatives (rosette/pipeline.py
+// use_rules_head): tails stay in place. Mutates the model; returns it.
+export function switchHead(model) {
+  const tails = model.parts.filter((p) => p.role === 'tail_stripe');
+  const drawn = model.parts.filter((p) => p.role !== 'tail_stripe');
+  model.parts = [...tails, ...(model.alternatives || [])];
+  model.alternatives = drawn;
+  return model;
+}
 
 // Mirrors rosette/pipeline.py is_flagged: one item per thing the user must confirm.
 // A part of any role below FLAG_BELOW is flagged; tail stripes are confirmed per tails
@@ -210,7 +251,7 @@ export function partChecks(model) {
   return out;
 }
 
-const ROLE_NOUNS = { head: 'head', ring: 'ring', points: 'point', center: 'center', tail_stripe: 'stripe', unknown: 'shape' };
+const ROLE_NOUNS = { head: 'head', ring: 'ring', points: 'point', center: 'center', tail_stripe: 'stripe', unknown: 'shape', template: 'head shape' };
 
 // One question per color group, flagged groups first, otherwise in model order.
 // usedOn lists the part kinds using the color ("stripe"); noun is set when there is one.
@@ -219,7 +260,7 @@ export function colorQuestions(model, issues = [], serverFlagged = false) {
   if (!model) return [];
   const flagged = new Set(flagItems(model, issues, serverFlagged).map((f) => f.key));
   const qs = model.groups.map((g, order) => {
-    const users = model.parts.filter((p) => p.color_group === g.id);
+    const users = model.parts.filter((p) => usesGroup(p, g.id));
     const nouns = [...new Set(users.map((p) => ROLE_NOUNS[p.role] || 'shape'))];
     const key = `group:${g.id}`;
     return { key, group: g, noun: nouns.length === 1 ? nouns[0] : null, usedOn: nouns, uses: users.length, flagged: flagged.has(key), order };
