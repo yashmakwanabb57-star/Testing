@@ -87,7 +87,11 @@ def photo_record(sid: str, cache: Path | None = None) -> dict:
     """What the pipeline sees of one photo (rosette.pipeline.detect), the rules SVG."""
     cp = cache / "photos" / f"{sid}.pkl" if cache else None
     if cp and cp.exists():
-        return pickle.loads(cp.read_bytes())
+        rec = pickle.loads(cp.read_bytes())
+        for k in ("alternatives", "alternative_groups"):  # records cached before these fields
+            if not hasattr(rec["model"], k):
+                setattr(rec["model"], k, [])
+        return rec
     d = detect((REF / "photos" / f"{sid}.png").read_bytes())
     p = d.prepared
     fr = Frame.of(p)
@@ -198,23 +202,42 @@ def head_iou(designer_svg: str, generated_svg: str, tails_top_y: float | None = 
     return float((a & b).sum() / union) if union else 1.0
 
 
-def decision_row(sid: str, cache: Path | None = None) -> dict:
-    """Head IoU of the rules head, the LOO template and the full-library template, all
-    through the pipeline's own with_template, build and writer, with the match scores."""
+def decision_row(sid: str, cache: Path | None = None, scores: bool = False) -> dict:
+    """The rules head, the LOO template and the full-library template, all through the
+    pipeline's own with_template, build and writer: head IoU (score.py head_iou), head_fit
+    (agreement, silhouette) on the photo, the overlap of template and rules heads, the pick
+    and its score (None when no template passes the gates). scores: also color agreement,
+    whole shape and layer IoU (tools/score.py compare and shape_compare)."""
+    from types import SimpleNamespace
+
+    from rosette.pipeline import head_fit, head_overlap
+    from tools.score import compare, shape_compare
     rec = photo_record(sid, cache)
     mask = np.unpackbits(rec["mask"])[: rec["shape"][0] * rec["shape"][1]].reshape(rec["shape"]).astype(bool)
     fr = Frame(*rec["frame"])
+    p = SimpleNamespace(mask=mask, head=rec["head"], axis_x=rec["frame"][0], scale=rec["frame"][2])
     designer = (REF / "svg" / f"{sid}.svg").read_text(encoding="utf-8")
     top = frame_for(designer, HEIGHT).tails_top_y
-    row = dict(id=sid, rules=head_iou(designer, rec["svg"], top))
+
+    def measure(model, svg):
+        f = head_fit(p, rec["labels"], model, rec["merged"])
+        out = dict(head=head_iou(designer, svg, top), fit=(f.agreement, f.silhouette) if f else (0.0, 0.0))
+        if scores:
+            c, sh = compare(designer, svg), shape_compare(designer, svg)
+            out.update(color=c["color_agreement"], shape=sh["shape_iou"], layer=sh["layer_iou"] or 0.0)
+        return out
+
+    row = dict(id=sid, rules=measure(rec["model"], rec["svg"]))
     for mode, excl in (("loo", design_key(sid)), ("full", None)):
         m = with_template(rec["model"], mask, rec["labels"], rec["head"], fr, rec["groups"], rec["merged"],
                           exclude_key=excl, min_score=-1.0)
-        t = next(q for q in m.parts if q.role == "template")
-        svg = render(m).svg
-        row[mode] = head_iou(designer, svg, top)
-        row[mode + "_score"], row[mode + "_pick"] = float(t.params["score"]), t.params["template_id"]
-        row[mode + "_issues"] = len(render(m).issues)
+        t = next((q for q in m.parts if q.role == "template"), None)
+        if t is None:
+            row[mode] = dict(row["rules"], pick=None, score=None, overlap=None, issues=0)
+            continue
+        res = render(m)
+        row[mode] = dict(measure(m, res.svg), pick=t.params["template_id"], score=float(t.params["score"]),
+                         overlap=head_overlap(rec["model"], m), issues=len(res.issues))
     return row
 
 

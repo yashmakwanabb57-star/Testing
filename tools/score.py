@@ -244,6 +244,9 @@ def shape_compare(designer_svg: str, generated_svg: str) -> dict:
 def _detected_counts(model) -> tuple[int, int]:
     pts = [q for q in model.parts if q.role == "points"]
     points = int(max(pts, key=lambda q: part_area(q, model.parts)).params["count"]) if pts else 0
+    tmpl = next((q for q in model.parts if q.role == "template"), None)
+    if tmpl is not None:  # a library head: the reference's own points count (H7)
+        points = int(tmpl.params.get("points", 0))
     tails = [q for q in model.parts if q.role == "tail_stripe"]
     return points, int(tails[0].params["tails_count"]) if tails else 0
 

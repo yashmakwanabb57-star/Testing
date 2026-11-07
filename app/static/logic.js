@@ -60,7 +60,8 @@ export function usesGroup(p, gid) {
 export function templateText(p) {
   const score = Number(p.params.score);
   const pct = Number.isFinite(score) ? `${Math.round(score * 100)}%` : '-';
-  return `Head shape: from library template ${p.params.template_id}, match ${pct}`;
+  const pts = Number(p.params.points) > 0 ? `, ${p.params.points} points` : '';
+  return `Head shape: from library template ${p.params.template_id}, match ${pct}${pts}`;
 }
 
 // Which head the model draws: 'template', 'rules', or null when it has no choice.
@@ -78,6 +79,11 @@ export function switchHead(model) {
   const drawn = model.parts.filter((p) => p.role !== 'tail_stripe');
   model.parts = [...tails, ...(model.alternatives || [])];
   model.alternatives = drawn;
+  // color groups follow the parts that use them (rosette/pipeline.py _split_groups)
+  const pool = [...model.groups, ...(model.alternative_groups || [])].sort((a, b) => a.id - b.id);
+  const used = new Set(model.parts.flatMap((p) => partGroups(p)));
+  model.groups = pool.filter((g) => used.has(g.id));
+  model.alternative_groups = pool.filter((g) => !used.has(g.id));
   return model;
 }
 

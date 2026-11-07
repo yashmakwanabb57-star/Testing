@@ -82,10 +82,12 @@ class RosetteModel:
     # Parts kept in the model but not drawn: with a library head (role "template", H7)
     # the detected head parts wait here so the user can switch back to them.
     alternatives: list[Part] = field(default_factory=list)
+    # Color groups only the parts in alternatives use (not shown while they are hidden).
+    alternative_groups: list[ColorGroup] = field(default_factory=list)
 
     def to_json(self) -> dict:
         d = asdict(self)
-        for g in d["groups"]:
+        for g in d["groups"] + d["alternative_groups"]:
             g["rgb"] = list(g["rgb"])
         return d
 
@@ -94,7 +96,9 @@ class RosetteModel:
         groups = [ColorGroup(**{**g, "rgb": tuple(g["rgb"])}) for g in d.get("groups", [])]
         parts = [Part(**p) for p in d.get("parts", [])]
         alternatives = [Part(**p) for p in d.get("alternatives", [])]
+        alt_groups = [ColorGroup(**{**g, "rgb": tuple(g["rgb"])}) for g in d.get("alternative_groups", [])]
         for q in parts + alternatives:
             check_params(q.params)
         return cls(parts=parts, groups=groups, rose=bool(d.get("rose", False)),
-                   warnings=list(d.get("warnings", [])), alternatives=alternatives)
+                   warnings=list(d.get("warnings", [])), alternatives=alternatives,
+                   alternative_groups=alt_groups)

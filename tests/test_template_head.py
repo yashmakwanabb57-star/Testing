@@ -175,3 +175,52 @@ def test_the_library_head_is_drawn_only_when_its_outline_fits_better():
     assert not prefer_template(rules, HeadFit(0.99, 0.80 + TEMPLATE_MIN_GAIN / 2))
     assert prefer_template(None, HeadFit(0.5, 0.5))
     assert not prefer_template(rules, None)
+
+
+def _detected_with_head_only_group():
+    m = _detected()
+    m.groups.append(ColorGroup(4, (250, 250, 250), False, 0.1, 0.05, 4, 0.5))
+    m.parts.append(Part("ring", "ring", {"cx": 300, "cy": 200, "r_outer": 60, "r_inner": 50}, 4, 30, 0.5))
+    return m
+
+
+def test_groups_only_the_hidden_head_uses_leave_the_drawn_list_and_come_back():
+    t = LIB["T1-15"]
+    mask, labels = _labels_like(t, mapping={1: 1, 2: 2, 3: 3})
+    fr = Frame(axis_x=200, top=100, scale=1.0)
+    out = with_template(_detected_with_head_only_group(), mask, labels, (200, 200, 100), fr, _groups(), lib=[t],
+                        min_score=0.5)
+    assert [g.id for g in out.groups] == [1, 2, 3] and [g.id for g in out.alternative_groups] == [4]
+    rules = use_rules_head(out)
+    assert 4 in [g.id for g in rules.groups]
+    assert [g.id for g in use_rules_head(rules).alternative_groups] == [4]
+    assert RosetteModel.from_json(out.to_json()).alternative_groups == out.alternative_groups
+
+
+def test_a_template_that_cannot_agree_with_the_tails_is_not_used():
+    t = Template("T3-15", "T3", LIB["T1-15"].pieces, tail_categories=(1, 2, 4))
+    t4 = Template("T3-15", "T3", t.pieces + [Piece(4, "points", [_star(6, 0.3, 0.38)])], tail_categories=(1, 2, 4))
+    mask, labels = _labels_like(t4, mapping={1: 1, 2: 2, 3: 3, 4: 3})
+    fr = Frame(axis_x=200, top=100, scale=1.0)
+    # our tails carry only Color 3 (group 2): the reference's tail Colors 1, 2 and 4 have no tail group
+    out = with_template(_detected(), mask, labels, (200, 200, 100), fr, _groups(), lib=[t4], min_score=0.0)
+    assert not any(q.role == "template" for q in out.parts)
+    assert any("could not be colored to agree with the tails" in w for w in out.warnings)
+
+
+def test_a_template_whose_colors_agree_with_the_tails_is_used():
+    # the reference's tail Color 3 is its center; our tails carry Color 3 as group 2
+    t = Template("T4-15", "T4", LIB["T1-15"].pieces, tail_categories=(3,))
+    mask, labels = _labels_like(t, mapping={1: 1, 2: 3, 3: 2})
+    fr = Frame(axis_x=200, top=100, scale=1.0)
+    out = with_template(_detected(), mask, labels, (200, 200, 100), fr, _groups(), lib=[t], min_score=0.0)
+    tmpl = next(q for q in out.parts if q.role == "template")
+    assert tmpl.params["group_3"] == 2
+
+
+def test_head_overlap_of_two_models():
+    from rosette.pipeline import head_overlap
+    a = _model()
+    assert head_overlap(a, a) == pytest.approx(1.0)
+    b = _model(r=60)
+    assert head_overlap(a, b) < 0.3

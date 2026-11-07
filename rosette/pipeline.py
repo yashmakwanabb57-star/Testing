@@ -38,7 +38,7 @@ from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_group
 from .vision.parts import detect_parts
 from .vision.parts_common import Frame
 from .vision.prepare import Prepared, prepare
-from .vision.templates import choose, load_library, photo_grid, relabel_map
+from .vision.templates import choose, load_library, photo_grid, relabel_map, tail_consistent_mapping
 from .writer import write_svg
 
 # Head fit gross-failure bars, from the 76 reference photos (docs/pipeline.md). Layer
@@ -72,7 +72,22 @@ _FIT_COLORS = {1: "#ff0000", 2: "#0000ff", 3: "#00c000", 4: "#ff00ff"}
 TEMPLATE_MIN_GAIN = 0.02
 TEMPLATE_MIN_SCORE = 0.0
 TEMPLATE_FLAG_SCORE = FLAG_BELOW
+# When the library head and the rule-based head overlap less than this (silhouette IoU
+# of the two drawn heads), the user is told to compare the head with the photo.
+TEMPLATE_DIFFERS_IOU = 0.7
+TEMPLATE_DIFFERS_WARNING = ("The library head and the rule-based head differ a lot (outline overlap {iou:.0%}) - "
+                            "compare the head with the photo and use the head toggle if the other one is closer.")
 TEMPLATE_PART_ID = "template"
+# Template colors must agree with the tails (H7 fix round 1). "check": the overlap map
+# is kept only when every reference category that is also one of the reference's tail
+# Colors k lands on the group our tails carry as Color k; otherwise the rule-based head
+# stays (with TEMPLATE_COLOR_WARNING). "map": tail categories are forced onto those
+# groups and only head-only categories follow the overlap. Measured on the 76 photos
+# (docs/pipeline.md H7 fix round 1): "map" loses color on 7 photos by more than 0.02
+# (full library, mean -0.003), "check" on 2 (mean +0.003).
+TEMPLATE_TAIL_RULE = "check"
+TEMPLATE_COLOR_WARNING = ("The library head {tid} could not be colored to agree with the tails - the rule-based "
+                          "head is drawn.")
 
 
 @dataclass
@@ -157,6 +172,16 @@ def check_head(p: Prepared, labels: np.ndarray, model: RosetteModel,
     return _check_head(model, head_fit(p, labels, model, merged))
 
 
+def head_overlap(a: RosetteModel, b: RosetteModel) -> float | None:
+    """Silhouette IoU of two models' drawn heads (every part but the tail stripes)."""
+    ra, rb = _head_render(a), _head_render(b)
+    if ra is None or rb is None:
+        return None
+    fa, fb = ra >= 0, rb >= 0
+    union = (fa | fb).sum()
+    return float((fa & fb).sum() / union) if union else None
+
+
 def _check_head(model: RosetteModel, fit: HeadFit | None) -> RosetteModel:
     out = copy.deepcopy(model)
     if fit is None:
@@ -206,27 +231,64 @@ def with_template(model: RosetteModel, mask: np.ndarray, labels: np.ndarray, hea
     if best is None or best[1]["score"] < (TEMPLATE_MIN_SCORE if min_score is None else min_score):
         return out
     t, f = best
-    mapping = {c: g for c, g in f["mapping"].items() if g in have}
+    tail_groups = _tail_groups(out)
+    mapping = f["mapping"]
+    if tail_groups and TEMPLATE_TAIL_RULE == "map":
+        mapping = tail_consistent_mapping(grid, t, tail_groups)
+    elif tail_groups and TEMPLATE_TAIL_RULE == "check":
+        if any(c in t.tail_categories and tail_groups.get(c) != g for c, g in mapping.items()):
+            mapping = None
+    if mapping is None:
+        out.warnings.append(TEMPLATE_COLOR_WARNING.format(tid=t.sid))
+        return out
+    mapping = {c: g for c, g in mapping.items() if g in have}
     if not mapping:
         return out
     first = next(pc.category for pc in t.pieces if pc.category in mapping)
     params: dict = {"template_id": t.sid, "cx": round(frame.x(head[0]), 3), "cy": round(frame.y(head[1]), 3),
-                    "r": round(frame.d(head[2]), 3), "rotation_deg": 0.0, "score": round(f["score"], 3)}
+                    "r": round(frame.d(head[2]), 3), "rotation_deg": 0.0, "score": round(f["score"], 3),
+                    "points": int(t.points)}
     for c in t.categories:
         params[f"group_{c}"] = int(mapping.get(c, mapping[first]))
     part = Part(TEMPLATE_PART_ID, "template", params, int(mapping[first]), 10, template_confidence(f["score"]))
     out.alternatives = [q for q in out.parts if q.role != "tail_stripe"]
     out.parts = [q for q in out.parts if q.role == "tail_stripe"] + [part]
+    _split_groups(out)
     return out
+
+
+def _tail_groups(model: RosetteModel) -> dict[int, int]:
+    """Color -> the group our tail stripes carry as that Color (the larger one by stripe
+    count when two groups share a Color)."""
+    cat = {g.id: g.category for g in model.groups}
+    count: dict[int, int] = {}
+    for q in model.parts:
+        if q.role == "tail_stripe" and cat.get(q.color_group):
+            count[q.color_group] = count.get(q.color_group, 0) + 1
+    out: dict[int, int] = {}
+    for gid, n in sorted(count.items(), key=lambda kv: -kv[1]):
+        out.setdefault(int(cat[gid]), gid)
+    return out
+
+
+def _split_groups(model: RosetteModel) -> None:
+    """Groups the drawn parts use stay in model.groups; the others (used only by the
+    head parts waiting in alternatives) move to alternative_groups, and back."""
+    pool = sorted(model.groups + model.alternative_groups, key=lambda g: g.id)
+    used = {g for q in model.parts for g in _part_groups(q)}
+    model.groups = [g for g in pool if g.id in used]
+    model.alternative_groups = [g for g in pool if g.id not in used]
 
 
 def use_rules_head(model: RosetteModel) -> RosetteModel:
     """The model with the detected head parts drawn instead of the template (and the
-    template kept in alternatives); the other way round when it already draws them."""
+    template kept in alternatives); the other way round when it already draws them.
+    Color groups follow the parts that use them."""
     out = copy.deepcopy(model)
     tails = [q for q in out.parts if q.role == "tail_stripe"]
     drawn = [q for q in out.parts if q.role != "tail_stripe"]
     out.parts, out.alternatives = tails + out.alternatives, drawn
+    _split_groups(out)
     return out
 
 
@@ -278,7 +340,10 @@ def analyze_with_fit(data: bytes, template: bool = True,
         if lib.alternatives:
             lib_fit = head_fit(p, labels, lib, merged)
             if prefer_template(fit, lib_fit):
+                overlap = head_overlap(out, lib)
                 out, fit = lib, lib_fit
+                if overlap is not None and overlap < TEMPLATE_DIFFERS_IOU:
+                    out.warnings.append(TEMPLATE_DIFFERS_WARNING.format(iou=overlap))
     out = _check_head(out, fit)
     by_id = {g.id: g for g in groups}
     for gid in mixed_texture_groups(p, labels, groups):
