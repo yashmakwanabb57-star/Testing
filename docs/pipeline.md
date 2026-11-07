@@ -373,6 +373,15 @@ Decision: the outline gain (silhouette +0.02, as before) and `TEMPLATE_MIN_PARTI
 
 No shape losses over 0.02 at 0.30 and above. Below the floor the rule-based head is drawn, the library head waits in `alternatives` (one click on the head card) and a warning says that it fits the outline better but its colors do not agree.
 
+**Fix round 3** (628c53f, ruling: shape first). `TEMPLATE_MIN_PARTITION` 0.54, and when the rule-based head fails the gross head check (`gross_failure`: agreement under 0.6 or silhouette under 0.78) the library head is drawn whatever its partition (still only when its outline wins by 0.02), flagged (confidence capped at 0.5) with the "heads differ" warning. Measured on the 76 photos (cached detections; new color gate: no ID from >= 0.9 to under 0.9, no loss over 0.05, whole shape losses at most 0.02):
+
+| | head IoU (rules 0.8299) | library heads (override) | color >= 0.9 (rules 47) | color gate losers | losses 0.02-0.05 | shape losers > 0.02 | S29-15 | S35-19 |
+|---|---|---|---|---|---|---|---|---|
+| LOO | 0.8511 | 18 (9) | 44 | S30-15 -0.068, S35-19 -0.092, S61-19 -0.081 (floor); S51-19 -0.059, S52-19 -0.032 (to 0.876), S57-17 -0.127 (override) | S15-15, S17-15, S56-17, S58-17 | S52-19 -0.023 | S57-17, 0.257 | S30-15, 0.867 |
+| full library | 0.8597 | 23 (8) | 48 | S51-19 -0.059, S52-19 0.908 -> 0.876 (both override) | S17-15 -0.029, S58-17 -0.028 | S52-19 -0.023 | S57-17, 0.257 | own, 0.944 |
+
+S57-17's head is loop blocks around a pinked ring (outline lobes like the photo's), not a star: S29-15's own star template ranks 8th among the mappable, gated templates (score 0.506 vs 0.624).
+
 ## Final state (Task 16)
 
 ### Stages, modules and tuning constants
@@ -402,9 +411,9 @@ Every generated file must satisfy section 3 of the [design spec](superpowers/spe
 
 `app/main.py` (FastAPI, started with `run.bat` or uvicorn on 127.0.0.1:8765) serves `app/static`. **Workbench** shows the photo, the detected model, the solid and pattern previews, edit controls and the flagged items on one screen. **Guided** walks through the same state one question at a time (`guided.js`); switching modes keeps the state. Edits go back through `render`, so the validator runs after every change.
 
-### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H7 fix round 2)
+### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H7 fix round 3)
 
-Re-recorded after H7 fix round 2 (a98cfbe); the last column is the H7 start (1339a24, the H6 table). `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only). IDs drawn with a library head: S40-15 (S37-15) and S56-17B (its own template); S35-19 and S29-15 keep the rule-based head with the library head on the toggle.
+Re-recorded after H7 fix round 3 (628c53f); the last column is the H7 start (1339a24, the H6 table). `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only). IDs drawn with a library head: those listed in the H7 fix round 3 section (full library: 23 of 76 photos, among them S29-15 with S57-17 and S35-19 with its own template).
 
 | ID | agree | uni | success | uni success | shape | headS | stack reversed | before H7 (1339a24) agree / shape / headS |
 |---|---|---|---|---|---|---|---|---|
@@ -414,17 +423,17 @@ Re-recorded after H7 fix round 2 (a98cfbe); the last column is the H7 start (133
 | A15-17 | 0.968 | 0.963 | yes | yes | 0.965 | 0.957 | 0 | 0.968 / 0.965 / 0.957 |
 | A16-17 | 0.837 | 0.926 | no | yes | 0.895 | 0.830 | 0 | 0.837 / 0.895 / 0.830 |
 | A9-15B | 1.000 | 1.000 | yes | yes | 0.939 | 0.828 | 0 | 1.000 / 0.939 / 0.828 |
-| S10-19 | 0.904 | 0.904 | yes | yes | 0.893 | 0.726 | 0 | 0.904 / 0.893 / 0.726 |
+| S10-19 | 0.950 | 0.950 | yes | yes | 0.949 | 0.908 | 0 | 0.904 / 0.893 / 0.726 |
 | S13-15 | 0.894 | 0.894 | no | no | 0.962 | 0.928 | 0 | 0.894 / 0.961 / 0.926 |
-| S17-15 | 0.687 | 0.743 | no | no | 0.863 | 0.599 | 0 | 0.687 / 0.863 / 0.599 |
-| S2-15B | 0.687 | 0.687 | no | no | 0.934 | 0.815 | 0 | 0.687 / 0.934 / 0.815 |
+| S17-15 | 0.658 | 0.875 | no | no | 0.891 | 0.747 | 0 | 0.687 / 0.863 / 0.599 |
+| S2-15B | 0.687 | 0.687 | no | no | 0.966 | 0.920 | 0 | 0.687 / 0.934 / 0.815 |
 | S26-15 | 0.800 | 0.985 | no | yes | 0.933 | 0.856 | 0 | 0.800 / 0.933 / 0.856 |
 | S28-15 | 0.998 | 0.995 | yes | yes | 0.980 | 0.964 | 1 (star>loop) | 0.998 / 0.980 / 0.964 |
-| S29-15 | 0.257 | 0.229 | no | no | 0.897 | 0.699 | 0 | 0.257 / 0.897 / 0.699 |
-| S30-15 | 0.975 | 0.986 | yes | yes | 0.900 | 0.760 | 0 | 0.975 / 0.900 / 0.759 |
+| S29-15 | 0.257 | 0.293 | no | no | 0.928 | 0.818 | 0 | 0.257 / 0.897 / 0.699 |
+| S30-15 | 0.983 | 0.983 | yes | yes | 0.967 | 0.944 | 0 | 0.975 / 0.900 / 0.759 |
 | S31-15 | 0.929 | 0.966 | yes | yes | 0.929 | 0.838 | 0 | 0.929 / 0.929 / 0.838 |
 | S33-15 | 0.905 | 0.905 | yes | yes | 0.955 | 0.890 | 0 | 0.905 / 0.955 / 0.890 |
-| S35-19 | 0.959 | 0.954 | yes | yes | 0.900 | 0.768 | 0 | 0.959 / 0.900 / 0.768 |
+| S35-19 | 0.944 | 0.950 | yes | yes | 0.914 | 0.811 | 0 | 0.959 / 0.900 / 0.768 |
 | S37-15 | 0.949 | 0.936 | yes | yes | 0.905 | 0.825 | 0 | 0.949 / 0.905 / 0.825 |
 | S40-15 | 0.890 | 0.882 | no | no | 0.930 | 0.888 | 0 | 0.890 / 0.883 / 0.763 |
 | S41-15 | 0.925 | 0.932 | yes | yes | 0.906 | 0.914 | 0 | 0.925 / 0.906 / 0.914 |
@@ -434,7 +443,7 @@ Re-recorded after H7 fix round 2 (a98cfbe); the last column is the H7 start (133
 | S5-15 | 0.910 | 0.988 | yes | yes | 0.852 | 0.734 | 0 | 0.910 / 0.852 / 0.734 |
 | S53-19 | 0.513 | 0.513 | no | no | 0.763 | 0.814 | 0 | 0.513 / 0.763 / 0.814 |
 | S56-17B | 0.988 | 1.000 | yes | yes | 0.909 | 0.848 | 0 | 0.979 / 0.879 / 0.755 |
-| S58-17 | 1.000 | 1.000 | yes | yes | 0.931 | 0.839 | 1 (loop>petal) | 1.000 / 0.931 / 0.839 |
+| S58-17 | 0.972 | 0.986 | yes | yes | 0.941 | 0.869 | 0 | 1.000 / 0.931 / 0.839 |
 | S67-19 | 0.964 | 0.964 | yes | yes | 0.947 | 0.861 | 0 | 0.964 / 0.947 / 0.861 |
 | S68-19 | 0.966 | 0.620 | yes | no | 0.885 | 0.676 | 0 | 0.966 / 0.885 / 0.676 |
 | S69-19 | 0.993 | 0.988 | yes | yes | 0.920 | 0.759 | 0 | 0.993 / 0.920 / 0.759 |
@@ -443,7 +452,7 @@ Re-recorded after H7 fix round 2 (a98cfbe); the last column is the H7 start (133
 | S80-22 | 0.989 | 1.000 | yes | yes | 0.934 | 0.878 | 0 | 0.989 / 0.934 / 0.878 |
 | s34-15 | 0.956 | 0.951 | yes | yes | 0.928 | 0.844 | 1 (backing>star) | 0.956 / 0.928 / 0.844 |
 
-Official (per-axis), tools/score.py summary: `success 23  flagged-not-success 10  silently-wrong 1  errors 0` / `PASS 23/34 (target >= 80%)` / `shape: mean IoU 0.915  head 0.827  tail 0.955  shape_ok 23/34 (IoU >= 0.9)` / `stacking: 4 kind pairs reversed vs the designer in 4/34 IDs (reported only)` / `reported only (not the bar): success under uniform-scale alignment 25/34`. The per-axis column is the metric and the bar; the uniform column only explains misses.
+Official (per-axis), tools/score.py summary: `success 23  flagged-not-success 10  silently-wrong 1  errors 0` / `PASS 23/34 (target >= 80%)` / `shape: mean IoU 0.922  head 0.851  tail 0.955  shape_ok 27/34 (IoU >= 0.9)` / `stacking: 3 kind pairs reversed vs the designer in 3/34 IDs (reported only)` / `reported only (not the bar): success under uniform-scale alignment 25/34`. The per-axis column is the metric and the bar; the uniform column only explains misses.
 
 Flagged although correct: 21 of the 23 successes; S28-15 and S43-15 are unflagged successes with visibly wrong heads (see 5b). S46-15 is silent again: its head fit (0.82 agreement, 0.94 outline) is not a gross failure; its miss is the scorer alignment effect described below.
 
@@ -451,18 +460,18 @@ Over all 76 reference photos (scratch `compare_all.py`, match >= 0.9 and no issu
 
 ### Sample outputs
 
-`output/s35-19.svg` and `output/s46-15.svg` were regenerated for H2 (and regenerated again for H3: byte-identical, so unchanged) from `reference/photos/S35-19.png` and `reference/photos/S46-15.png` with `rosette.pipeline.analyze` + `render`, the same code path the UI uses, and checked with `rosette.validate.validate` (both return `[]`). Regenerated again for H5 (pointed tail tops, visible-edge line art; both validate to `[]`), for H6 (`s35-19.svg` changed: its two tail slivers are merged; `s46-15.svg` byte-identical; both validate to `[]`) and for H7 (`s35-19.svg` changed: its head is the S35-19 library template, match 0.68; `s46-15.svg` byte-identical; both validate to `[]`) and for H7 fix round 2 (`s35-19.svg` back to the rule-based head, the S35-19 template on the toggle with a warning, its tail-mapped colors 0.68 being under the 0.70 floor; `s46-15.svg` byte-identical; both validate to `[]`). They are the tool's unedited output, not confirmed by a person.
+`output/s35-19.svg` and `output/s46-15.svg` were regenerated for H2 (and regenerated again for H3: byte-identical, so unchanged) from `reference/photos/S35-19.png` and `reference/photos/S46-15.png` with `rosette.pipeline.analyze` + `render`, the same code path the UI uses, and checked with `rosette.validate.validate` (both return `[]`). Regenerated again for H5 (pointed tail tops, visible-edge line art; both validate to `[]`), for H6 (`s35-19.svg` changed: its two tail slivers are merged; `s46-15.svg` byte-identical; both validate to `[]`) and for H7 (`s35-19.svg` changed: its head is the S35-19 library template, match 0.68; `s46-15.svg` byte-identical; both validate to `[]`), for H7 fix round 2 (`s35-19.svg` back to the rule-based head) and for fix round 3 (`s35-19.svg` drawn with its own S35-19 library template again, partition 0.68 over the 0.54 floor; `s46-15.svg` byte-identical; both validate to `[]`). They are the tool's unedited output, not confirmed by a person.
 
 | Output | Flagged | Flagged items | Warnings |
 |---|---|---|---|
-| `output/s35-19.svg` | yes | four points layers (loops, their edge strips, kites, their backing) with detector confidence 0.46-0.47 (below 0.6); no `unknown` parts; no color group below 0.6. | 2 tail slivers merged into their neighbours (H6); the S35-19 library head is on the toggle (fix round 2) |
+| `output/s35-19.svg` | yes | the warnings only: the S35-19 library head (match 0.82) is above 0.6; no `unknown` parts; no color group below 0.6. | 2 tail slivers merged into their neighbours (H6); the library and rule-based heads overlap 79 % (heads differ) |
 | `output/s46-15.svg` | no | none (head fit 0.82 / outline 0.94 is information only) | none |
 
 Before uploading either file to the shop, the user should open each photo in the UI, confirm the flags and compare the drawing with the photo. That confirmation has not been done; it is the user's step.
 
 ### Known limitations
 
-- **Library heads (H7, after fix round 2) pick the photo's own design for 48 of 76 photos (top-3 58)** and are drawn on 10 of 76 (full library). S29-15 and S35-19 keep their rule-based heads: their library heads (S57-17's star, S35-19's own) fit the outline better but their tail-mapped colors (0.231, 0.680) are under the 0.70 floor, so they wait on the toggle with a warning. See the H7 section.
+- **Library heads (H7, after fix round 3) pick the photo's own design for 48 of 76 photos (top-3 58).** S29-15 draws S57-17's head (loop blocks around a pinked ring, flagged), not its own star; color losses up to 0.059 where a grossly failed rule-based head is replaced (S51-19, S52-19). See the H7 section.
 
 - **The success bar is not met: 23/34 succeed against 28 needed (80 %).** `pytest -m slow` fails accordingly. Tuning stopped; it is not finished.
 - **S46-15 counts as silently wrong under per-axis scoring** (0.741, not flagged). It is a scorer alignment effect (the designer drew a larger head and narrower tails; uniform scale gives 0.926); its head fit (0.82) is not a gross failure.
