@@ -103,7 +103,12 @@ TEMPLATE_PLACEMENT = ("cx", "cy", "r", "rotation_deg")
 # only S58-17 (0.697, 1.000 -> 0.972) loses. A rule-based head that fails the gross head
 # check (HEAD_FIT_MIN, HEAD_SILHOUETTE_MIN) is replaced whatever the partition (gross_failure),
 # and the library head is then flagged.
-TEMPLATE_MIN_PARTITION = 0.54
+# H9 (new-image case is the headline): re-derived on the leave-one-out rows (grid 0.40-0.70
+# x gain 0-0.04 x override gain 0.05-0.20 x override partition 0.20-0.40, docs/pipeline.md
+# H9): 0.40 raises the LOO head IoU 0.8476 -> 0.8488 (S1-15B, S69-19 draw a library head)
+# with the same color losers, no shape losers and no new unflagged library head; the
+# other three constants stay (their best values equal the current ones or add losers).
+TEMPLATE_MIN_PARTITION = 0.40
 # Fix round 4: the override needs the library head's outline to win by
 # TEMPLATE_OVERRIDE_GAIN (head_fit silhouette over the rule-based head's) and its
 # tail-mapped partition to reach TEMPLATE_OVERRIDE_PARTITION; otherwise the rule-based head
