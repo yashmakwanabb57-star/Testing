@@ -79,7 +79,7 @@ TEMPLATE_FLAG_SCORE = FLAG_BELOW
 # unflagged while its color is not right (0.890).
 TEMPLATE_DIFFERS_IOU = 0.8
 TEMPLATE_DIFFERS_WARNING = ("The library head and the rule-based head differ a lot (outline overlap {iou:.0%}) - "
-                            "compare the head with the photo and use the head toggle if the other one is closer.")
+                            "compare the head with the photo and pick another head on the head card if one is closer.")
 TEMPLATE_PART_ID = "template"
 # Library heads offered on the head card (fix round 4): the matcher's TEMPLATE_CANDIDATES best
 # templates; the first is the decision rule's, the others wait in alternatives (ids
@@ -108,7 +108,7 @@ TEMPLATE_OVERRIDE_GAIN = 0.10
 TEMPLATE_OVERRIDE_PARTITION = 0.30
 TEMPLATE_COLORS_WARNING = ("The library head {tid} fits the head outline better, but its colors do not agree "
                            "with the photo under the tail colors - the rule-based head is drawn; compare the head "
-                           "with the photo and use the head toggle if the library head is closer.")
+                           "with the photo and pick a library head on the head card if one is closer.")
 
 
 @dataclass
