@@ -2,7 +2,7 @@
 
 Photo in, configurator SVG out (`rosette/pipeline.py`):
 
-1. `prepare` (rosette/vision/prepare.py) - decode, normalize to 1200 px, foreground mask, symmetry axis, head circle, head/tails split.
+1. `prepare` (rosette/vision/prepare.py) - decode, normalize to 1200 px, foreground mask, symmetry axis, head circle (90-degree symmetry, replaced by a fit to the silhouette when that is much larger: H10), head/tails split.
 2. `pixel_groups` (rosette/vision/colors.py) - per-pixel color groups with pattern texture; a cluster hiding two similar stripe colors is split (`_split_stripes`; stripe edges are counted across a third stripe between them); small blobs are absorbed as motifs unless they form an even ring around the head center (star tips, `parts_common.blob_rings`); print on a center badge whose shape is not a disc or ring joins the badge's group (H3, below).
 3. `detect_parts` (rosette/vision/parts.py) - head, rings (grown outward while their label still covers >= 60 % of the circle), points (from rotational symmetry, or from an even ring of blobs when that is weak; bows are loop blocks widening from `inner_ratio`), center, tail stripes (stripe shares fitted separately at the top and bottom edge: `stripes`, `stripes_bottom`), pleated inner layers without rotational symmetry as rings (H3, below), leftovers as `unknown`.
 4. Model - groups no part uses are dropped (ids kept); rose on iff a center part exists.
@@ -473,6 +473,57 @@ The only gain without new losers (partition 0.40) comes from two photos, S1-15B 
 
 **Scoreboard (34 IDs, `tools/score.py`, after H9).** New image (headline): PASS 23/34, color agreement 0.854, shape 0.920, head 0.844. Known design (full library): PASS 23/34, color 0.859, shape 0.921, head 0.847. Before H9 (new image / known): PASS 22/34 / 23/34, color 0.852 / 0.857, shape 0.920 / 0.922, head 0.846 / 0.851.
 
+## H10: the head circle fitted to the silhouette
+
+Started at eefda96; commits bed7e0f (the fit), 63879fb (head library rebuilt), 704b6d8 (sample). Full notes: `.superpowers/sdd/2026-11-05-rosette-svg-generator/h10-report.md`.
+
+**The fit (`prepare._tails_start`, `_fit_head`, `_coverage`).** (1) Tails start: the silhouette's outer left and right edges are followed upward from 0.7 of the mask height (`TAILS_TRACK_FROM`); each row is predicted by lines fitted to 60 rows starting 40 rows below it (`TAILS_FIT_ROWS`, `TAILS_GAP_ROWS`; on the 76 photos' tails such a prediction misses by at most 2.2 px, median 1.0, and the edges slope at most 0.27 px per row). The first row whose left or right edge is more than 6 px off on 3 consecutive rows (`TAILS_EDGE_TOL`, `TAILS_RUN_ROWS`) ends the tails, outward (head or star arms wider than the tails) or inward (tails wider than the head). (2) Head silhouette: the mask above that row. (3) Its convex hull bridges a star's concavities, so the hull vertices are the tips; vertices within 3 % of the head height of the cut are dropped (`FIT_CUT_MARGIN`). A circle centered on the axis is voted: each vertex weighs half the angle to its neighbours (each gap capped at 15 degrees, `FIT_GAP_CAP_DEG`, so a long loop is one weak vertex), each candidate center row takes the radius whose 4 % band (`FIT_TOL`) collects the most angle, then least squares on the inliers. (4) The radius is the fit's radius. Coverage is the angle spanned by consecutive on-circle vertices (gaps counted up to 60 degrees, `FIT_COVER_GAP_DEG`). (5) The fitted circle replaces the 90-degree symmetry circle only when its radius is at least 1.25 times the symmetry radius (`FIT_TAKEOVER`) and its coverage is at least 0.5 (`FIT_MIN_COVERAGE`): the symmetry score has locked onto an inner structure. On the 76 photos that is S29-15, S9-19, S10-19 and S57-17 (ratios 1.31-1.37, coverage 0.67-0.93); the next ratios are 1.19 (s34-15, a broken fit through a 6-point star's arms, coverage 0.31) and 1.12. The tails top stays the bottom of the circle.
+
+**Tried and dropped.** (a) The fit on every photo (a full replacement): (every photo) had mean error 12.1 against the reference circles (old 9.2) and broke on 6-point stars and bows (s34-15 +44, S80-22 +16, S36-15 +37); hence the takeover rule. (b) Badge refinement: a concentric-edge center finder (radial gradient coverage on circles around candidate centers on the axis, radius at least 25 units, found without the head circle) lands on the badge for many photos but picks small spurious circles elsewhere (mean error 14.7, S63-17 +104, S52-19 -91), and no coverage or peak-margin threshold separated right from wrong.
+
+**Error against the reference circles (76 photos, units of the rosette height 800).** T1 is the H9 truth: `drawn_frame` of each reference file (the old symmetry rule on its render, frozen before this change; no file has `st_circel` centers). T2 is the center of the reference file's own centered `<circle>` elements (61 files have one; center only).
+
+| | cy mean / worst (T1) | r mean / worst (T1) | cy mean (T2, 61) |
+|---|---|---|---|
+| before (symmetry) | 9.23 / 29.2 (A3-15) | 9.23 / 29.2 | 8.67 |
+| after (bed7e0f) | 9.64 / 42.0 (S57-17) | 9.70 / 43.5 | 8.67 |
+| after, S57-17 left out | 9.21 / 29.2 | 9.25 / 29.2 | - |
+
+| photo (all 4 that moved) | cy err T1 | r err T1 | cy err T2 | tails top |
+|---|---|---|---|---|
+| S57-17 | +5.7 -> +42.0 | +5.7 -> +43.5 | -27.4 -> +8.9 | 232 -> 306 |
+| S29-15 | -27.5 -> +9.5 | -27.5 -> +11.8 | - | 215 -> 291 |
+| S10-19 | -13.5 -> +21.0 | -13.5 -> +22.0 | -11.9 -> +22.6 | 228 -> 298 |
+| S9-19 | -15.6 -> +21.6 | -15.6 -> +21.0 | -14.7 -> +22.5 | 222 -> 296 |
+
+Every other photo, S35-19 and A7-15 included, keeps its circle exactly. On the overlays the four new circles sit on the badge and around the whole head, the old ones high and small (S9-19 and S10-19: the reference files draw the head smaller relative to the tails, so both truths read the right photo circle as low). S57-17's T1 is wrong: the old rule puts the reference's center at the top of its rose (110.0), the file's own circle is at 143.1, and the new prepare run on that reference render gives 143.1. **Gate:** S29-15 within 15 units of its badge and radius (center (292.9, 216.8) px against the badge at about (290, 212); r 216.1 px against 190-210); S35-19 and A7-15 unchanged; no photo worse by more than 10 against T1 except S57-17 (+36.3, a T1 error by T2 and by eye), and the T1 mean goes 9.23 -> 9.64 only through S57-17 (9.27 -> 9.21 without it). Ruling: accepted; S57-17 is judged by the overlay and its file's own circle.
+
+**Reference frames.** `frame_for` runs `prepare` on reference renders, so the change reaches the scorer's role frames and a rebuilt head library: on the 76 renders only S57-17's frame moves (to its own circle, 110.0 -> 143.1); S80-22's render had a ratio 1.31 fit that the coverage bar (0.29) refuses. The head library was rebuilt with this prepare (63879fb): only the S57-17 template changes (normalized on its file circle now). `tests/test_head_templates.py::test_library_cache_is_not_stale_for_a_file_whose_head_circle_prepare_fits` re-extracts S57-17 and compares it with the cache (it fails on the library built before H10).
+
+**Knock-on (S29-15, S35-19, A7-15 and the four that moved; rebuilt library).**
+
+| photo | circle canvas (cx, cy, r) | tails top canvas | rules head layer | own rank (full library) | top-1 full / LOO (score, pose dy, scale) | drawn known / LOO |
+|---|---|---|---|---|---|---|
+| S29-15 | (300, 132.4, 107.4) -> (300, 169.5, 146.8) | 240.3 -> 316.3 | none -> points, ring | 9 -> 6 | S58-17 0.714 dy +0.1 x1.25 -> S58-17 0.751 dy -0.1 x1.0 (both) | S58-17 / S58-17 (unchanged) |
+| S57-17 | (300, 140.7, 115.7) -> (300, 177.0, 153.5) | 257.0 -> 330.7 | yes -> yes | 1 -> not ranked | S57-17 0.810 / S29-15 0.624 -> S52-19 0.604 / S52-19 0.604 | S57-17 / rules -> rules / rules |
+| S9-19 | (300, 135.8, 110.8) -> (300, 172.9, 147.4) | 247.1 -> 320.8 | none -> points | not ranked -> 1 | S1-15B 0.707 dy +0.3 x1.25 -> S9-19 0.869 / S4-15 0.831 | S1-15B / S1-15B -> rules / rules |
+| S10-19 | (300, 139.0, 114.0) -> (300, 173.4, 149.4) | 253.5 -> 322.9 | none -> points | 1 -> not ranked | S10-19 0.734 dy +0.3 x1.25 / A13-15B 0.664 -> S58-17 0.624 / S58-17 0.624 | S10-19 / A13-15B -> rules / rules |
+| S35-19, A7-15 | unchanged | unchanged | unchanged | unchanged | unchanged | unchanged |
+
+The tails of S29-15 now start under the star and the pose search no longer runs to its edge. S57-17 and S10-19 lose their own templates to the lobe gate, not to the score: at the new circle their own templates score 0.839 and 0.719 (S57-17's would be top-1), but the photo's outer profile now has 11.8 and 6.7 lobes (the bunting loops and side flags inside the larger window) against 0 for the templates, beyond `LOBE_GATE`.
+
+**Retrieval (76 photos; own design in the matcher's full-library top-1 / top-3; head IoU of the LOO and full-library picks through `tools/head_templates.decision_row`, every template drawn).**
+
+| | top-1 | top-3 | LOO head IoU | full head IoU |
+|---|---|---|---|---|
+| before H10 (eefda96) | 49 | 57 | 0.8363 | 0.8517 |
+| bed7e0f, old library | 48 | 56 | 0.8340 | 0.8492 |
+| bed7e0f, rebuilt library | 48 | 56 | 0.8340 | 0.8492 |
+
+All four numbers are worse than before H10 (top-1 -1, top-3 -1, LOO -0.0022, full -0.0025), and the rebuild changes none of them. The changes come from the four photos that moved: S9-19 gains its own design (top-1), S57-17 and S10-19 lose theirs (lobe gate), and the head IoU against the reference files drops on all four (S29-15 0.815 -> 0.740, S57-17 0.825 -> 0.797, S10-19 0.780 -> 0.746, S9-19 0.790 -> 0.756 LOO) because the heads are now drawn at the photo's head size while the reference files draw them smaller relative to the tails; the rules heads of S57-17 (0.613 -> 0.786) and S10-19 (0.726 -> 0.768) improve.
+
+**Scoreboard (34 IDs, `tools/score.py`, after H10 with the rebuilt library).** New image (headline): PASS 23/34, color 0.852, shape 0.919, head 0.842 (before 0.854 / 0.920 / 0.844). Known design: PASS 23/34, color 0.856, shape 0.920, head 0.844 (before 0.859 / 0.921 / 0.847). Only S29-15 (agree 0.265 -> 0.221, headS 0.815 -> 0.740) and S10-19 (0.950 -> 0.942, headS 0.780 -> 0.768; known 0.987 -> 0.942) change; the rebuilt library changes no row. Ruling: the head drop is a reference-proportion artifact (the S29-15 head is now centered on the photo's head and sized to it).
+
 ## Final state (Task 16)
 
 ### Stages, modules and tuning constants
@@ -481,7 +532,7 @@ Constants are module-level names; read their comments in the source before chang
 
 | Stage | Module | Tuning constants |
 |---|---|---|
-| prepare: decode, 1200 px, mask, axis, head circle | `rosette/vision/prepare.py` | `WORK_HEIGHT`, `CANVAS_SPAN`, `ALPHA_CUTOFF`, `MIN_DELTA_E`, `NOISE_FACTOR`, `MAX_BG_NOISE`, `OPEN_PX`, `CLOSE_PX`, `MIN_AREA_FRAC`, `MAX_AREA_FRAC`, `AXIS_SEARCH_FRAC`, `HEAD_PROFILE_FRAC`, `HEAD_RING_MARGIN` |
+| prepare: decode, 1200 px, mask, axis, head circle | `rosette/vision/prepare.py` | `WORK_HEIGHT`, `CANVAS_SPAN`, `ALPHA_CUTOFF`, `MIN_DELTA_E`, `NOISE_FACTOR`, `MAX_BG_NOISE`, `OPEN_PX`, `CLOSE_PX`, `MIN_AREA_FRAC`, `MAX_AREA_FRAC`, `AXIS_SEARCH_FRAC`, `HEAD_PROFILE_FRAC`, `HEAD_RING_MARGIN`, H10: `TAILS_TRACK_FROM`, `TAILS_FIT_ROWS`, `TAILS_GAP_ROWS`, `TAILS_EDGE_TOL`, `TAILS_RUN_ROWS`, `FIT_CUT_MARGIN`, `FIT_GAP_CAP_DEG`, `FIT_TOL`, `FIT_COVER_GAP_DEG`, `FIT_TAKEOVER`, `FIT_MIN_COVERAGE` |
 | color groups, stripe split, motif absorption, mixed-texture warning | `rosette/vision/colors.py` | `L_WEIGHT`, `SMOOTH_UNITS`, `FLAT_PCT`, `GRAIN_WEIGHT`, `SAMPLE_N`, `MIN_CENTER_SEP`, `PRINT_MAX_FRAC`, `TEXTURE_WIN_UNITS`, `PATTERN_T`, `MIXED_PATTERN_SHARE`, `BADGE_IN_HEAD`, `BADGE_MAX_AREA`, `BADGE_EDGE`, `BADGE_UNSURE`, `BADGE_ENCLOSED`, `BADGE_SHAPE_MIN`, `SEED` |
 | part detection driver, leftovers as `unknown` | `rosette/vision/parts.py` | `LEFTOVER_OPEN_UNITS`, `TAIL_TOUCH_PX`, `HEAD_MARGIN`, `UNKNOWN_CONFIDENCE` |
 | head: rings, points, bows, center, blob rings | `rosette/vision/parts_head.py`, `parts_common.py` | `RING_EXTEND_COV`, `FULL_COV`, `MIN_BAND_UNITS`, `MIN_LAYER_COV`, `MAX_COUNT`, `BOW_ENDS`, `PETAL_FULLNESS`, `BLOB_UNCONFIRMED_CONF`, `MIN_INNER_RATIO`, `HEAD_ROUND`, `PINKED_DEPTH`, `RING_MAX_GAP`, `PLEATED_FULL_MIN`, `PLEATED_REACH_UNITS` |
@@ -502,9 +553,9 @@ Every generated file must satisfy section 3 of the [design spec](superpowers/spe
 
 `app/main.py` (FastAPI, started with `run.bat` or uvicorn on 127.0.0.1:8765) serves `app/static`. **Workbench** shows the photo, the detected model, the solid and pattern previews, edit controls and the flagged items on one screen. **Guided** walks through the same state one question at a time (`guided.js`); switching modes keeps the state. Edits go back through `render`, so the validator runs after every change.
 
-### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H9)
+### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H10)
 
-Re-recorded after H9 (09e0555): the columns are the new-image case (each photo's own design left out of the head library, the headline); the last column is the known design (full library) agree / success / headS. `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only).
+Re-recorded after H10 (63879fb): the columns are the new-image case (each photo's own design left out of the head library, the headline); the last column is the known design (full library) agree / success / headS. `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only).
 
 | ID | agree | uni | success | uni success | shape | headS | stack reversed | known design agree / success / headS |
 |---|---|---|---|---|---|---|---|---|
@@ -514,13 +565,13 @@ Re-recorded after H9 (09e0555): the columns are the new-image case (each photo's
 | A15-17 | 0.968 | 0.963 | yes | yes | 0.965 | 0.957 | 0 | 0.968 / yes / 0.957 |
 | A16-17 | 0.837 | 0.926 | no | yes | 0.895 | 0.830 | 0 | 0.837 / no / 0.830 |
 | A9-15B | 1.000 | 1.000 | yes | yes | 0.939 | 0.828 | 0 | 1.000 / yes / 0.828 |
-| S10-19 | 0.950 | 0.950 | yes | yes | 0.902 | 0.780 | 0 | 0.987 / yes / 0.812 |
+| S10-19 | 0.942 | 0.955 | yes | yes | 0.900 | 0.768 | 0 | 0.942 / yes / 0.768 |
 | S13-15 | 0.894 | 0.894 | no | no | 0.962 | 0.928 | 0 | 0.894 / no / 0.928 |
 | S17-15 | 0.599 | 0.843 | no | no | 0.886 | 0.730 | 0 | 0.669 / no / 0.738 |
 | S2-15B | 0.687 | 0.687 | no | no | 0.945 | 0.853 | 0 | 0.687 / no / 0.920 |
 | S26-15 | 0.800 | 0.985 | no | yes | 0.933 | 0.856 | 0 | 0.800 / no / 0.856 |
 | S28-15 | 0.998 | 0.995 | yes | yes | 0.980 | 0.964 | 1 (star>loop) | 0.998 / yes / 0.964 |
-| S29-15 | 0.265 | 0.254 | no | no | 0.931 | 0.815 | 0 | 0.265 / no / 0.815 |
+| S29-15 | 0.221 | 0.265 | no | no | 0.904 | 0.740 | 0 | 0.221 / no / 0.740 |
 | S30-15 | 0.907 | 0.907 | yes | yes | 0.963 | 0.934 | 0 | 0.983 / yes / 0.944 |
 | S31-15 | 0.929 | 0.966 | yes | yes | 0.929 | 0.838 | 0 | 0.929 / yes / 0.838 |
 | S33-15 | 0.905 | 0.905 | yes | yes | 0.955 | 0.890 | 0 | 0.905 / yes / 0.890 |
@@ -543,7 +594,7 @@ Re-recorded after H9 (09e0555): the columns are the new-image case (each photo's
 | S80-22 | 0.989 | 1.000 | yes | yes | 0.934 | 0.878 | 0 | 0.989 / yes / 0.878 |
 | s34-15 | 0.956 | 0.951 | yes | yes | 0.928 | 0.844 | 1 (backing>star) | 0.956 / yes / 0.844 |
 
-Official (per-axis), tools/score.py summary: new image `success 23  flagged-not-success 10  silently-wrong 1  errors 0` / `PASS 23/34 (target >= 80%)` / `color agreement mean 0.854  shape: mean IoU 0.920  head 0.844  tail 0.955  shape_ok 27/34`; known design (reported only) `PASS 23/34`, color 0.859, shape 0.921, head 0.847, shape_ok 27/34; `stacking: 3 kind pairs reversed vs the designer in 3/34 IDs (reported only)` / `success under uniform-scale alignment 25/34` (reported only).
+Official (per-axis), tools/score.py summary: new image `success 23  flagged-not-success 10  silently-wrong 1  errors 0` / `PASS 23/34 (target >= 80%)` / `color agreement mean 0.852  shape: mean IoU 0.919  head 0.842  tail 0.955  shape_ok 27/34`; known design (reported only) `PASS 23/34`, color 0.856, shape 0.920, head 0.844, shape_ok 27/34; `stacking: 3 kind pairs reversed vs the designer in 3/34 IDs (reported only)` / `success under uniform-scale alignment 25/34` (reported only).
 
 Flagged although correct: 21 of the 23 successes; S28-15 and S43-15 are unflagged successes with visibly wrong heads (see 5b). S46-15 is silent again: its head fit (0.82 agreement, 0.94 outline) is not a gross failure; its miss is the scorer alignment effect described below.
 
@@ -551,7 +602,7 @@ Over all 76 reference photos (scratch `compare_all.py`, match >= 0.9 and no issu
 
 ### Sample outputs
 
-`output/s35-19.svg` and `output/s46-15.svg` were regenerated for H2 (and regenerated again for H3: byte-identical, so unchanged) from `reference/photos/S35-19.png` and `reference/photos/S46-15.png` with `rosette.pipeline.analyze` + `render`, the same code path the UI uses, and checked with `rosette.validate.validate` (both return `[]`). Regenerated again for H5 (pointed tail tops, visible-edge line art; both validate to `[]`), for H6 (`s35-19.svg` changed: its two tail slivers are merged; `s46-15.svg` byte-identical; both validate to `[]`) and for H7 (`s35-19.svg` changed: its head is the S35-19 library template, match 0.68; `s46-15.svg` byte-identical; both validate to `[]`), for H7 fix round 2 (`s35-19.svg` back to the rule-based head) and for fix round 3 (`s35-19.svg` drawn with its own S35-19 library template again, partition 0.68 over the 0.54 floor; `s46-15.svg` byte-identical; both validate to `[]`); for fix round 4 both are byte-identical and validate to `[]`. They are the tool's unedited output, not confirmed by a person.
+`output/s35-19.svg` and `output/s46-15.svg` were regenerated for H2 (and regenerated again for H3: byte-identical, so unchanged) from `reference/photos/S35-19.png` and `reference/photos/S46-15.png` with `rosette.pipeline.analyze` + `render`, the same code path the UI uses, and checked with `rosette.validate.validate` (both return `[]`). Regenerated again for H5 (pointed tail tops, visible-edge line art; both validate to `[]`), for H6 (`s35-19.svg` changed: its two tail slivers are merged; `s46-15.svg` byte-identical; both validate to `[]`) and for H7 (`s35-19.svg` changed: its head is the S35-19 library template, match 0.68; `s46-15.svg` byte-identical; both validate to `[]`), for H7 fix round 2 (`s35-19.svg` back to the rule-based head) and for fix round 3 (`s35-19.svg` drawn with its own S35-19 library template again, partition 0.68 over the 0.54 floor; `s46-15.svg` byte-identical; both validate to `[]`); for fix round 4 both are byte-identical and validate to `[]`. For H10 (704b6d8) `s35-19.svg` was regenerated after the H9 pose fix 5cb11e6 (H10 and the rebuilt library leave it unchanged); `s46-15.svg` is byte-identical; both validate to `[]`. They are the tool's unedited output, not confirmed by a person.
 
 | Output | Flagged | Flagged items | Warnings |
 |---|---|---|---|
