@@ -5,7 +5,8 @@ import pytest
 
 from rosette.model import ColorGroup, RosetteModel
 from rosette.vision.templates import (GRID, Piece, Template, choose, design_key, extract_template, features,
-                                      from_json, partition, photo_grid, raster, relabel_map, to_json)
+                                      from_json, partition, photo_grid, raster, relabel_map, tail_consistent_mapping,
+                                      to_json)
 
 
 def test_design_key_groups_variants_and_sizes():
@@ -80,8 +81,29 @@ def test_choose_picks_the_matching_head_and_leave_one_out_skips_its_design():
     photo = np.where(star.grid == 1, 4, np.where(star.grid == 2, 9, -1)).astype(np.int16)
     t, f = choose(photo, [disc, star])
     assert t.sid == "B2-15" and f["mapping"] == {1: 4, 2: 9} and f["score"] > 0.9
-    t2, _ = choose(photo, [disc, star], exclude_key="B2")
+    t2, _ = choose(photo, [disc, star], exclude_key="B2", gate=None)
     assert t2.sid == "A1-15"
+    # the lobe gate: a disc is never chosen for a star photo
+    assert choose(photo, [disc, star], exclude_key="B2") is None
+
+
+def test_head_color_count_feeds_the_score():
+    one = _template("C1-15", [(1, "head", [_circle(1.0)])])
+    two = _template("C2-15", [(1, "head", [_circle(1.0)]), (2, "center", [_circle(0.5)])])
+    photo = np.where(two.grid == 1, 4, np.where(two.grid == 2, 9, -1)).astype(np.int16)
+    f1, f2 = features(photo, one.grid, (0, 0, 0, 0, 1)), features(photo, two.grid, (0, 0, 0, 0, 1))
+    assert (f1["colors_photo"], f1["colors_template"], f2["colors_template"]) == (2, 1, 2)
+    assert f2["score"] > f1["score"]
+
+
+def test_tail_categories_map_to_the_tail_groups_and_head_only_ones_by_overlap():
+    t = Template("D1-15", "D1", [Piece(1, "head", [_circle(1.0)]), Piece(3, "center", [_circle(0.4)])],
+                 tail_categories=(1, 2))
+    # photo: group 5 disc, group 8 center; our tails carry Color 1 as group 7
+    photo = np.where(t.grid == 1, 5, np.where(t.grid == 3, 8, -1)).astype(np.int16)
+    assert tail_consistent_mapping(photo, t, {1: 7, 2: 6}) == {1: 7, 3: 8}
+    # the reference's tail Color 1 has no tail group of Color 1 here: inconsistent
+    assert tail_consistent_mapping(photo, t, {2: 6, 3: 8}) is None
 
 
 SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 850">

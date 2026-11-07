@@ -43,9 +43,18 @@ GRID, EXTENT = 128, 1.9
 WINDOW_V = 0.55
 # Roles of reference pieces that belong to the head (everything but tail stripes).
 HEAD_ROLES = ("head", "ring", "points", "center", "unknown")
-# Feature weights (partition, iou, profile, lobes) and scales of the template score.
-WEIGHTS = (1.0, 0.0, 0.0, 0.0)
+# Feature weights (partition, iou, profile, lobes, colors) and scales of the template
+# score (H7 fix round 1: chosen on own-design retrieval over the 76 photos, docs/pipeline.md).
+WEIGHTS = (0.4, 0.3, 0.2, 0.1, 0.1)
 PROFILE_SCALE, LOBE_SCALE = 0.4, 2.0
+# Lobe gate: a template whose outer-profile lobe count (per 360 deg) differs from the
+# photo's by more than LOBE_GATE is not considered (a disc for a star photo). The count
+# moves in steps of about 1.68 (one peak over the window's arc); the photo's own design
+# differs by at most one step for 61 of 76 photos and by at most two (3.36) for 68.
+LOBE_GATE = 3.4
+# A color group (photo) or category (template) counts as a head color when it holds at
+# least COLOR_MIN_SHARE of the window's foreground.
+COLOR_MIN_SHARE = 0.05
 # Rays sampled for the outer radius profile, and radial samples per ray.
 N_RAYS, N_RHO = 180, 96
 # Library files that are not products (unknown provenance / layout test).
@@ -79,6 +88,8 @@ class Template:
     key: str
     pieces: list[Piece]  # paint order
     grid: np.ndarray = field(default=None, repr=False)  # (GRID, GRID) uint8 category 0..4
+    tail_categories: tuple[int, ...] = ()  # the reference's tail stripe Colors
+    points: int = 0  # the reference's points count (tools/truth), 0 without points
 
     def __post_init__(self):
         if self.grid is None:
@@ -153,17 +164,20 @@ def extract_template(sid: str, svg: str, height: int = EXTRACT_H) -> Template:
     f, items = classify_components(svg, height)
     cx, cy, r = f.head
     pieces = []
+    tails = set()
     for el, role, m in items:
         if role in HEAD_ROLES:
             rings = mask_rings(m, cx, cy, r)
             if rings:
                 pieces.append(Piece(category(el), role, rings))
-    return Template(sid, design_key(sid), pieces)
+        elif role == "tail_stripe":
+            tails.add(category(el))
+    return Template(sid, design_key(sid), pieces, tail_categories=tuple(sorted(tails)))
 
 
 def to_json(templates: list[Template]) -> dict:
     return {"grid": GRID, "extent": EXTENT, "templates": [
-        {"id": t.sid, "pieces": [{"category": p.category, "role": p.role,
+        {"id": t.sid, "tail_categories": list(t.tail_categories), "points": t.points, "pieces": [{"category": p.category, "role": p.role,
                                   "rings": [ring.reshape(-1).tolist() for ring in p.rings]}
                                  for p in t.pieces]} for t in templates]}
 
@@ -172,13 +186,20 @@ def from_json(d: dict) -> list[Template]:
     return [Template(t["id"], design_key(t["id"]),
                      [Piece(int(p["category"]), p["role"],
                             [np.asarray(ring, float).reshape(-1, 2) for ring in p["rings"]])
-                      for p in t["pieces"]]) for t in d["templates"]]
+                      for p in t["pieces"]], tail_categories=tuple(t.get("tail_categories", ())),
+                     points=int(t.get("points", 0))) for t in d["templates"]]
 
 
 def build_library(svg_dir: Path, path: Path = LIBRARY_PATH) -> list[Template]:
     """Extract every product reference file of svg_dir and write the library cache."""
-    lib = [extract_template(p.stem, p.read_text(encoding="utf-8"))
-           for p in sorted(svg_dir.glob("*.svg")) if p.stem not in NOT_PRODUCTS]
+    from tools.truth import truth_from_svg  # development step: the points count of each file
+
+    lib = []
+    for p in sorted(svg_dir.glob("*.svg")):
+        if p.stem not in NOT_PRODUCTS:
+            t = extract_template(p.stem, p.read_text(encoding="utf-8"))
+            t.points = int(truth_from_svg(p.stem)["points"])
+            lib.append(t)
     path.write_text(json.dumps(to_json(lib), separators=(",", ":")), encoding="utf-8", newline="\n")
     load_library.cache_clear()
     return lib
@@ -245,9 +266,20 @@ def partition(labels: np.ndarray, tgrid: np.ndarray) -> tuple[float, dict[int, i
     return float(((mapped == labels) & union).sum() / union.sum()), mapping
 
 
+def head_colors(values: np.ndarray, background) -> int:
+    """Distinct labels holding at least COLOR_MIN_SHARE of the window's foreground."""
+    sel = _WIN & (values != background) if background == 0 else _WIN & (values > background)
+    if not sel.any():
+        return 0
+    _, counts = np.unique(values[sel], return_counts=True)
+    return int((counts >= COLOR_MIN_SHARE * sel.sum()).sum())
+
+
 def features(labels: np.ndarray, tgrid: np.ndarray, weights=None) -> dict:
     """Feature values, the weighted score and the category -> label mapping."""
-    wp, wi, wf, wl = WEIGHTS if weights is None else weights
+    w = WEIGHTS if weights is None else weights
+    wp, wi, wf, wl = w[:4]
+    wc = w[4] if len(w) > 4 else 0.0
     pf, tf = (labels >= 0) & _WIN, (tgrid > 0) & _WIN
     union = (pf | tf).sum()
     iou = float((pf & tf).sum() / union) if union else 0.0
@@ -257,20 +289,25 @@ def features(labels: np.ndarray, tgrid: np.ndarray, weights=None) -> dict:
     part, mapping = partition(labels, tgrid)
     lp, lt = lobes(rp, arc), lobes(rt, arc)
     prof = float(np.abs(rp - rt).mean())
+    cp, ct = head_colors(labels, -1), head_colors(tgrid, 0)
     total = (wp * part + wi * iou + wf * (1 - min(1.0, prof / PROFILE_SCALE))
-             + wl * math.exp(-abs(lp - lt) / LOBE_SCALE))
+             + wl * math.exp(-abs(lp - lt) / LOBE_SCALE) + wc * math.exp(-abs(cp - ct)))
     return dict(score=total, partition=part, iou=iou, profile=prof, lobes_photo=lp, lobes_template=lt,
-                mapping=mapping)
+                colors_photo=cp, colors_template=ct, mapping=mapping)
 
 
-def choose(labels: np.ndarray, lib, exclude_key: str | None = None, weights=None) -> tuple[Template, dict] | None:
-    """Best-scoring template (and its features) for the photo grid labels; templates of
-    exclude_key (a design_key) are skipped (leave-one-out evaluation)."""
+def choose(labels: np.ndarray, lib, exclude_key: str | None = None, weights=None,
+           gate: float | None = LOBE_GATE) -> tuple[Template, dict] | None:
+    """Best-scoring template (and its features) for the photo grid labels among those
+    passing the lobe gate (LOBE_GATE; None: no gate), or None; templates of exclude_key
+    (a design_key) are skipped (leave-one-out evaluation)."""
     best = None
     for t in lib:
         if exclude_key is not None and t.key == exclude_key:
             continue
         f = features(labels, t.grid, weights)
+        if gate is not None and abs(f["lobes_photo"] - f["lobes_template"]) > gate + 1e-6:
+            continue
         if best is None or f["score"] > best[1]["score"]:
             best = (t, f)
     return best
@@ -302,4 +339,40 @@ def relabel_map(model, groups, merged: dict[int, int] | None = None) -> dict[int
             continue
         near = min(have.values(), key=lambda h: sum((int(a) - int(b)) ** 2 for a, b in zip(g.rgb, h.rgb)))
         out[int(g.id)] = int(near.id)
+    return out
+
+
+def tail_consistent_mapping(labels: np.ndarray, t: Template, tail_groups: dict[int, int]) -> dict[int, int] | None:
+    """Template category -> photo group that agrees with the tails (H7 fix round 1). A
+    category the reference also uses on its tails (its tail Color k) goes to the group
+    our tail stripes carry as Color k (tail_groups: Color -> group); only head-only
+    categories are mapped by overlap (Hungarian over the groups not taken by the tail
+    categories, then the most-overlapping group). None when a tail category of the head
+    has no tail group of that Color (the template cannot be colored consistently)."""
+    cats = [c for c in t.categories]
+    out: dict[int, int] = {}
+    for c in cats:
+        if c in t.tail_categories:
+            if c not in tail_groups:
+                return None
+            out[c] = int(tail_groups[c])
+    rest = [c for c in cats if c not in out]
+    if not rest:
+        return out
+    pf = (labels >= 0) & _WIN
+    groups = [int(g) for g in np.unique(labels[pf])]
+    if not groups:
+        groups = sorted(set(tail_groups.values()))
+        if not groups:
+            return None
+    ov = np.array([[float(((t.grid == c) & (labels == g) & _WIN).sum()) for g in groups] for c in rest])
+    free = [j for j, g in enumerate(groups) if g not in out.values()]
+    if free:
+        rows, cols = linear_sum_assignment(-ov[:, free])
+        for i, j in zip(rows, cols):
+            if ov[i, free[j]] > 0:
+                out[rest[i]] = groups[free[j]]
+    for i, c in enumerate(rest):
+        if c not in out:
+            out[c] = groups[int(ov[i].argmax())]
     return out
