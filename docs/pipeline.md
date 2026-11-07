@@ -294,6 +294,38 @@ Started at db5d68f. Full notes: `.superpowers/sdd/2026-11-05-rosette-svg-generat
 
 **Scoreboard** (34 IDs): `PASS 23/34` unchanged (24/34 between the glitter and fan commits); only A13-15B changes beyond 0.003 (S31-15 shape 0.932 -> 0.929, slivers merged). No ID loses more than 0.003 color or shape.
 
+## H7: head shape library (templates from the reference files)
+
+Started at 1339a24. Full notes: `.superpowers/sdd/2026-11-05-rosette-svg-generator/h7-report.md`. Seen on S29-15 (glitter loops behind a pink star behind two dark stars around a pleated ring): no head part, three placeholder blobs. Per-kind rules cannot build that; the references were made by copying shapes from similar files (`reference/generation-prompt.md`), and a library does the same deterministically.
+
+**Library** (`rosette/vision/templates.py`, cache `rosette/data/head_templates.json`, 1.4 MB). Every product reference file (77; TEST and D1 left out) gives a template: each non-tail color piece of the solid configuration (`rosette.roles.classify_components`, so the Layer_3 pattern twins are left out; the writer emits Color 2 twins itself) with its reference Color and classifier role, in document (paint) order, as polygons in head radii around the head circle `prepare` finds on the rendered file (rendered at 1800 px, contours simplified to 0.7 px, 3 decimals). `build_library(Path("reference/svg"))` rebuilds the cache (about 13 minutes). The prototype `tools/head_templates.py` is now the evaluation tool over this module.
+
+**Matcher.** Photo color groups (merged groups sent to their absorbing group, groups no part uses to the nearest model group in color) and each template are compared on a 128 x 128 grid of head radii, rows above 0.55 R below the center (the tails hide the rest). Features as in the prototype: partition agreement (Hungarian category -> group map), silhouette IoU, outer profile, lobe count. Weight sets, 76 photos (head agreement geo of the prototype, mean; LOO excludes the photo's design_key):
+
+| weights (partition, iou, profile, lobes) | rules geo | LOO geo | full geo | full picks own design |
+|---|---|---|---|---|
+| 0.4, 0.3, 0.2, 0.1 (prototype) | 0.814 | 0.776 | 0.889 | 41/76 |
+| **1, 0, 0, 0 (chosen)** | 0.814 | 0.819 | 0.893 | 43/76 |
+| 0.6, 0.2, 0.1, 0.1 | 0.814 | 0.786 | 0.892 | 44/76 |
+| 0.7, 0.1, 0.2, 0 | 0.814 | 0.802 | 0.895 | 44/76 |
+| 0.5, 0, 0.3, 0.2 | 0.814 | 0.777 | 0.882 | 40/76 |
+
+The rules improved since H1 (geo 0.758 -> 0.814), so the template alone barely beats them on this measure. A scale search (0.8-1.2 R) did not help (own design 39/76). On the gate measure (score.py head IoU, below) the prototype weights give LOO 0.8511 vs 0.8494 for partition-only, but lose layer IoU (-0.001 per photo) and S35-19 color (0.959 -> 0.867, it picks S30-15); partition-only was kept.
+
+**Template part** (`role: template`, id `template`): params `template_id`, `cx`, `cy`, `r` (the photo head circle in canvas units), `rotation_deg` (0: no rotation is measured), `score`, `group_1`..`group_4` (reference Color -> color group). Confidence = score, so a match under `FLAG_BELOW` 0.6 is flagged ("library head shape is a weak match"). `build` places piece i at z `TEMPLATE_Z` 10 + i, so the occlusion cuts stack the pieces exactly as the reference paints them whatever Colors they map to; tails stay ours and are cut to the outside of the template head (`_under_head`); a piece repeated later with the same outline is drawn once (the shop validator's `dup_geometry`). The rose sits on the template's center pieces (their reach), else on the detected center moved onto the template. The detected head parts stay in `RosetteModel.alternatives`; `pipeline.use_rules_head` and the UI's "Use the rule-based head instead" / "Use the library head instead" swap them.
+
+**Decision** (`pipeline.prefer_template`, `TEMPLATE_MIN_GAIN` 0.02). Measured per photo with `tools/head_templates.decision_row` (head IoU = `tools/score.py` head_iou, through `with_template`, `build` and the writer). The brief's rule, a threshold on the match score, does not work: the score does not predict which head is better (score bins 0.45-0.95 show gains of -0.02 to +0.14 with no trend; low scores are the hard photos where the rules fail too), and every threshold leaves the LOO mean between 0.830 and 0.841. What predicts it is the photo's own head fit: the template's `head_fit` silhouette IoU minus the rule-based head's (correlation 0.63 with the head IoU gain; the layer agreement difference only 0.35). Margin sweep (LOO mean head IoU / IDs losing more than 0.02 head IoU): -0.02 0.8460 / 13, 0 0.8491 / 4, **0.02 0.8494 / 1**, 0.04 0.8490 / 1, 0.10 0.8458 / 1. No score floor (`TEMPLATE_MIN_SCORE` 0).
+
+| 76 photos, head IoU (score.py) | rules | template always | decision rule |
+|---|---|---|---|
+| leave-one-out (honest for new designs) | 0.8299 | 0.8405 | **0.8494** (18 photos use the template) |
+| full library (production) | 0.8299 | 0.8542 | **0.8575** (24 photos) |
+| S29-15 | 0.699 | 0.865 (A1-15) | 0.865 (LOO and full) |
+
+Full-library effect on the 24 photos that switch (score.py compare and shape_compare, rules -> template), per 76 photos: color +0.0041, whole shape +0.0078, head +0.0276, layer +0.0074; color >= 0.9 on these 24: 14 -> 16. Losses over 0.02: color S17-15 0.687 -> 0.618, S36-15B 0.782 -> 0.713, S52-19 0.908 -> 0.879, S58-17 1.000 -> 0.972 (S29-15 and S11a-15 -0.020); whole shape S52-19 0.952 -> 0.924; head S52-19 0.850 -> 0.804, S56-17 0.883 -> 0.857.
+
+**Limitations.** The matcher picks the photo's own design for only 43 of 76 photos with the full library; S29-15 gets A1-15, a plain pinked disc around a center, not its layered stars (its own template scores 0.329 partition against 0.462: the photo's glitter and two pinks do not split the way the reference's Colors do). The head IoU rises because the disc covers the star outline better than the blobs did; the picture is a cleaner but simpler head. Template Colors reach the model only through the one-to-one category -> group map (a per-piece majority map was tried: color +0.003 instead of +0.004, not kept). Rotation and mirroring are not measured. The library is a 1.4 MB data file regenerated by hand when the references change.
+
 ## Final state (Task 16)
 
 ### Stages, modules and tuning constants
@@ -307,6 +339,7 @@ Constants are module-level names; read their comments in the source before chang
 | part detection driver, leftovers as `unknown` | `rosette/vision/parts.py` | `LEFTOVER_OPEN_UNITS`, `TAIL_TOUCH_PX`, `HEAD_MARGIN`, `UNKNOWN_CONFIDENCE` |
 | head: rings, points, bows, center, blob rings | `rosette/vision/parts_head.py`, `parts_common.py` | `RING_EXTEND_COV`, `FULL_COV`, `MIN_BAND_UNITS`, `MIN_LAYER_COV`, `MAX_COUNT`, `BOW_ENDS`, `PETAL_FULLNESS`, `BLOB_UNCONFIRMED_CONF`, `MIN_INNER_RATIO`, `HEAD_ROUND`, `PINKED_DEPTH`, `RING_MAX_GAP`, `PLEATED_FULL_MIN`, `PLEATED_REACH_UNITS` |
 | tail stripes, glitter read as two tones, fans (H6) | `rosette/vision/parts_tails.py` | `ROW_FRACS`, `COUNT_ROWS`, `DENSE_SPAN`, `GAP_UNITS`, `ROW_BAND_PX`, `TOP_INSET`, `GLITTER_*`, `FAN_*` |
+| head shape library and matcher (H7) | `rosette/vision/templates.py`, cache `rosette/data/head_templates.json`; decision in `rosette/pipeline.py` | `WEIGHTS`, `PROFILE_SCALE`, `LOBE_SCALE`, `WINDOW_V`, `GRID`, `EXTENT`, `TEMPLATE_MIN_GAIN`, `TEMPLATE_MIN_SCORE` |
 | tidy: unknown specks, tail slivers (H6) | `rosette/tidy.py` | `SPECK_MAX_HEAD_SHARE` (and `SLIVER_SHARE` from assign) |
 | Color 1-4 assignment, confidence, warnings | `rosette/assign.py`, `rosette/roles.py`, rules in `rosette/data/assign_rules.json` (mined by `tools/mine_rules.py`) | `FLAG_BELOW`, `MAX_COLORS`, `PATTERN_MIN_RIBBON_SHARE`, `TAIL_POS_TOL`, `FLAGGED_CONF`, `PATTERN_MERGE_PENALTY`, `SLIVER_SHARE`, `RULE_LOGODDS` |
 | geometry, shapes, occlusion cuts | `rosette/geometry/`, `rosette/shapes.py`, `rosette/build.py`, `rosette/geometry/clip.py` | `QUAD_SEGS`, `SIMPLIFY`, `MIN_PIECE` |
@@ -322,48 +355,48 @@ Every generated file must satisfy section 3 of the [design spec](superpowers/spe
 
 `app/main.py` (FastAPI, started with `run.bat` or uvicorn on 127.0.0.1:8765) serves `app/static`. **Workbench** shows the photo, the detected model, the solid and pattern previews, edit controls and the flagged items on one screen. **Guided** walks through the same state one question at a time (`guided.js`); switching modes keeps the state. Edits go back through `render`, so the validator runs after every change.
 
-### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H6)
+### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H7)
 
-Re-recorded after H6 (only A13-15B moved: agree 0.187, shape 0.924 -> 0.926, headS 0.962 -> 0.967; S31-15 shape 0.932 -> 0.929); the last column is the H5 start (e9ac42d). The H3-era table (agree before H3 at 476d07e) is in git history. `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only).
+Re-recorded after H7 (library heads); the last column is the H7 start (1339a24, the H6 table). The H5-start column is in git history. `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only). IDs drawn with a library head: S10-19, S17-15, S2-15B, S29-15, S30-15, S35-19, S40-15, S56-17B, S58-17 (their points count reads 0: the points are inside the template).
 
-| ID | agree | uni | success | uni success | shape | headS | stack reversed | before H5 (e9ac42d) agree / shape / headS |
+| ID | agree | uni | success | uni success | shape | headS | stack reversed | before H7 (1339a24) agree / shape / headS |
 |---|---|---|---|---|---|---|---|---|
 | A10-15B | 0.906 | 0.942 | yes | yes | 0.870 | 0.684 | 0 | 0.906 / 0.870 / 0.684 |
-| A13-15B | 0.187 | 0.187 | no | no | 0.926 | 0.967 | 1 (head>center) | 0.187 / 0.924 / 0.962 |
+| A13-15B | 0.187 | 0.187 | no | no | 0.929 | 0.967 | 1 (head>center) | 0.187 / 0.926 / 0.967 |
 | A14-17 | 0.949 | 0.949 | yes | yes | 0.957 | 0.963 | 0 | 0.949 / 0.957 / 0.963 |
 | A15-17 | 0.968 | 0.963 | yes | yes | 0.965 | 0.957 | 0 | 0.968 / 0.965 / 0.957 |
 | A16-17 | 0.837 | 0.926 | no | yes | 0.895 | 0.830 | 0 | 0.837 / 0.895 / 0.830 |
 | A9-15B | 1.000 | 1.000 | yes | yes | 0.939 | 0.828 | 0 | 1.000 / 0.939 / 0.828 |
-| S10-19 | 0.904 | 0.904 | yes | yes | 0.893 | 0.726 | 0 | 0.904 / 0.881 / 0.683 |
-| S13-15 | 0.894 | 0.894 | no | no | 0.961 | 0.926 | 0 | 0.894 / 0.961 / 0.926 |
-| S17-15 | 0.687 | 0.743 | no | no | 0.863 | 0.599 | 0 | 0.633 / 0.839 / 0.510 |
-| S2-15B | 0.687 | 0.687 | no | no | 0.934 | 0.815 | 0 | 0.687 / 0.917 / 0.760 |
+| S10-19 | 0.930 | 0.930 | yes | yes | 0.906 | 0.773 | 0 | 0.904 / 0.893 / 0.726 |
+| S13-15 | 0.894 | 0.894 | no | no | 0.962 | 0.928 | 0 | 0.894 / 0.961 / 0.926 |
+| S17-15 | 0.618 | 0.783 | no | no | 0.878 | 0.702 | 0 | 0.687 / 0.863 / 0.599 |
+| S2-15B | 0.687 | 0.687 | no | no | 0.962 | 0.907 | 0 | 0.687 / 0.934 / 0.815 |
 | S26-15 | 0.800 | 0.985 | no | yes | 0.933 | 0.856 | 0 | 0.800 / 0.933 / 0.856 |
-| S28-15 | 0.998 | 0.995 | yes | yes | 0.980 | 0.964 | 1 (star>loop) | 0.965 / 0.980 / 0.964 |
-| S29-15 | 0.257 | 0.229 | no | no | 0.897 | 0.699 | 0 | 0.247 / 0.883 / 0.650 |
-| S30-15 | 0.975 | 0.986 | yes | yes | 0.900 | 0.759 | 0 | 0.974 / 0.888 / 0.731 |
-| S31-15 | 0.929 | 0.966 | yes | yes | 0.929 | 0.838 | 0 | 0.929 / 0.932 / 0.840 |
-| S33-15 | 0.905 | 0.905 | yes | yes | 0.955 | 0.890 | 0 | 0.944 / 0.940 / 0.842 |
-| S35-19 | 0.959 | 0.954 | yes | yes | 0.900 | 0.768 | 0 | 0.959 / 0.895 / 0.752 |
+| S28-15 | 0.998 | 0.995 | yes | yes | 0.980 | 0.964 | 1 (star>loop) | 0.998 / 0.980 / 0.964 |
+| S29-15 | 0.237 | 0.237 | no | no | 0.944 | 0.865 | 0 | 0.257 / 0.897 / 0.699 |
+| S30-15 | 0.983 | 0.983 | yes | yes | 0.967 | 0.944 | 0 | 0.975 / 0.900 / 0.759 |
+| S31-15 | 0.929 | 0.966 | yes | yes | 0.929 | 0.838 | 0 | 0.929 / 0.929 / 0.838 |
+| S33-15 | 0.905 | 0.905 | yes | yes | 0.955 | 0.890 | 0 | 0.905 / 0.955 / 0.890 |
+| S35-19 | 0.944 | 0.950 | yes | yes | 0.914 | 0.811 | 0 | 0.959 / 0.900 / 0.768 |
 | S37-15 | 0.949 | 0.936 | yes | yes | 0.905 | 0.825 | 0 | 0.949 / 0.905 / 0.825 |
-| S40-15 | 0.890 | 0.882 | no | no | 0.883 | 0.763 | 0 | 0.890 / 0.883 / 0.763 |
+| S40-15 | 0.885 | 0.822 | no | no | 0.929 | 0.886 | 0 | 0.890 / 0.883 / 0.763 |
 | S41-15 | 0.925 | 0.932 | yes | yes | 0.906 | 0.914 | 0 | 0.925 / 0.906 / 0.914 |
 | S43-15 | 1.000 | 1.000 | yes | yes | 0.953 | 0.926 | 0 | 1.000 / 0.953 / 0.926 |
 | S45-15 | 0.935 | 0.935 | yes | yes | 0.926 | 0.809 | 0 | 0.935 / 0.926 / 0.809 |
 | S46-15 | 0.751 | 0.936 | no | yes | 0.835 | 0.660 | 0 | 0.751 / 0.835 / 0.660 |
-| S5-15 | 0.910 | 0.988 | yes | yes | 0.852 | 0.734 | 0 | 0.910 / 0.850 / 0.732 |
-| S53-19 | 0.513 | 0.513 | no | no | 0.763 | 0.814 | 0 | 0.513 / 0.762 / 0.809 |
-| S56-17B | 0.979 | 0.978 | yes | yes | 0.879 | 0.755 | 0 | 0.972 / 0.874 / 0.740 |
-| S58-17 | 1.000 | 1.000 | yes | yes | 0.931 | 0.839 | 1 (loop>petal) | 1.000 / 0.930 / 0.837 |
+| S5-15 | 0.910 | 0.988 | yes | yes | 0.852 | 0.734 | 0 | 0.910 / 0.852 / 0.734 |
+| S53-19 | 0.513 | 0.513 | no | no | 0.763 | 0.814 | 0 | 0.513 / 0.763 / 0.814 |
+| S56-17B | 0.988 | 1.000 | yes | yes | 0.909 | 0.848 | 0 | 0.979 / 0.879 / 0.755 |
+| S58-17 | 0.972 | 0.986 | yes | yes | 0.941 | 0.869 | 0 | 1.000 / 0.931 / 0.839 |
 | S67-19 | 0.964 | 0.964 | yes | yes | 0.947 | 0.861 | 0 | 0.964 / 0.947 / 0.861 |
 | S68-19 | 0.966 | 0.620 | yes | no | 0.885 | 0.676 | 0 | 0.966 / 0.885 / 0.676 |
-| S69-19 | 0.993 | 0.988 | yes | yes | 0.920 | 0.759 | 0 | 0.980 / 0.920 / 0.759 |
+| S69-19 | 0.993 | 0.988 | yes | yes | 0.920 | 0.759 | 0 | 0.993 / 0.920 / 0.759 |
 | S70-19 | 0.956 | 0.956 | yes | yes | 0.957 | 0.939 | 0 | 0.956 / 0.957 / 0.939 |
 | S8-15 | 0.640 | 0.640 | no | no | 0.936 | 0.841 | 0 | 0.640 / 0.936 / 0.841 |
-| S80-22 | 0.989 | 1.000 | yes | yes | 0.934 | 0.878 | 0 | 0.989 / 0.931 / 0.869 |
-| s34-15 | 0.956 | 0.951 | yes | yes | 0.928 | 0.844 | 1 (backing>star) | 0.956 / 0.918 / 0.814 |
+| S80-22 | 0.989 | 1.000 | yes | yes | 0.934 | 0.878 | 0 | 0.989 / 0.934 / 0.878 |
+| s34-15 | 0.956 | 0.951 | yes | yes | 0.928 | 0.844 | 1 (backing>star) | 0.956 / 0.928 / 0.844 |
 
-Official (per-axis): **success 23, flagged-not-success 10, silently wrong 1 (S46-15), errors 0 - `PASS 23/34`** against the bar of 28 (80 %). Reported only (uniform-scale alignment): 25/34; shape: mean whole IoU 0.913 (head 0.821, tail 0.955), shape_ok 21/34; stacking: 4 pairs reversed in 4/34 IDs. The per-axis column is the metric and the bar; the uniform column only explains misses.
+Official (per-axis): **success 23, flagged-not-success 9, silently wrong 2 (S46-15, S40-15), errors 0 - `PASS 23/34`** against the bar of 28 (80 %). Reported only (uniform-scale alignment): 25/34; shape: mean whole IoU 0.921 (head 0.847, tail 0.955; H6 0.913 / 0.821), shape_ok 27/34 (H6 21/34); stacking: 3 pairs reversed in 3/34 IDs. S40-15 became silently wrong in H7: its library head (A13-15B, match 0.80) is not flagged and its color is 0.885 (0.890 before). The per-axis column is the metric and the bar; the uniform column only explains misses.
 
 Flagged although correct: 21 of the 23 successes; S28-15 and S43-15 are unflagged successes with visibly wrong heads (see 5b). S46-15 is silent again: its head fit (0.82 agreement, 0.94 outline) is not a gross failure; its miss is the scorer alignment effect described below.
 
@@ -371,16 +404,18 @@ Over all 76 reference photos (scratch `compare_all.py`, match >= 0.9 and no issu
 
 ### Sample outputs
 
-`output/s35-19.svg` and `output/s46-15.svg` were regenerated for H2 (and regenerated again for H3: byte-identical, so unchanged) from `reference/photos/S35-19.png` and `reference/photos/S46-15.png` with `rosette.pipeline.analyze` + `render`, the same code path the UI uses, and checked with `rosette.validate.validate` (both return `[]`). Regenerated again for H5 (pointed tail tops, visible-edge line art; both validate to `[]`) and for H6 (`s35-19.svg` changed: its two tail slivers are merged; `s46-15.svg` byte-identical; both validate to `[]`). They are the tool's unedited output, not confirmed by a person.
+`output/s35-19.svg` and `output/s46-15.svg` were regenerated for H2 (and regenerated again for H3: byte-identical, so unchanged) from `reference/photos/S35-19.png` and `reference/photos/S46-15.png` with `rosette.pipeline.analyze` + `render`, the same code path the UI uses, and checked with `rosette.validate.validate` (both return `[]`). Regenerated again for H5 (pointed tail tops, visible-edge line art; both validate to `[]`), for H6 (`s35-19.svg` changed: its two tail slivers are merged; `s46-15.svg` byte-identical; both validate to `[]`) and for H7 (`s35-19.svg` changed: its head is the S35-19 library template, match 0.68; `s46-15.svg` byte-identical; both validate to `[]`). They are the tool's unedited output, not confirmed by a person.
 
 | Output | Flagged | Flagged items | Warnings |
 |---|---|---|---|
-| `output/s35-19.svg` | yes | four points layers (loops, their edge strips, kites, their backing) with detector confidence 0.46-0.47 (below 0.6); no `unknown` parts; no color group below 0.6. | 2 tail slivers merged into their neighbours (H6) |
+| `output/s35-19.svg` | yes | the warning only: the library head (template S35-19, match 0.68) is above 0.6; no `unknown` parts; no color group below 0.6. | 2 tail slivers merged into their neighbours (H6) |
 | `output/s46-15.svg` | no | none (head fit 0.82 / outline 0.94 is information only) | none |
 
 Before uploading either file to the shop, the user should open each photo in the UI, confirm the flags and compare the drawing with the photo. That confirmation has not been done; it is the user's step.
 
 ### Known limitations
+
+- **Library heads (H7) pick the photo's own design for only 43 of 76 photos.** S29-15 is drawn with A1-15's pinked disc head, not its layered stars: head IoU 0.699 -> 0.865, but the picture is a simpler head than the photo. Colors of the 24 photos that switch can drop (S17-15, S36-15B by 0.069). See the H7 section.
 
 - **The success bar is not met: 23/34 succeed against 28 needed (80 %).** `pytest -m slow` fails accordingly. Tuning stopped; it is not finished.
 - **S46-15 counts as silently wrong under per-axis scoring** (0.741, not flagged). It is a scorer alignment effect (the designer drew a larger head and narrower tails; uniform scale gives 0.926); its head fit (0.82) is not a gross failure.
