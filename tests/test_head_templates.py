@@ -178,3 +178,38 @@ def test_describe_counts_the_template_pieces_by_shape():
     assert describe(disc) == "disc, center"  # a repeated piece counts once
     one = _template("G1-15", [(1, "points", [_kite(0.0, 0.5, 0.95)]), (2, "center", [_circle(0.3)])])
     assert describe(one) == "1 kite, center"
+
+
+# ---------------------------------------------------------------- H9: pose search
+
+def _posed_photo(t, dx=0.0, dy=0.0, s=1.0, rot=0.0, value=4):
+    from rosette.vision.templates import EXTENT
+    c, k = (GRID - 1) / 2, (GRID - 1) / (2 * EXTENT)
+    g = raster(t.pieces, (GRID, GRID), c + dx * k, c + dy * k, k * s, rot)
+    return np.where(g > 0, value + g.astype(np.int16), -1).astype(np.int16)
+
+
+def test_pose_grid_matches_the_raster_at_that_pose():
+    from rosette.vision.templates import Pose, pose_grid
+    t = _template("B2-15", [(1, "points", [_star(6, 0.55, 1.0)]), (2, "center", [_circle(0.35)])])
+    want = _posed_photo(t, 0.1, 0.3, 1.2, 15.0) >= 0
+    got = pose_grid(t, Pose(0.1, 0.3, 1.2, 15.0)) > 0
+    assert (want & got).sum() / (want | got).sum() > 0.93
+    assert (pose_grid(t, Pose()) == t.grid).all()
+
+
+def test_rank_finds_the_head_lower_and_larger_than_the_photo_circle():
+    t = _template("B2-15", [(1, "points", [_star(6, 0.55, 1.0)]), (2, "center", [_circle(0.35)])])
+    photo = _posed_photo(t, 0.0, 0.3, 1.2)
+    (best, f), = rank(photo, [t], gate=None, n=1)
+    p = f["pose"]
+    assert abs(p.dy - 0.3) <= 0.051 and abs(p.scale - 1.2) <= 0.06 and abs(p.dx) <= 0.051
+    still = features(photo, t.grid)
+    assert f["score"] > still["score"] + 0.05
+
+
+def test_rank_turns_a_star_within_its_symmetry():
+    t = _template("B2-15", [(1, "points", [_star(6, 0.55, 1.0)]), (2, "center", [_circle(0.35)])])
+    (best, f), = rank(_posed_photo(t, rot=15.0), [t], gate=None, n=1)
+    assert f["pose"].rotation in (15.0, -45.0)  # 15 degrees, or the same star 60 degrees on
+    assert f["iou"] > 0.9

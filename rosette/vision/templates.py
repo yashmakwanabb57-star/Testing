@@ -329,21 +329,136 @@ def choose(labels: np.ndarray, lib, exclude_key: str | None = None, weights=None
     return best[0] if best else None
 
 
+# Pose search (H9): the head circle prepare finds can be off (S29-15: a 6-fold star whose
+# lower arms pass for the tails top, so the circle sits too high and too small), and the
+# references draw their heads at their own proportions. Each template is placed at the
+# pose (center offset dx, dy and scale in head radii of the photo circle, rotation in
+# degrees) whose silhouette fits the photo best: coarse offset x scale first, then the
+# rotations of its lobe symmetry; the full score is taken at that pose and at the
+# unmoved one, and the better wins.
+POSE_DY = (-0.2, -0.1, 0.0, 0.1, 0.2, 0.3)
+POSE_DX = (-0.1, 0.0, 0.1)
+POSE_SCALE = (0.8, 0.9, 1.0, 1.12, 1.25)
+# Rotations tried within one symmetry period 360/k of a k-lobed template (k >= 3).
+POSE_TURNS = 4
+
+
+@dataclass(frozen=True)
+class Pose:
+    dx: float = 0.0  # head radii, + right
+    dy: float = 0.0  # head radii, + down
+    scale: float = 1.0
+    rotation: float = 0.0  # degrees, clockwise on screen (rotation_deg)
+
+    @property
+    def unmoved(self) -> bool:
+        return self == Pose()
+
+
+def pose_grid(t: Template, pose: Pose) -> np.ndarray:
+    """The template's category grid at a pose (nearest-neighbour warp of its grid)."""
+    if pose.unmoved:
+        return t.grid
+    c, k = (GRID - 1) / 2, (GRID - 1) / (2 * EXTENT)
+    m = cv2.getRotationMatrix2D((c, c), -pose.rotation, pose.scale)
+    m[0, 2] += pose.dx * k
+    m[1, 2] += pose.dy * k
+    return cv2.warpAffine(t.grid, m, (GRID, GRID), flags=cv2.INTER_NEAREST, borderValue=0)
+
+
+def _iou(fg: np.ndarray, g: np.ndarray) -> float:
+    tf = (g > 0) & _WIN
+    u = (fg | tf).sum()
+    return float((fg & tf).sum() / u) if u else 0.0
+
+
+_SYMMETRY: dict[str, int] = {}
+
+
+def symmetry(t: Template) -> int:
+    """Lobe count k of the template's whole outline (all around, not only the window)."""
+    if t.sid not in _SYMMETRY:
+        fg = t.grid > 0
+        th = np.linspace(-np.pi, np.pi, N_RAYS, endpoint=False)
+        rho = np.linspace(0, EXTENT, N_RHO)
+        c, k = (GRID - 1) / 2, (GRID - 1) / (2 * EXTENT)
+        xs = np.rint(c + np.cos(th)[:, None] * rho[None] * k).astype(int).clip(0, GRID - 1)
+        ys = np.rint(c + np.sin(th)[:, None] * rho[None] * k).astype(int).clip(0, GRID - 1)
+        hit = fg[ys, xs]
+        prof = rho[np.where(hit.any(axis=1), N_RHO - 1 - np.argmax(hit[:, ::-1], axis=1), 0)]
+        _SYMMETRY[t.sid] = int(round(lobes(prof, 360.0)))
+    return _SYMMETRY[t.sid]
+
+
+def best_pose(labels: np.ndarray, t: Template) -> Pose:
+    """The pose whose silhouette fits the photo best, coarse to fine: center offset and
+    scale unturned, then the turns within the template's symmetry period, then offset
+    and scale again at the best turn (see POSE_*)."""
+    fg = (labels >= 0) & _WIN
+
+    def place(rot: float) -> Pose:
+        return max((_iou(fg, pose_grid(t, q)), -abs(q.dx) - abs(q.dy) - abs(q.scale - 1), q)
+                   for q in (Pose(dx, dy, sc, rot) for dy in POSE_DY for dx in POSE_DX for sc in POSE_SCALE))[2]
+
+    pose = place(0.0)
+    k = symmetry(t)
+    if k >= 3:
+        period = 360.0 / k
+        turns = [Pose(pose.dx, pose.dy, pose.scale, round(period * j / POSE_TURNS, 3)) for j in range(POSE_TURNS)]
+        turned = max((_iou(fg, pose_grid(t, q)), -q.rotation, q) for q in turns)[2]
+        if turned.rotation:
+            pose = place(turned.rotation)
+    return pose
+
+
+def _at_pose(t: Template, pose: Pose) -> Template:
+    if pose.unmoved:
+        return t
+    return Template(t.sid, t.key, t.pieces, grid=pose_grid(t, pose), tail_categories=t.tail_categories,
+                    points=t.points)
+
+
+def posed_features(labels: np.ndarray, t: Template, weights=None, tail_groups: dict[int, int] | None = None,
+                   free_ok: bool = False) -> dict | None:
+    """Features of a template at its best pose or unmoved, whichever scores higher, with
+    the pose ("pose") and whether its colors follow the tails ("anchored"); None when it
+    cannot be colored under the tails and free_ok is False."""
+    out = None
+    f0 = None
+    for pose in (Pose(), None):
+        if pose is None:  # the searched pose, once the unmoved features give the lobe count
+            pose = best_pose(labels, t)
+            if pose.unmoved:
+                break
+        tp = _at_pose(t, pose)
+        mapping = tail_consistent_mapping(labels, tp, tail_groups) if tail_groups else None
+        anchored = mapping is not None or not tail_groups
+        if tail_groups and mapping is None and not free_ok:
+            return None
+        f = features(labels, tp.grid, weights, mapping)
+        f.update(pose=pose, anchored=anchored)
+        if f0 is None:
+            f0 = f
+        if out is None or f["score"] > out["score"] + 1e-9:
+            out = f
+    # the lobe gate is judged on the unmoved template (its shape, not its pose)
+    out["lobes_template"] = f0["lobes_template"]
+    return out
+
+
 def rank(labels: np.ndarray, lib, exclude_key: str | None = None, weights=None,
          gate: float | None = LOBE_GATE, tail_groups: dict[int, int] | None = None,
          n: int = 3) -> list[tuple[Template, dict]]:
-    """The n best-scoring templates (and their features), best first, under the rules of
-    choose (lobe gate, exclude_key, tail-bound mapping); ties keep library order."""
+    """The n best-scoring templates (and their features, at their best pose), best first,
+    under the rules of choose (lobe gate, exclude_key, tail-bound mapping); ties keep
+    library order."""
     scored = []
     for t in lib:
         if exclude_key is not None and t.key == exclude_key:
             continue
-        mapping = None
-        if tail_groups:
-            mapping = tail_consistent_mapping(labels, t, tail_groups)
-            if mapping is None:
-                continue
-        f = features(labels, t.grid, weights, mapping)
+        f = posed_features(labels, t, weights, tail_groups)
+        if f is None:
+            continue
         if gate is not None and abs(f["lobes_photo"] - f["lobes_template"]) > gate + 1e-6:
             continue
         scored.append((t, f))
@@ -356,10 +471,7 @@ def score_template(labels: np.ndarray, t: Template, tail_groups: dict[int, int] 
     tail-bound mapping where the template has one (tail_consistent_mapping), else the free
     overlap mapping, so any template can be drawn. "anchored" is False when the free
     mapping was used: the head's colors then do not follow the tails."""
-    mapping = tail_consistent_mapping(labels, t, tail_groups) if tail_groups else None
-    f = features(labels, t.grid, None, mapping)
-    f["anchored"] = mapping is not None
-    return f
+    return posed_features(labels, t, None, tail_groups, free_ok=True)
 
 
 @lru_cache(maxsize=4)

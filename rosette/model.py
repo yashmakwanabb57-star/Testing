@@ -91,6 +91,9 @@ class RosetteModel:
     # Token of the analyzed photo in the server's photo cache (app/main.py): a library head
     # chosen outside the candidates is placed and checked on that photo (H8).
     photo_token: str = ""
+    # Information lines for the user and later rounds (not flags, unlike warnings): for
+    # example a library head drawn re-centered from prepare's head circle (H9).
+    info: list[str] = field(default_factory=list)
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -109,7 +112,8 @@ class RosetteModel:
         return cls(parts=parts, groups=groups, rose=bool(d.get("rose", False)),
                    warnings=list(d.get("warnings", [])), alternatives=alternatives,
                    alternative_groups=alt_groups, head_states=_head_states(d.get("head_states") or {}),
-                   photo_token=str(d.get("photo_token") or ""))
+                   photo_token=str(d.get("photo_token") or ""),
+                   info=[str(x) for x in d.get("info", [])])
 
 
 def _head_states(d) -> dict:

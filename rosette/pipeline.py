@@ -39,7 +39,7 @@ from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_group
 from .vision.parts import detect_parts
 from .vision.parts_common import Frame
 from .vision.prepare import Prepared, prepare
-from .vision.templates import (describe, load_library, photo_grid, rank, relabel_map, score_template,
+from .vision.templates import (Pose, describe, load_library, photo_grid, rank, relabel_map, score_template,
                                template_by_id)
 from .writer import write_svg
 
@@ -92,6 +92,12 @@ RULES_HEAD = "rules"
 LIBRARY_PART_ID = "library"
 # Template params that stay when the user switches from one library head to another.
 TEMPLATE_PLACEMENT = ("cx", "cy", "r", "rotation_deg")
+# A drawn library head whose pose moves it at least RECENTER_MIN (head radii, or scale
+# change) from prepare's head circle leaves an information line (model.info, not a flag),
+# so a later round on prepare has the data (H9).
+RECENTER_MIN = 0.1
+RECENTER_INFO = ("Head re-centered: the library head is drawn at an offset of {dx:+.2f}, {dy:+.2f} head radii "
+                 "and scale {scale:.2f} from the photo's head circle.")
 # Template colors follow the tails (H7 fix round 2): a reference category that is also one
 # of the reference's tail Colors k is drawn in the group our tails carry as Color k, the
 # head-only categories follow the overlap (templates.tail_consistent_mapping); the matcher
@@ -331,7 +337,11 @@ def _template_part(t, f: dict, have: set[int], circle: tuple[float, float, float
     if not mapping:
         return None
     first = next(pc.category for pc in t.pieces if pc.category in mapping)
-    params: dict = {"template_id": t.sid, "cx": circle[0], "cy": circle[1], "r": circle[2], "rotation_deg": 0.0,
+    pose = f.get("pose") or Pose()
+    params: dict = {"template_id": t.sid, "cx": round(circle[0] + pose.dx * circle[2], 3),
+                    "cy": round(circle[1] + pose.dy * circle[2], 3), "r": round(circle[2] * pose.scale, 3),
+                    "rotation_deg": float(pose.rotation), "pose_dx": pose.dx, "pose_dy": pose.dy,
+                    "pose_scale": pose.scale,
                     "score": round(f["score"], 3), "partition": round(f["partition"], 3), "points": int(t.points),
                     "description": describe(t)}
     for c in t.categories:
@@ -476,6 +486,12 @@ def choose_head(rules: RosetteModel, lib: RosetteModel | None,
     out = use_head(out, choice)
     out.head_states = states
     out.warnings = base + states[choice]["warnings"]
+    drawn = next((q for q in out.parts if q.role == "template"), None)
+    if drawn is not None:
+        dx, dy = float(drawn.params.get("pose_dx", 0.0)), float(drawn.params.get("pose_dy", 0.0))
+        sc = float(drawn.params.get("pose_scale", 1.0))
+        if max(abs(dx), abs(dy), abs(sc - 1.0)) >= RECENTER_MIN - 1e-9:
+            out.info = list(out.info) + [RECENTER_INFO.format(dx=dx, dy=dy, scale=sc)]
     return out, (fits[choice] if choice != RULES_HEAD else rules_fit)
 
 

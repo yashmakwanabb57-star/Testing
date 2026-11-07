@@ -585,3 +585,18 @@ def test_a_library_head_colored_without_the_tails_is_capped_and_warned(five, mon
     # an anchored one gets neither
     anchored = add_library_head(m, "T9-15", ctx)
     assert FREE_COLORS_WARNING not in anchored.warnings
+
+
+def test_a_re_centered_library_head_leaves_an_information_line_not_a_flag(three):
+    from rosette.pipeline import RECENTER_INFO, choose_head, drawn_head, is_flagged
+    lib = _lib_model(0.9)
+    t = next(q for q in lib.parts if q.role == "template")
+    t.params.update(pose_dx=0.0, pose_dy=0.2, pose_scale=1.12)
+    fits = _fits(rules=FINE, T1_15=(0.95, 0.97), T7_15=(0.9, 0.9), T8_15=(0.9, 0.9))
+    m, _ = choose_head(_detected(), lib, fits, lambda a, b: 0.9)
+    assert drawn_head(m) == "T1-15" and m.warnings == []
+    assert m.info == [RECENTER_INFO.format(dx=0.0, dy=0.2, scale=1.12)]
+    assert not is_flagged(m, [])
+    assert RosetteModel.from_json(m.to_json()).info == m.info
+    t.params.update(pose_dy=0.05, pose_scale=1.0)
+    assert choose_head(_detected(), lib, fits, lambda a, b: 0.9)[0].info == []
