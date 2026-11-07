@@ -2,7 +2,7 @@
 // Run: node --test tests/js/template.test.mjs (tests/test_js.py runs it when node is on PATH)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { colorQuestions, flagItems, headCandidates, headChoice, headFitOf, libraryChoices, pickNeedsServer, renderBody, partGroups, switchHead, templateText, usesGroup } from '../../app/static/logic.js';
+import { colorQuestions, flagItems, headCandidates, headChoice, automaticHeadText, headFitOf, libraryChoices, libraryOverride, pickNeedsServer, renderBody, partGroups, switchHead, templateText, usesGroup } from '../../app/static/logic.js';
 
 function model(score = 0.8) {
   return {
@@ -166,4 +166,20 @@ test('a pick outside the candidates goes to the server, a candidate switches loc
   assert.ok(headCandidates(m).some((x) => x.choice === 'S9-19' && x.drawn));
   assert.equal(renderBody(m, 'S9-19'), JSON.stringify({ model: m, head: 'S9-19' }));
   assert.equal(renderBody(m), JSON.stringify({ model: m }));
+});
+
+// H9: the automatic result first, the library chooser as a closed manual override.
+test('the library chooser is a closed manual override under the automatic result', () => {
+  const o = libraryOverride(pickerModel(), LIBRARY);
+  assert.equal(o.label, 'Other library heads (manual override)');
+  assert.equal(o.open, false);
+  assert.equal(o.choices.length, 6);
+  assert.equal(automaticHeadText(pickerModel(), 'S29-15'), 'Automatic result: library template S29-15, match 80% (drawn)');
+  const m = pickerModel();
+  switchHead(m, 'S30-15');
+  assert.equal(automaticHeadText(m, 'S29-15'), 'Automatic result: library template S29-15, match 80% (not drawn: another head is picked)');
+  switchHead(m, 'rules');
+  assert.equal(automaticHeadText(m, 'rules'), 'Automatic result: rule-based head (drawn)');
+  assert.equal(automaticHeadText(m, null), '');
+  for (const t of [o.label, automaticHeadText(m, 'S29-15')]) assert.ok(!/[–—]/.test(t));
 });

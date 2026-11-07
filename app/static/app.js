@@ -6,7 +6,7 @@ import { applyConfig, glitterPattern, COLOR_INDICES } from './simulator.js';
 import {
   MAX_COUNT, POINT_KINDS, errorText, hex, flagItems,
   downloadBlockers as blockersFor, groupColor, tailGroups, parseValue, tailCheckKey, sourceNotice,
-  convertBlocker, resetForFile, checklistItems, paramShown, headCandidates, headFitOf, libraryChoices, pickNeedsServer, renderBody, switchHead, templateText, usesGroup,
+  convertBlocker, resetForFile, checklistItems, paramShown, headCandidates, headFitOf, automaticHeadText, libraryOverride, pickNeedsServer, renderBody, switchHead, templateText, usesGroup,
 } from './logic.js';
 
 export { errorText, flagItems, parseValue, tailGroups, hex };
@@ -79,6 +79,7 @@ export const state = {
   flagged: false, // server is_flagged of the last render
   headFit: null, // head fit measured at conversion (information, not a flag)
   library: [], // every library template [{id, description}] (/api/library), loaded once
+  headDefault: null, // the head the conversion chose ('rules' or a template_id)
   confirmed: new Set(), // flag keys the user confirmed
   invalid: new Set(), // input field keys holding an invalid value
   analyzing: false,
@@ -168,7 +169,11 @@ export const actions = {
       Object.assign(state, {
         model: res.model, svg: res.svg, issues: res.issues || [], flagged: !!res.flagged,
         filename: res.filename, headFit: res.head_fit || null,
+        headDefault: (res.model.parts.find((p) => p.role === 'template') || { params: { template_id: 'rules' } })
+          .params.template_id,
       });
+      libraryOpen = false;
+      libraryFilter = '';
       actions.loadLibrary();
       state.sim.touched.clear();
       state.sim.pattern = false;
@@ -596,16 +601,20 @@ function headPicker(choices) {
     el('input', { type: 'radio', name, value: c.choice, checked: c.drawn,
       onchange: () => actions.switchHead(c.choice) }),
     el('span', { text: c.text })));
+  const auto = automaticHeadText(state.model, state.headDefault);
   return el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('strong', { text: 'Head shape' }),
-      el('span', { class: 'muted', text: ' pick the head closest to the photo' })),
+    el('div', { class: 'card-head' }, el('strong', { text: 'Head shape' })),
+    auto ? el('p', { class: 'head-auto', text: auto }) : null,
+    el('p', { class: 'muted', text: 'Pick the head closest to the photo:' }),
     ...rows, libraryChooser());
 }
 
 // "Choose from the library": every template by id (the matcher's top 3 first), filtered
 // by typing part of an id; picking one draws it like a picker choice.
 let libraryFilter = '';
+let libraryOpen = false; // the manual override stays closed until the user opens it
 function libraryChooser() {
+  const o = libraryOverride(state.model, state.library, libraryFilter);
   const list = el('select', { class: 'library-list', size: 6, 'aria-label': 'Library templates',
     onchange: (ev) => { if (ev.target.value) actions.pickLibraryHead(ev.target.value); } });
   const drawn = (state.model.parts.find((p) => p.role === 'template') || { params: {} }).params.template_id;
@@ -615,8 +624,11 @@ function libraryChooser() {
   const search = el('input', { type: 'search', value: libraryFilter, placeholder: 'Type part of an id',
     'aria-label': 'Filter the library by id',
     oninput: (ev) => { libraryFilter = ev.target.value; fill(); } });
-  return el('div', { class: 'library-chooser' },
-    el('label', { class: 'param wide' }, el('span', { text: 'Choose from the library' }), search), list);
+  const box = el('details', { class: 'library-chooser', open: libraryOpen || o.open,
+    ontoggle: (ev) => { libraryOpen = ev.target.open; } },
+  el('summary', { text: o.label }),
+  el('label', { class: 'param wide' }, el('span', { text: 'Filter by id' }), search), list);
+  return box;
 }
 
 function tailCard(parts, n) {
