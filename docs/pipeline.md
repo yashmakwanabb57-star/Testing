@@ -407,6 +407,26 @@ S52-19 is back on its rule-based head (it has points parts, so the partition bar
 
 Head card picker. `templates.rank` lists the matcher's best templates (the decision rule's choice first) and `with_template` keeps the next `TEMPLATE_CANDIDATES` - 1 in `alternatives` (part ids `template_2`, `template_3`; params `rank` and `description`), next to the detected head parts. `templates.describe` mines the one-line description from the template pieces: a piece around the center is a ring (with a hole), a center or a disc (reach over 0.65 R), or an N-point star (4 or more lobes deeper than 1.3x); a piece away from it is a strip (4x longer than wide), a trim (under 0.6 of its hull), a loop (as wide at its outer end as half its angular width), a kite (tapered, at most 4 corners) or a point; a piece repeated with the same outline counts once (S35-19: "6 loops, 6 kites, 12 strips, 6 trims, ring, center"). The head card (Workbench and Guided share it) lists "Rule-based head (the detected parts)" and each candidate as "Library template <id> - match NN%, N points - <description>" with radio buttons; picking one draws it (`logic.js switchHead`, mirror of `pipeline.use_head`; the render API takes the same choice as `head` and returns the switched model), unconfirms the head cards and the head check, and the picked head is flagged like any library head (a candidate's confidence is its own match score). The default stays the decision rule's choice. Candidates for the IDs above: S29-15 S57-17 / S69-19 / S58-17 (its own star template is not among them); S51-19 A1-15 / A13-15B / S63-17; S52-19 S31-15 / own / S69-19; S35-19 own / S30-15 / S31-15.
 
+## H8: any library head by id; matcher normalization
+
+Started at d812567. Full notes: `.superpowers/sdd/2026-11-05-rosette-svg-generator/h8-report.md`.
+
+**Choose from the library.** Below the top-3 picker the head card has "Choose from the library": every library template by id with its mined description (the matcher's candidates first, then the others by id), filtered by typing part of an id (`logic.js libraryChoices`). `with_template` keeps every template outside the top 3 as a ready template part in `RosetteModel.library_heads` (id `library_<id>`, rank 4 and up by score; `templates.score_all` scores all templates with no lobe gate, under the tail-bound mapping where one exists and the free overlap mapping otherwise, so each can be drawn), placed on the photo head circle. `choose_head` checks each of them at analyze time exactly like the top 3 (head fit, FLAGGED_CONF cap without color agreement, gross head check, heads-differ warning; confidence on the part, warnings and fit in `head_states`). Picking one (`use_head` / `switchHead` with its id, also `/api/render` `head`) moves it into the candidates, keeps the current library head's placement, and the part card reads "Head shape: chosen from the library: <id> - <description>". Cost: one head render per template, shared by its head fit and overlap (S29-15: analyze 15.7 s, model JSON 62 KB).
+
+**Normalization (evaluated, not kept).** Templates and photo heads are normalized to the outer head radius. S29-15's reference draws its loops much shorter than the photo, so its own star template is too large when normalized that way (own rank 8). Tried, on the 76 cached photos with the full library (own-design top-1 / top-3), then leave-one-out head IoU through the decision rule (`tools/head_templates.decision_row`): inner normalization by the radius holding 35 % or 50 % of the head foreground in the window (`m35`, `m50`), by the center badge's radius (`c`), each alone or as a 5-step scale search between 1 and that ratio (clamped 0.6-1.6).
+
+| normalization | top-1 | top-3 | S29-15 pick (own rank) | S35-19 pick | LOO head IoU | full head IoU | color >= 0.9 (full) |
+|---|---|---|---|---|---|---|---|
+| **outer (kept)** | 48 | 58 | S57-17 (8) | own | 0.8476 | 0.8602 | 49 |
+| m50 only | 47 | 54 | S69-19 (-) | S30-15 | | | |
+| m35 only | 48 | 54 | S69-19 (15) | S30-15 | | | |
+| center only | 31 | 39 | S2-15 (-) | S30-15 | | | |
+| m50 search | 49 | 56 | S69-19 (19) | own | | | |
+| m35 search | 50 | 56 | S69-19 (17) | own | 0.8481 | 0.8599 | 48 |
+| center search | 48 | 57 | S69-19 (18) | own | | | |
+
+The m35 search gains 2 top-1 (A12-15, S42-15, S49-17 in; S48-17 out) but loses 2 top-3 (S1-15, S10-19, s34-15 out; S49-17 in); its LOO head IoU is +0.0005, its full-library head IoU -0.0003, and it sends S52-19 back to a library head (color 0.908 -> 0.827, whole shape loss over 0.02, against the fix round 4 ruling) and S56-17 loses shape (LOO). Not kept: outer normalization stays. S29-15's own star stays out of reach with every variant (rank 15-19 or not mappable): its reference is not faithful to the photo, which is why the user can now choose any head by id.
+
 ## Final state (Task 16)
 
 ### Stages, modules and tuning constants
