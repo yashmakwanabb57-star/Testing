@@ -243,3 +243,11 @@ def test_the_library_head_needs_its_tail_mapped_colors_to_agree():
     from rosette.pipeline import TEMPLATE_MIN_PARTITION, colors_agree
     assert colors_agree(TEMPLATE_MIN_PARTITION) and colors_agree(0.95)
     assert not colors_agree(TEMPLATE_MIN_PARTITION - 0.01)
+
+
+def test_a_grossly_failed_rule_based_head_is_replaced_whatever_the_colors():
+    from rosette.pipeline import HeadFit, gross_failure
+    assert gross_failure(HeadFit(agreement=0.42, silhouette=0.60))
+    assert gross_failure(HeadFit(agreement=0.9, silhouette=0.70))
+    assert not gross_failure(HeadFit(agreement=0.62, silhouette=0.79))
+    assert not gross_failure(None)

@@ -87,9 +87,12 @@ TEMPLATE_PART_ID = "template"
 # scores the partition under that same mapping, and a template that cannot be mapped is
 # not considered. TEMPLATE_MIN_PARTITION: the library head is drawn only when its
 # tail-mapped partition agreement reaches this floor (docs/pipeline.md H7 fix round 2).
-# Over the photos where the template's outline wins (full library 23, LOO 20) color is lost
-# (> 0.02) at partitions up to 0.697 (S58-17) and never at or above 0.70.
-TEMPLATE_MIN_PARTITION = 0.70
+# Fix round 3 ruling (shape first): 0.54. Over the photos where the template's outline wins
+# (full library 23) color is lost by more than 0.02 at partitions 0.282-0.697; from 0.54 up
+# only S58-17 (0.697, 1.000 -> 0.972) loses. A rule-based head that fails the gross head
+# check (HEAD_FIT_MIN, HEAD_SILHOUETTE_MIN) is replaced whatever the partition (gross_failure),
+# and the library head is then flagged.
+TEMPLATE_MIN_PARTITION = 0.54
 TEMPLATE_COLORS_WARNING = ("The library head {tid} fits the head outline better, but its colors do not agree "
                            "with the photo under the tail colors - the rule-based head is drawn; compare the head "
                            "with the photo and use the head toggle if the library head is closer.")
@@ -213,6 +216,12 @@ def prefer_template(rules: HeadFit | None, library: HeadFit | None) -> bool:
     if library is None:
         return False
     return rules is None or library.silhouette >= rules.silhouette + TEMPLATE_MIN_GAIN - 1e-9
+
+
+def gross_failure(fit: HeadFit | None) -> bool:
+    """The head-fit check's gross failure (layer agreement under HEAD_FIT_MIN or silhouette
+    under HEAD_SILHOUETTE_MIN); False without a measurement."""
+    return fit is not None and (fit.agreement < HEAD_FIT_MIN or fit.silhouette < HEAD_SILHOUETTE_MIN)
 
 
 def colors_agree(partition: float) -> bool:
@@ -341,10 +350,15 @@ def analyze_with_fit(data: bytes, template: bool = True,
             lib_fit = head_fit(p, labels, lib, merged)
             if prefer_template(fit, lib_fit):
                 tmpl = next(q for q in lib.parts if q.role == "template")
-                if colors_agree(float(tmpl.params.get("partition", 0.0))):
+                agree = colors_agree(float(tmpl.params.get("partition", 0.0)))
+                if agree or gross_failure(fit):
                     overlap = head_overlap(out, lib)
                     out, fit = lib, lib_fit
-                    if overlap is not None and overlap < TEMPLATE_DIFFERS_IOU:
+                    if not agree:  # drawn because the rule-based head failed: flagged
+                        for q in out.parts:
+                            if q.role == "template":
+                                q.confidence = min(q.confidence, FLAGGED_CONF)
+                    if overlap is not None and (overlap < TEMPLATE_DIFFERS_IOU or not agree):
                         out.warnings.append(TEMPLATE_DIFFERS_WARNING.format(iou=overlap))
                 else:  # the rule-based head, with the library head ready on the toggle
                     out = use_rules_head(lib)
