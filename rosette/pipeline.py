@@ -576,6 +576,22 @@ def _fit_json(fit: HeadFit | None) -> dict | None:
     return None if fit is None else {"agreement": round(fit.agreement, 4), "silhouette": round(fit.silhouette, 4)}
 
 
+CIRCLE_UNCERTAIN = "The head circle is uncertain - check the head size and position against the photo."
+# Uncertain head circle (H10): the silhouette fit and the symmetry circle disagree by at
+# least this ratio without a takeover, or the takeover was decided by a coverage within
+# CIRCLE_COVERAGE_MARGIN of FIT_MIN_COVERAGE.
+CIRCLE_RATIO_MIN, CIRCLE_COVERAGE_MARGIN = 1.1, 0.1
+
+
+def circle_warnings(p) -> list[str]:
+    """[CIRCLE_UNCERTAIN] when prepare's head circle is uncertain, else [] (p: Prepared)."""
+    from .vision.prepare import FIT_MIN_COVERAGE, FIT_TAKEOVER
+    ratio, cov = float(p.fit_ratio), float(p.fit_coverage)
+    disagree = CIRCLE_RATIO_MIN - 1e-9 <= ratio < FIT_TAKEOVER
+    hinged = ratio >= FIT_TAKEOVER and abs(cov - FIT_MIN_COVERAGE) < CIRCLE_COVERAGE_MARGIN
+    return [CIRCLE_UNCERTAIN] if disagree or hinged else []
+
+
 def analyze(data: bytes) -> RosetteModel:
     return analyze_with_fit(data)[0]
 
@@ -643,6 +659,7 @@ def analyze_with_context(data: bytes, template: bool = True,
         if gid in used:
             out.warnings.append(f"Color {hex_rgb(by_id[gid].rgb)} is partly patterned - a patterned ribbon "
                                 "may have been merged into it; check the colors.")
+    out.warnings.extend(circle_warnings(p))
     for rgb in merged_print:
         out.warnings.append(f"Center badge print was merged into the badge color (print {hex_rgb(rgb)}) - "
                             "check the center against the photo.")

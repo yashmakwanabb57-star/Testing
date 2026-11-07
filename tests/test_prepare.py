@@ -248,7 +248,6 @@ def test_prepare_takes_the_fit_when_the_symmetry_circle_is_far_too_small(monkeyp
     # taken for the tails top): a circle well inside the head is replaced by the fit
     import rosette.vision.prepare as prep
     img = _synthetic("star", k=12, inner=0.5, tails_half_top=60)
-    real = prep._head
     monkeypatch.setattr(prep, "_head", lambda m, ax, top, bottom: (ax, top + 120.0, 120.0))
     p = _prep(img)
     cx, cy, r = p.head
@@ -257,7 +256,6 @@ def test_prepare_takes_the_fit_when_the_symmetry_circle_is_far_too_small(monkeyp
     # a symmetry circle the fit agrees with (radius within FIT_TAKEOVER) is kept
     monkeypatch.setattr(prep, "_head", lambda m, ax, top, bottom: (ax, top + 160.0, 160.0))
     assert _prep(img).head == pytest.approx((p.axis_x, _mask_bounds(p)[0] + 160.0, 160.0))
-    monkeypatch.setattr(prep, "_head", real)
 
 
 def test_prepare_does_not_take_a_fit_with_little_coverage(monkeypatch):
@@ -278,3 +276,13 @@ def test_fit_coverage_of_a_disc_cut_by_the_tails():
     p = _prep(_synthetic("disc"))
     top, bottom = _mask_bounds(p)
     assert _fit_head(p.mask, p.axis_x, top, _tails_start(p.mask, top, bottom))[2] > 0.6
+
+
+def test_prepared_exposes_the_fit_ratio_and_coverage(monkeypatch):
+    import rosette.vision.prepare as prep
+    img = _synthetic("disc")
+    p = _prep(img)
+    assert p.fit_ratio == pytest.approx(1.0, abs=0.05) and p.fit_coverage > 0.6
+    monkeypatch.setattr(prep, "_head", lambda m, ax, top, bottom: (ax, top + 160.0, 160.0))
+    q = _prep(img)  # fit 180 against symmetry 160: 1.125, kept (no takeover)
+    assert q.fit_ratio == pytest.approx(180 / 160, abs=0.03) and q.head[2] == pytest.approx(160.0)

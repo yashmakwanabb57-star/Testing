@@ -245,6 +245,7 @@ def test_symmetry_is_cached_per_template_shape_not_per_id():
     assert symmetry(star) >= 5 and symmetry(disc) < 3
 
 
+@pytest.mark.slow  # about 9 s: one template extracted at 1800 px
 def test_library_cache_is_not_stale_for_a_file_whose_head_circle_prepare_fits():
     # the cache holds templates normalized on prepare's head circle of each reference
     # render; S57-17's is the H10 silhouette fit (its symmetry circle sits at the top of
@@ -288,3 +289,19 @@ def test_lobe_count_reads_the_head_band_not_side_flags_outside_the_head():
     th, full = _outer_profile(flags >= 0)
     arc = float(np.degrees(len(th) * 2 * np.pi / N_RAYS))
     assert lobes(full, arc) != pytest.approx(alone["lobes_photo"])
+
+
+def test_lobe_gate_never_gives_a_round_template_to_a_six_point_star():
+    # a 6-point star shows three tips in the window (5.05 lobes), under LOBE_GATE 5.1 from
+    # a disc; a round template (no head-band lobes, no symmetry) is refused anyway
+    disc = _template("A1-15", [(1, "head", [_circle(1.0)]), (2, "center", [_circle(0.35)])])
+    star = _template("B2-15", [(1, "points", [_star(6, 0.55, 1.0)]), (2, "center", [_circle(0.35)])])
+    photo = np.where(star.grid == 1, 4, np.where(star.grid == 2, 9, -1)).astype(np.int16)
+    assert choose(photo, [disc, star])[0].sid == "B2-15"
+    assert choose(photo, [disc, star], exclude_key="B2") is None
+    disc.points = 3  # the file's points count does not matter: the outline is round
+    assert choose(photo, [disc, star], exclude_key="B2") is None
+    assert choose(photo, [disc, star], exclude_key="B2", gate=None)[0].sid == "A1-15"
+    # a disc photo keeps its disc template
+    dphoto = np.where(disc.grid == 1, 4, np.where(disc.grid == 2, 9, -1)).astype(np.int16)
+    assert choose(dphoto, [disc, star])[0].sid == "A1-15"

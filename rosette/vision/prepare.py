@@ -63,19 +63,23 @@ TAILS_FIT_ROWS, TAILS_GAP_ROWS = 60, 40
 # is no longer a tail edge (about 3x the worst tail miss).
 TAILS_EDGE_TOL, TAILS_RUN_ROWS = 6.0, 3
 # Head fit: hull vertices this share of the head height above the tails start are dropped
-# (the cut through the tails is not head outline).
+# (the cut through the tails is not head outline; about 12 px on the four takeover photos,
+# which clears the cut's corner vertices and the pixel steps next to them).
 FIT_CUT_MARGIN = 0.03
 # A hull vertex weighs half the angle to its neighbours, each gap capped at this many
-# degrees (a gap is a long hull chord: a loop or the tails, not outline).
+# degrees (a gap is a long hull chord: a loop or the tails, not outline). 15 is half the
+# 30-degree tip spacing of a 12-point star, so its tips keep their full weight while a
+# long loop's two chords add at most 15 degrees each.
 FIT_GAP_CAP_DEG = 15.0
-# A vertex supports a circle when its distance is within this share of the radius.
+# A vertex supports a circle when its distance is within this share of the radius (on the
+# four takeover photos 90 % of the hull vertices lie within 2.8-4.0 % of the fit).
 FIT_TOL = 0.04
 # The fit's coverage counts the angle between consecutive on-circle vertices up to this
 # many degrees (the tips of a 6-point star are 60 apart).
 FIT_COVER_GAP_DEG = 60.0
 # The fitted circle replaces the symmetry circle when its radius is at least this
 # multiple of the symmetry radius: the symmetry score has locked onto an inner structure
-# (S29-15's star arms: 1.38). Heads whose two radii agree keep the symmetry circle.
+# (S29-15's star arms: 1.37). Heads whose two radii agree keep the symmetry circle.
 FIT_TAKEOVER = 1.25
 # ... and only when its coverage (`_coverage`) is at least this share of a full turn
 # (the takeovers on the 76 photos and reference renders: 0.67-0.94; broken fits through
@@ -99,6 +103,8 @@ class Prepared:
     tails_top_y: float  # first row below the head
     bottom_y: float  # last rosette row
     scale: float  # px per canvas unit
+    fit_ratio: float = 0.0  # fitted / symmetry head radius (0: no fit, no tails start found)
+    fit_coverage: float = 0.0  # the fit's coverage (`_coverage`)
 
 
 def _decode(data: bytes) -> tuple[np.ndarray, np.ndarray | None]:
@@ -347,14 +353,16 @@ def prepare(data: bytes) -> Prepared:
     ax = _axis(mask)
     head = _head(mask, ax, top, bottom)
     tails = _tails_start(mask, top, bottom)
+    ratio = coverage = 0.0
     if tails is not None:
         cy, r, coverage = _fit_head(mask, ax, top, tails)
+        ratio = r / head[2] if head[2] > 0 else 0.0
         if r >= FIT_TAKEOVER * head[2] and coverage >= FIT_MIN_COVERAGE:
             head = (ax, cy, r)
     tails_top = min(float(bottom), float(np.floor(head[1] + head[2]) + 1))
     return Prepared(rgb=np.ascontiguousarray(rgb, dtype=np.uint8), mask=mask, axis_x=ax,
                     head=head, tails_top_y=tails_top, bottom_y=float(bottom),
-                    scale=(bottom - top) / CANVAS_SPAN)
+                    scale=(bottom - top) / CANVAS_SPAN, fit_ratio=ratio, fit_coverage=coverage)
 
 
 def canvas_to_px(p: Prepared, x: float, y: float) -> tuple[float, float]:

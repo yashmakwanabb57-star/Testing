@@ -136,3 +136,32 @@ def test_unknown_speck_is_left_out_and_warned(monkeypatch):
     assert not any(q.id == "unknown-9" for q in model.parts)
     assert any("unknown-9" in w for w in model.warnings)
     assert render(model).issues == []
+
+
+def test_uncertain_head_circle_bands():
+    # the fit and the symmetry circle disagree without a takeover (ratio 1.1-1.25), or the
+    # takeover hung on a coverage within 0.1 of its bar: the head circle is uncertain
+    from types import SimpleNamespace
+
+    from rosette.pipeline import CIRCLE_UNCERTAIN, circle_warnings
+    from rosette.vision.prepare import FIT_MIN_COVERAGE, FIT_TAKEOVER
+
+    def p(ratio, coverage):
+        return SimpleNamespace(fit_ratio=ratio, fit_coverage=coverage)
+    assert circle_warnings(p(1.0, 0.9)) == []
+    assert circle_warnings(p(1.0, FIT_MIN_COVERAGE)) == []  # the fit agrees: coverage is moot
+    assert circle_warnings(p(1.1, 0.9)) == [CIRCLE_UNCERTAIN]
+    assert circle_warnings(p(FIT_TAKEOVER - 0.01, 0.2)) == [CIRCLE_UNCERTAIN]
+    assert circle_warnings(p(FIT_TAKEOVER, FIT_MIN_COVERAGE + 0.15)) == []
+    assert circle_warnings(p(FIT_TAKEOVER, FIT_MIN_COVERAGE + 0.05)) == [CIRCLE_UNCERTAIN]
+    assert circle_warnings(p(1.4, FIT_MIN_COVERAGE - 0.05)) == [CIRCLE_UNCERTAIN]
+    assert circle_warnings(p(1.4, FIT_MIN_COVERAGE - 0.2)) == []
+    assert "–" not in CIRCLE_UNCERTAIN and "—" not in CIRCLE_UNCERTAIN
+
+
+def test_uncertain_head_circle_is_warned_and_flagged(monkeypatch):
+    import rosette.pipeline as pl
+    monkeypatch.setattr(pl, "circle_warnings", lambda p: [pl.CIRCLE_UNCERTAIN])
+    model = analyze(_photo("S46-15"))
+    assert pl.CIRCLE_UNCERTAIN in model.warnings
+    assert is_flagged(model, render(model).issues)

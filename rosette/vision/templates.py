@@ -64,6 +64,14 @@ LOBE_BAND = (0.6, 1.05)
 # outline by a few hundredths is not a lobe, a star tip is. On the 76 photos: 0.1 keeps
 # every own design in the top 1 and top 3; 0.08 drops S58-17 from its top 3, 0.12 S13-15.
 LOBE_PROMINENCE = 0.1
+# Round-template guard (H10): a round template (no head-band lobes and a whole-outline
+# symmetry under 3) is refused for a photo whose head-band count reaches
+# ROUND_GUARD_LOBES, whatever the gate. Photos of round heads count 0-3.36 (S11a-15 3.36;
+# A2-15, 5.05, is the one exception), a 6-point star shows three tips, 5.05; on the 76 no
+# own design is lost (A2-15 and S51-19 lose A1-15 as their pick). The files' points
+# counts do not tell round heads (A12-15's disc: 5) and symmetry alone does not either
+# (S57-17's own template: symmetry 0, ten band lobes).
+ROUND_GUARD_LOBES = 4.2
 # A color group (photo) or category (template) counts as a head color when it holds at
 # least COLOR_MIN_SHARE of the window's foreground.
 COLOR_MIN_SHARE = 0.05
@@ -482,11 +490,17 @@ def posed_features(labels: np.ndarray, t: Template, weights=None, tail_groups: d
     return out
 
 
+def _round(t: Template, band_count: float) -> bool:
+    """A round template: no head-band lobes and a whole-outline symmetry under 3."""
+    return band_count == 0 and symmetry(t) < 3
+
+
 def rank(labels: np.ndarray, lib, exclude_key: str | None = None, weights=None,
          gate: float | None = LOBE_GATE, tail_groups: dict[int, int] | None = None,
          n: int = 3) -> list[tuple[Template, dict]]:
     """The n best-scoring templates (and their features, at their best pose), best first,
-    under the rules of choose (lobe gate, exclude_key, tail-bound mapping); ties keep
+    under the rules of choose (lobe gate and round-template guard, exclude_key,
+    tail-bound mapping); ties keep
     library order."""
     scored = []
     for t in lib:
@@ -496,6 +510,8 @@ def rank(labels: np.ndarray, lib, exclude_key: str | None = None, weights=None,
         if f is None:
             continue
         if gate is not None and abs(f["lobes_photo"] - f["lobes_template"]) > gate + 1e-6:
+            continue
+        if gate is not None and f["lobes_photo"] >= ROUND_GUARD_LOBES and _round(t, f["lobes_template"]):
             continue
         scored.append((t, f))
     scored.sort(key=lambda tf: -tf[1]["score"])  # stable: ties keep library order
