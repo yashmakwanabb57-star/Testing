@@ -539,8 +539,8 @@ class PhotoContext:
 
 def add_library_head(model: RosetteModel, tid: str, ctx: PhotoContext) -> RosetteModel:
     """The model drawing library template tid, chosen on the head card outside the
-    candidates: placed on the photo head circle (the current library head's placement
-    is kept by use_head), colored under the tail-bound mapping (or the free one), and
+    candidates: placed on the photo head circle at its own searched pose (each library
+    head keeps its own pose; use_head never copies placement), colored under the tail-bound mapping (or the free one), and
     checked like the candidates (_library_head_state). Raises ValueError for an unknown
     id or a template none of whose Colors maps onto a model group."""
     t = template_by_id(tid)
