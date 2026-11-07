@@ -51,9 +51,19 @@ WEIGHTS = (0.4, 0.3, 0.2, 0.0, 0.1)
 PROFILE_SCALE, LOBE_SCALE = 0.4, 2.0
 # Lobe gate: a template whose outer-profile lobe count (per 360 deg) differs from the
 # photo's by more than LOBE_GATE is not considered (a disc for a star photo). The count
-# moves in steps of about 1.68 (one peak over the window's arc); the photo's own design
-# differs by at most one step for 61 of 76 photos and by at most two (3.36) for 68.
-LOBE_GATE = 3.4
+# moves in steps of about 1.68 (one peak over the window's arc). H10 (`band_lobes`): 5.1,
+# three steps; with the head-band count S57-17's own design differs by three (5.05 photo,
+# 10.09 template), and at 3.4 it is gated out and S58-17 drops out of its own top 3.
+LOBE_GATE = 5.1
+# The lobe count reads the outer profile within this band of head radii (H10): only the
+# outline out to the upper bound counts (side flags and bunting loops beyond the head
+# circle do not), and radii under the lower bound read as the lower bound.
+LOBE_BAND = (0.6, 1.05)
+# A peak of that profile is a lobe when it stands at least this many head radii above
+# the valleys on both sides (its prominence): a bunting loop or a flag edge bumping the
+# outline by a few hundredths is not a lobe, a star tip is. On the 76 photos: 0.1 keeps
+# every own design in the top 1 and top 3; 0.08 drops S58-17 from its top 3, 0.12 S13-15.
+LOBE_PROMINENCE = 0.1
 # A color group (photo) or category (template) counts as a head color when it holds at
 # least COLOR_MIN_SHARE of the window's foreground.
 COLOR_MIN_SHARE = 0.05
@@ -223,8 +233,9 @@ def template_by_id(tid: str, path: Path = LIBRARY_PATH) -> Template | None:
 # ---------------------------------------------------------------- features
 
 
-def _outer_profile(fg: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """(angles, outer radius in head radii) of the rays that stay inside the window."""
+def _outer_profile(fg: np.ndarray, reach: float | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """(angles, outer radius in head radii) of the rays that stay inside the window;
+    reach: only foreground out to this many head radii counts."""
     th = np.linspace(-np.pi, np.pi, N_RAYS, endpoint=False)
     rho = np.linspace(0, EXTENT, N_RHO)
     th = th[np.sin(th) * EXTENT <= WINDOW_V]
@@ -232,6 +243,8 @@ def _outer_profile(fg: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     xs = np.rint(c + np.cos(th)[:, None] * rho[None] * k).astype(int).clip(0, GRID - 1)
     ys = np.rint(c + np.sin(th)[:, None] * rho[None] * k).astype(int).clip(0, GRID - 1)
     hit = fg[ys, xs]
+    if reach is not None:
+        hit = hit & (rho <= reach + 1e-9)[None, :]
     idx = np.where(hit.any(axis=1), N_RHO - 1 - np.argmax(hit[:, ::-1], axis=1), 0)
     return th, rho[idx]
 
@@ -244,6 +257,22 @@ def lobes(profile: np.ndarray, arc_deg: float) -> float:
     base = float(np.median(p))
     peaks = sum(1 for i in range(1, len(p) - 1) if p[i] >= p[i - 1] and p[i] > p[i + 1] and p[i] > base + 0.04)
     return peaks * 360.0 / max(arc_deg, 1.0)
+
+
+def band_lobes(fg: np.ndarray, arc_deg: float) -> float:
+    """Lobes of the (circularly smoothed) outer profile read within LOBE_BAND: peaks of
+    prominence LOBE_PROMINENCE or more, scaled to a full turn (H10)."""
+    from scipy.signal import find_peaks
+
+    lo, hi = LOBE_BAND
+    _, prof = _outer_profile(fg, hi)
+    n = len(prof)
+    if n < 5:
+        return 0.0
+    prof = np.clip(prof, lo, hi)
+    p = np.convolve(np.r_[prof[-2:], prof, prof[:2]], np.ones(5) / 5, mode="valid")
+    peaks, _ = find_peaks(np.r_[p, p, p], prominence=LOBE_PROMINENCE)  # three turns: no edge effects
+    return int(((peaks >= n) & (peaks < 2 * n)).sum()) * 360.0 / max(arc_deg, 1.0)
 
 
 def partition(labels: np.ndarray, tgrid: np.ndarray) -> tuple[float, dict[int, int]]:
@@ -309,7 +338,7 @@ def features(labels: np.ndarray, tgrid: np.ndarray, weights=None, mapping: dict[
         part, mapping = partition(labels, tgrid)
     else:
         part = partition_under(labels, tgrid, mapping)
-    lp, lt = lobes(rp, arc), lobes(rt, arc)
+    lp, lt = band_lobes(pf, arc), band_lobes(tf, arc)
     prof = float(np.abs(rp - rt).mean())
     cp, ct = head_colors(labels, -1), head_colors(tgrid, 0)
     total = (wp * part + wi * iou + wf * (1 - min(1.0, prof / PROFILE_SCALE))

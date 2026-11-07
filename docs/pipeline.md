@@ -475,7 +475,7 @@ The only gain without new losers (partition 0.40) comes from two photos, S1-15B 
 
 ## H10: the head circle fitted to the silhouette
 
-Started at eefda96; commits bed7e0f (the fit), 63879fb (head library rebuilt), 704b6d8 (sample). Full notes: `.superpowers/sdd/2026-11-05-rosette-svg-generator/h10-report.md`.
+Started at eefda96; commits bed7e0f (the fit), 63879fb (head library rebuilt), 704b6d8 (sample) and the lobe gate on the head band (the commit after ff51cd3). Full notes: `.superpowers/sdd/2026-11-05-rosette-svg-generator/h10-report.md`.
 
 **The fit (`prepare._tails_start`, `_fit_head`, `_coverage`).** (1) Tails start: the silhouette's outer left and right edges are followed upward from 0.7 of the mask height (`TAILS_TRACK_FROM`); each row is predicted by lines fitted to 60 rows starting 40 rows below it (`TAILS_FIT_ROWS`, `TAILS_GAP_ROWS`; on the 76 photos' tails such a prediction misses by at most 2.2 px, median 1.0, and the edges slope at most 0.27 px per row). The first row whose left or right edge is more than 6 px off on 3 consecutive rows (`TAILS_EDGE_TOL`, `TAILS_RUN_ROWS`) ends the tails, outward (head or star arms wider than the tails) or inward (tails wider than the head). (2) Head silhouette: the mask above that row. (3) Its convex hull bridges a star's concavities, so the hull vertices are the tips; vertices within 3 % of the head height of the cut are dropped (`FIT_CUT_MARGIN`). A circle centered on the axis is voted: each vertex weighs half the angle to its neighbours (each gap capped at 15 degrees, `FIT_GAP_CAP_DEG`, so a long loop is one weak vertex), each candidate center row takes the radius whose 4 % band (`FIT_TOL`) collects the most angle, then least squares on the inliers. (4) The radius is the fit's radius. Coverage is the angle spanned by consecutive on-circle vertices (gaps counted up to 60 degrees, `FIT_COVER_GAP_DEG`). (5) The fitted circle replaces the 90-degree symmetry circle only when its radius is at least 1.25 times the symmetry radius (`FIT_TAKEOVER`) and its coverage is at least 0.5 (`FIT_MIN_COVERAGE`): the symmetry score has locked onto an inner structure. On the 76 photos that is S29-15, S9-19, S10-19 and S57-17 (ratios 1.31-1.37, coverage 0.67-0.93); the next ratios are 1.19 (s34-15, a broken fit through a 6-point star's arms, coverage 0.31) and 1.12. The tails top stays the bottom of the circle.
 
@@ -510,7 +510,7 @@ Every other photo, S35-19 and A7-15 included, keeps its circle exactly. On the o
 | S10-19 | (300, 139.0, 114.0) -> (300, 173.4, 149.4) | 253.5 -> 322.9 | none -> points | 1 -> not ranked | S10-19 0.734 dy +0.3 x1.25 / A13-15B 0.664 -> S58-17 0.624 / S58-17 0.624 | S10-19 / A13-15B -> rules / rules |
 | S35-19, A7-15 | unchanged | unchanged | unchanged | unchanged | unchanged | unchanged |
 
-The tails of S29-15 now start under the star and the pose search no longer runs to its edge. S57-17 and S10-19 lose their own templates to the lobe gate, not to the score: at the new circle their own templates score 0.839 and 0.719 (S57-17's would be top-1), but the photo's outer profile now has 11.8 and 6.7 lobes (the bunting loops and side flags inside the larger window) against 0 for the templates, beyond `LOBE_GATE`.
+The tails of S29-15 now start under the star and the pose search no longer runs to its edge. S57-17 and S10-19 lost their own templates to the lobe gate, not to the score: at the new circle their own templates score 0.839 and 0.719, but the photo's outer profile had 11.8 and 6.7 lobes (the bunting loops and side flags inside the larger window) against 0 for the templates. Fixed by the lobe gate change below (S57-17 then draws its own head, S10-19 ranks it first).
 
 **Retrieval (76 photos; own design in the matcher's full-library top-1 / top-3; head IoU of the LOO and full-library picks through `tools/head_templates.decision_row`, every template drawn).**
 
@@ -520,9 +520,31 @@ The tails of S29-15 now start under the star and the pose search no longer runs 
 | bed7e0f, old library | 48 | 56 | 0.8340 | 0.8492 |
 | bed7e0f, rebuilt library | 48 | 56 | 0.8340 | 0.8492 |
 
-All four numbers are worse than before H10 (top-1 -1, top-3 -1, LOO -0.0022, full -0.0025), and the rebuild changes none of them. The changes come from the four photos that moved: S9-19 gains its own design (top-1), S57-17 and S10-19 lose theirs (lobe gate), and the head IoU against the reference files drops on all four (S29-15 0.815 -> 0.740, S57-17 0.825 -> 0.797, S10-19 0.780 -> 0.746, S9-19 0.790 -> 0.756 LOO) because the heads are now drawn at the photo's head size while the reference files draw them smaller relative to the tails; the rules heads of S57-17 (0.613 -> 0.786) and S10-19 (0.726 -> 0.768) improve.
+Before the lobe gate change all four numbers were worse than before H10 (top-1 -1, top-3 -1, LOO -0.0022, full -0.0025), and the rebuild changes none of them. The changes come from the four photos that moved: S9-19 gains its own design (top-1), S57-17 and S10-19 lose theirs (lobe gate), and the head IoU against the reference files drops on all four (S29-15 0.815 -> 0.740, S57-17 0.825 -> 0.797, S10-19 0.780 -> 0.746, S9-19 0.790 -> 0.756 LOO) because the heads are now drawn at the photo's head size while the reference files draw them smaller relative to the tails; the rules heads of S57-17 (0.613 -> 0.786) and S10-19 (0.726 -> 0.768) improve.
 
-**Scoreboard (34 IDs, `tools/score.py`, after H10 with the rebuilt library).** New image (headline): PASS 23/34, color 0.852, shape 0.919, head 0.842 (before 0.854 / 0.920 / 0.844). Known design: PASS 23/34, color 0.856, shape 0.920, head 0.844 (before 0.859 / 0.921 / 0.847). Only S29-15 (agree 0.265 -> 0.221, headS 0.815 -> 0.740) and S10-19 (0.950 -> 0.942, headS 0.780 -> 0.768; known 0.987 -> 0.942) change; the rebuilt library changes no row. Ruling: the head drop is a reference-proportion artifact (the S29-15 head is now centered on the photo's head and sized to it).
+**Lobe gate on the head band (`templates.band_lobes`, `LOBE_BAND` (0.6, 1.05), `LOBE_PROMINENCE` 0.1, `LOBE_GATE` 3.4 -> 5.1).** The gate's lobe count (photo and template; the lobe count has no weight in the score) now reads the outer profile only out to 1.05 head radii, clipped up from 0.6, and counts a peak only when it stands at least 0.1 head radii above the valleys on both sides (prominence). Tried first, the band alone with the old peak rule (peak over the median + 0.04): an upper bound of 1.05 or more changes nothing on the 76 (48 / 56; the flags and loops start at the head outline, inside the band); 1.0 gives 51 / 59 but drops S2-15's own design and leaves S57-17 out; 0.95 flattens every profile (all counts 0). Grid over the prominence (0.04-0.15) and the gate (3.4, 5.1, 6.8, none), top-1 / top-3 of own designs (full library, 76 photos):
+
+| prominence, gate | top-1 | top-3 | own designs lost (top-1 / top-3) | S57-17 own |
+|---|---|---|---|---|
+| old count, 3.4 (H10 before this change) | 48 | 56 | - | no |
+| 0.1, 3.4 | 53 | 62 | - / S58-17 | no |
+| **0.1, 5.1 (kept)** | **53** | **64** | none | yes |
+| 0.08, 5.1 | 54 | 63 | - / S58-17 | yes |
+| 0.12, 5.1 | 52 | 64 | S13-15 / - | yes |
+| 0.1, 6.8 | 51 | 64 | S13-15 / - | yes |
+| 0.1, no gate | 51 | 64 | S13-15 / - | yes |
+
+Gate counts: S57-17 photo 11.78 -> 5.05 (own template 0 -> 10.09: three steps, hence 5.1), S10-19 6.73 -> 5.05 (own 0 -> 5.05), S29-15 5.05 -> 5.05 (own 3.36 -> 5.05), S9-19 1.68 -> 5.05 (own 0 -> 3.36); largest other changes S35-19 6.73 -> 1.68, S69-19 8.41 -> 3.36, S52-19 11.78 -> 6.73, A13-15 5.05 -> 0, A1-15 5.05 -> 1.68, S27-15 5.05 -> 1.68. A 6-point star now passes a disc template (three tips in the window, 5.05 < 5.1); the synthetic gate tests use an 8-point star. Retrieval (same measure as above):
+
+| | top-1 | top-3 | LOO head IoU | full head IoU |
+|---|---|---|---|---|
+| before H10 (eefda96) | 49 | 57 | 0.8363 | 0.8517 |
+| H10, rebuilt library, old gate | 48 | 56 | 0.8340 | 0.8492 |
+| H10 + lobe gate on the head band | 53 | 64 | 0.8400 | 0.8587 |
+
+No own design that ranked first or in the top 3 before H10 is lost; gained top-1: A1-15, S1-15, S10-19, S27-15, S57-17. Picks: S57-17 draws its own head (known; LOO S56-17B); S10-19 ranks its own first (drawn: rules); S9-19 own first (drawn: rules); S29-15 now matches S10-19 (0.754, drawn in both columns; its own design ranks 33rd); S35-19 and A7-15 unchanged.
+
+**Scoreboard (34 IDs, `tools/score.py`, after H10 with the rebuilt library and the lobe gate).** New image (headline): PASS 23/34, color 0.855, shape 0.919, head 0.842 (before H10 0.854 / 0.920 / 0.844). Known design: PASS 23/34, color 0.859, shape 0.921, head 0.847 (before H10 0.859 / 0.921 / 0.847). The lobe gate changes S29-15 (agree 0.221 -> 0.321, headS 0.740 -> 0.851: S10-19's head), S30-15 (0.907 -> 0.972, headS 0.934 -> 0.879) and S2-15B (0.687 -> 0.613, headS 0.853 -> 0.820). Before the gate change: new image PASS 23/34, color 0.852, shape 0.919, head 0.842; known 23/34, 0.856, 0.920, 0.844; against before H10 only S29-15 (agree 0.265 -> 0.221, headS 0.815 -> 0.740) and S10-19 (0.950 -> 0.942, headS 0.780 -> 0.768; known 0.987 -> 0.942) change; the rebuilt library changes no row. Ruling: the head drop is a reference-proportion artifact (the S29-15 head is now centered on the photo's head and sized to it).
 
 ## Final state (Task 16)
 
@@ -537,7 +559,7 @@ Constants are module-level names; read their comments in the source before chang
 | part detection driver, leftovers as `unknown` | `rosette/vision/parts.py` | `LEFTOVER_OPEN_UNITS`, `TAIL_TOUCH_PX`, `HEAD_MARGIN`, `UNKNOWN_CONFIDENCE` |
 | head: rings, points, bows, center, blob rings | `rosette/vision/parts_head.py`, `parts_common.py` | `RING_EXTEND_COV`, `FULL_COV`, `MIN_BAND_UNITS`, `MIN_LAYER_COV`, `MAX_COUNT`, `BOW_ENDS`, `PETAL_FULLNESS`, `BLOB_UNCONFIRMED_CONF`, `MIN_INNER_RATIO`, `HEAD_ROUND`, `PINKED_DEPTH`, `RING_MAX_GAP`, `PLEATED_FULL_MIN`, `PLEATED_REACH_UNITS` |
 | tail stripes, glitter read as two tones, fans (H6) | `rosette/vision/parts_tails.py` | `ROW_FRACS`, `COUNT_ROWS`, `DENSE_SPAN`, `GAP_UNITS`, `ROW_BAND_PX`, `TOP_INSET`, `GLITTER_*`, `FAN_*` |
-| head shape library and matcher (H7) | `rosette/vision/templates.py`, cache `rosette/data/head_templates.json`; decision in `rosette/pipeline.py` | `WEIGHTS`, `PROFILE_SCALE`, `LOBE_SCALE`, `WINDOW_V`, `GRID`, `EXTENT`, `TEMPLATE_MIN_GAIN`, `TEMPLATE_MIN_SCORE`, `TEMPLATE_MIN_PARTITION`, `TEMPLATE_OVERRIDE_GAIN`, `TEMPLATE_OVERRIDE_PARTITION`, `HEAD_LAYER_ROLES`, `TEMPLATE_CANDIDATES`, describe: `STRIP_ASPECT`, `TRIM_SOLIDITY`, `LOOP_END`, `STAR_DEPTH` |
+| head shape library and matcher (H7) | `rosette/vision/templates.py`, cache `rosette/data/head_templates.json`; decision in `rosette/pipeline.py` | `WEIGHTS`, `PROFILE_SCALE`, `LOBE_SCALE`, `LOBE_GATE`, `LOBE_BAND`, `LOBE_PROMINENCE`, `WINDOW_V`, `GRID`, `EXTENT`, `TEMPLATE_MIN_GAIN`, `TEMPLATE_MIN_SCORE`, `TEMPLATE_MIN_PARTITION`, `TEMPLATE_OVERRIDE_GAIN`, `TEMPLATE_OVERRIDE_PARTITION`, `HEAD_LAYER_ROLES`, `TEMPLATE_CANDIDATES`, describe: `STRIP_ASPECT`, `TRIM_SOLIDITY`, `LOOP_END`, `STAR_DEPTH` |
 | tidy: unknown specks, tail slivers (H6) | `rosette/tidy.py` | `SPECK_MAX_HEAD_SHARE` (and `SLIVER_SHARE` from assign) |
 | Color 1-4 assignment, confidence, warnings | `rosette/assign.py`, `rosette/roles.py`, rules in `rosette/data/assign_rules.json` (mined by `tools/mine_rules.py`) | `FLAG_BELOW`, `MAX_COLORS`, `PATTERN_MIN_RIBBON_SHARE`, `TAIL_POS_TOL`, `FLAGGED_CONF`, `PATTERN_MERGE_PENALTY`, `SLIVER_SHARE`, `RULE_LOGODDS` |
 | geometry, shapes, occlusion cuts | `rosette/geometry/`, `rosette/shapes.py`, `rosette/build.py`, `rosette/geometry/clip.py` | `QUAD_SEGS`, `SIMPLIFY`, `MIN_PIECE` |
@@ -555,7 +577,7 @@ Every generated file must satisfy section 3 of the [design spec](superpowers/spe
 
 ### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H10)
 
-Re-recorded after H10 (63879fb): the columns are the new-image case (each photo's own design left out of the head library, the headline); the last column is the known design (full library) agree / success / headS. `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only).
+Re-recorded after H10 (lobe gate commit after ff51cd3): the columns are the new-image case (each photo's own design left out of the head library, the headline); the last column is the known design (full library) agree / success / headS. `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only).
 
 | ID | agree | uni | success | uni success | shape | headS | stack reversed | known design agree / success / headS |
 |---|---|---|---|---|---|---|---|---|
@@ -568,11 +590,11 @@ Re-recorded after H10 (63879fb): the columns are the new-image case (each photo'
 | S10-19 | 0.942 | 0.955 | yes | yes | 0.900 | 0.768 | 0 | 0.942 / yes / 0.768 |
 | S13-15 | 0.894 | 0.894 | no | no | 0.962 | 0.928 | 0 | 0.894 / no / 0.928 |
 | S17-15 | 0.599 | 0.843 | no | no | 0.886 | 0.730 | 0 | 0.669 / no / 0.738 |
-| S2-15B | 0.687 | 0.687 | no | no | 0.945 | 0.853 | 0 | 0.687 / no / 0.920 |
+| S2-15B | 0.613 | 0.613 | no | no | 0.930 | 0.820 | 0 | 0.687 / no / 0.920 |
 | S26-15 | 0.800 | 0.985 | no | yes | 0.933 | 0.856 | 0 | 0.800 / no / 0.856 |
 | S28-15 | 0.998 | 0.995 | yes | yes | 0.980 | 0.964 | 1 (star>loop) | 0.998 / yes / 0.964 |
-| S29-15 | 0.221 | 0.265 | no | no | 0.904 | 0.740 | 0 | 0.221 / no / 0.740 |
-| S30-15 | 0.907 | 0.907 | yes | yes | 0.963 | 0.934 | 0 | 0.983 / yes / 0.944 |
+| S29-15 | 0.321 | 0.241 | no | no | 0.935 | 0.851 | 0 | 0.321 / no / 0.851 |
+| S30-15 | 0.972 | 0.972 | yes | yes | 0.945 | 0.879 | 0 | 0.983 / yes / 0.944 |
 | S31-15 | 0.929 | 0.966 | yes | yes | 0.929 | 0.838 | 0 | 0.929 / yes / 0.838 |
 | S33-15 | 0.905 | 0.905 | yes | yes | 0.955 | 0.890 | 0 | 0.905 / yes / 0.890 |
 | S35-19 | 0.963 | 0.963 | yes | yes | 0.927 | 0.845 | 0 | 0.942 / yes / 0.805 |
@@ -594,7 +616,7 @@ Re-recorded after H10 (63879fb): the columns are the new-image case (each photo'
 | S80-22 | 0.989 | 1.000 | yes | yes | 0.934 | 0.878 | 0 | 0.989 / yes / 0.878 |
 | s34-15 | 0.956 | 0.951 | yes | yes | 0.928 | 0.844 | 1 (backing>star) | 0.956 / yes / 0.844 |
 
-Official (per-axis), tools/score.py summary: new image `success 23  flagged-not-success 10  silently-wrong 1  errors 0` / `PASS 23/34 (target >= 80%)` / `color agreement mean 0.852  shape: mean IoU 0.919  head 0.842  tail 0.955  shape_ok 27/34`; known design (reported only) `PASS 23/34`, color 0.856, shape 0.920, head 0.844, shape_ok 27/34; `stacking: 3 kind pairs reversed vs the designer in 3/34 IDs (reported only)` / `success under uniform-scale alignment 25/34` (reported only).
+Official (per-axis), tools/score.py summary: new image `success 23  flagged-not-success 10  silently-wrong 1  errors 0` / `PASS 23/34 (target >= 80%)` / `color agreement mean 0.855  shape: mean IoU 0.919  head 0.842  tail 0.955  shape_ok 27/34`; known design (reported only) `PASS 23/34`, color 0.859, shape 0.921, head 0.847, shape_ok 27/34; `stacking: 3 kind pairs reversed vs the designer in 3/34 IDs (reported only)` / `success under uniform-scale alignment 25/34` (reported only).
 
 Flagged although correct: 21 of the 23 successes; S28-15 and S43-15 are unflagged successes with visibly wrong heads (see 5b). S46-15 is silent again: its head fit (0.82 agreement, 0.94 outline) is not a gross failure; its miss is the scorer alignment effect described below.
 

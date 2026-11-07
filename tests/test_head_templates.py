@@ -76,14 +76,15 @@ def test_json_round_trip_keeps_pieces_and_grid():
 
 def test_choose_picks_the_matching_head_and_leave_one_out_skips_its_design():
     disc = _template("A1-15", [(1, "head", [_circle(1.0)]), (2, "center", [_circle(0.35)])])
-    star = _template("B2-15", [(1, "points", [_star(6, 0.55, 1.0)]), (2, "center", [_circle(0.35)])])
-    # the photo: a 6-point star of group 4 around a group 9 center
+    star = _template("B2-15", [(1, "points", [_star(8, 0.55, 1.0)]), (2, "center", [_circle(0.35)])])
+    # the photo: an 8-point star of group 4 around a group 9 center
     photo = np.where(star.grid == 1, 4, np.where(star.grid == 2, 9, -1)).astype(np.int16)
     t, f = choose(photo, [disc, star])
     assert t.sid == "B2-15" and f["mapping"] == {1: 4, 2: 9} and f["score"] > 0.9
     t2, _ = choose(photo, [disc, star], exclude_key="B2", gate=None)
     assert t2.sid == "A1-15"
-    # the lobe gate: a disc is never chosen for a star photo
+    # the lobe gate: a disc is never chosen for a star photo (8 points: a 6-point star sees
+    # three tips in the window, 5.05, under LOBE_GATE 5.1 since H10)
     assert choose(photo, [disc, star], exclude_key="B2") is None
 
 
@@ -140,7 +141,7 @@ def test_relabel_map_sends_merged_and_unused_labels_to_model_groups():
 
 def test_rank_lists_the_best_templates_first_and_choose_is_its_head():
     disc = _template("A1-15", [(1, "head", [_circle(1.0)]), (2, "center", [_circle(0.35)])])
-    star = _template("B2-15", [(1, "points", [_star(6, 0.55, 1.0)]), (2, "center", [_circle(0.35)])])
+    star = _template("B2-15", [(1, "points", [_star(8, 0.55, 1.0)]), (2, "center", [_circle(0.35)])])
     star5 = _template("C3-15", [(1, "points", [_star(6, 0.65, 0.9)]), (2, "center", [_circle(0.35)])])
     photo = np.where(star.grid == 1, 4, np.where(star.grid == 2, 9, -1)).astype(np.int16)
     ranked = rank(photo, [disc, star5, star], gate=None, n=3)
@@ -260,3 +261,30 @@ def test_library_cache_is_not_stale_for_a_file_whose_head_circle_prepare_fits():
         assert len(a.rings) == len(b.rings)
         for ra, rb in zip(a.rings, b.rings):
             assert ra.shape == rb.shape and np.allclose(ra, rb, atol=1e-3)
+
+
+def test_lobe_count_reads_the_head_band_not_side_flags_outside_the_head():
+    # a 6-point star head (tips at 1 head radius) with two side flags reaching 1.7 head
+    # radii (from 1.1): the gate's lobe count is the star's alone, and without the band
+    # the flags add lobes
+    import cv2
+
+    from rosette.vision.templates import EXTENT, features
+    c, k = (GRID - 1) / 2, (GRID - 1) / (2 * EXTENT)
+    star = np.full((GRID, GRID), -1, np.int16)
+    pts = np.rint(c + _star(6, 0.55, 1.0) * k).astype(np.int32)
+    cv2.fillPoly(star, [pts], 1)
+    flags = star.copy()
+    for sx in (-1, 1):
+        x0, x1 = sorted((c + sx * 1.1 * k, c + sx * 1.7 * k))
+        flags[int(c - 0.15 * k):int(c + 0.25 * k), int(x0):int(x1)] = 2
+    tmpl = np.zeros((GRID, GRID), np.uint8)
+    tmpl[star >= 0] = 1
+    alone, flagged = features(star, tmpl), features(flags, tmpl)
+    assert alone["lobes_photo"] == pytest.approx(alone["lobes_template"])
+    assert alone["lobes_photo"] > 3
+    assert flagged["lobes_photo"] == pytest.approx(alone["lobes_photo"])
+    from rosette.vision.templates import N_RAYS, _outer_profile, lobes
+    th, full = _outer_profile(flags >= 0)
+    arc = float(np.degrees(len(th) * 2 * np.pi / N_RAYS))
+    assert lobes(full, arc) != pytest.approx(alone["lobes_photo"])
