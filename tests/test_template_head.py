@@ -197,15 +197,15 @@ def test_groups_only_the_hidden_head_uses_leave_the_drawn_list_and_come_back():
     assert RosetteModel.from_json(out.to_json()).alternative_groups == out.alternative_groups
 
 
-def test_a_template_that_cannot_agree_with_the_tails_is_not_used():
+def test_a_template_that_cannot_be_colored_under_the_tails_is_not_considered():
     t = Template("T3-15", "T3", LIB["T1-15"].pieces, tail_categories=(1, 2, 4))
     t4 = Template("T3-15", "T3", t.pieces + [Piece(4, "points", [_star(6, 0.3, 0.38)])], tail_categories=(1, 2, 4))
     mask, labels = _labels_like(t4, mapping={1: 1, 2: 2, 3: 3, 4: 3})
     fr = Frame(axis_x=200, top=100, scale=1.0)
     # our tails carry only Color 3 (group 2): the reference's tail Colors 1, 2 and 4 have no tail group
     out = with_template(_detected(), mask, labels, (200, 200, 100), fr, _groups(), lib=[t4], min_score=0.0)
-    assert not any(q.role == "template" for q in out.parts)
-    assert any("could not be colored to agree with the tails" in w for w in out.warnings)
+    # the matcher does not consider a template it cannot color under the tails
+    assert not any(q.role == "template" for q in out.parts) and out.alternatives == []
 
 
 def test_a_template_whose_colors_agree_with_the_tails_is_used():
@@ -224,3 +224,22 @@ def test_head_overlap_of_two_models():
     assert head_overlap(a, a) == pytest.approx(1.0)
     b = _model(r=60)
     assert head_overlap(a, b) < 0.3
+
+
+def test_partition_is_scored_under_the_tail_bound_mapping():
+    from rosette.vision.templates import choose
+    # same shape, two color layouts: the reference whose tail Color 1 is the ring wins
+    # when our tails carry Color 1 as the ring's group (1)
+    ring_tail = Template("T5-15", "T5", LIB["T1-15"].pieces, tail_categories=(1,))
+    star_tail = Template("T6-15", "T6", LIB["T1-15"].pieces, tail_categories=(2,))
+    mask, labels = _labels_like(ring_tail, mapping={1: 1, 2: 2, 3: 3})
+    from rosette.vision.templates import photo_grid
+    grid = photo_grid(mask, labels, (200, 200, 100))
+    t, f = choose(grid, [star_tail, ring_tail], tail_groups={1: 1, 2: 3})
+    assert t.sid == "T5-15" and f["partition"] > 0.9
+
+
+def test_the_library_head_needs_its_tail_mapped_colors_to_agree():
+    from rosette.pipeline import TEMPLATE_MIN_PARTITION, colors_agree
+    assert colors_agree(TEMPLATE_MIN_PARTITION) and colors_agree(0.95)
+    assert not colors_agree(TEMPLATE_MIN_PARTITION - 0.01)

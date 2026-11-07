@@ -237,6 +237,7 @@ def decision_row(sid: str, cache: Path | None = None, scores: bool = False) -> d
             continue
         res = render(m)
         row[mode] = dict(measure(m, res.svg), pick=t.params["template_id"], score=float(t.params["score"]),
+                         partition=float(t.params.get("partition", 0.0)),
                          overlap=head_overlap(rec["model"], m), issues=len(res.issues))
     return row
 

@@ -38,7 +38,7 @@ from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_group
 from .vision.parts import detect_parts
 from .vision.parts_common import Frame
 from .vision.prepare import Prepared, prepare
-from .vision.templates import choose, load_library, photo_grid, relabel_map, tail_consistent_mapping
+from .vision.templates import choose, load_library, photo_grid, relabel_map
 from .writer import write_svg
 
 # Head fit gross-failure bars, from the 76 reference photos (docs/pipeline.md). Layer
@@ -78,16 +78,18 @@ TEMPLATE_DIFFERS_IOU = 0.7
 TEMPLATE_DIFFERS_WARNING = ("The library head and the rule-based head differ a lot (outline overlap {iou:.0%}) - "
                             "compare the head with the photo and use the head toggle if the other one is closer.")
 TEMPLATE_PART_ID = "template"
-# Template colors must agree with the tails (H7 fix round 1). "check": the overlap map
-# is kept only when every reference category that is also one of the reference's tail
-# Colors k lands on the group our tails carry as Color k; otherwise the rule-based head
-# stays (with TEMPLATE_COLOR_WARNING). "map": tail categories are forced onto those
-# groups and only head-only categories follow the overlap. Measured on the 76 photos
-# (docs/pipeline.md H7 fix round 1): "map" loses color on 7 photos by more than 0.02
-# (full library, mean -0.003), "check" on 2 (mean +0.003).
-TEMPLATE_TAIL_RULE = "check"
-TEMPLATE_COLOR_WARNING = ("The library head {tid} could not be colored to agree with the tails - the rule-based "
-                          "head is drawn.")
+# Template colors follow the tails (H7 fix round 2): a reference category that is also one
+# of the reference's tail Colors k is drawn in the group our tails carry as Color k, the
+# head-only categories follow the overlap (templates.tail_consistent_mapping); the matcher
+# scores the partition under that same mapping, and a template that cannot be mapped is
+# not considered. TEMPLATE_MIN_PARTITION: the library head is drawn only when its
+# tail-mapped partition agreement reaches this floor (docs/pipeline.md H7 fix round 2).
+# Over the photos where the template's outline wins (full library 23, LOO 20) color is lost
+# (> 0.02) at partitions up to 0.697 (S58-17) and never at or above 0.70.
+TEMPLATE_MIN_PARTITION = 0.70
+TEMPLATE_COLORS_WARNING = ("The library head {tid} fits the head outline better, but its colors do not agree "
+                           "with the photo under the tail colors - the rule-based head is drawn; compare the head "
+                           "with the photo and use the head toggle if the library head is closer.")
 
 
 @dataclass
@@ -210,6 +212,11 @@ def prefer_template(rules: HeadFit | None, library: HeadFit | None) -> bool:
     return rules is None or library.silhouette >= rules.silhouette + TEMPLATE_MIN_GAIN - 1e-9
 
 
+def colors_agree(partition: float) -> bool:
+    """The library head's tail-mapped partition agreement reaches TEMPLATE_MIN_PARTITION."""
+    return partition >= TEMPLATE_MIN_PARTITION - 1e-9
+
+
 def template_confidence(score: float) -> float:
     return round(float(min(1.0, max(0.0, FLAG_BELOW + score - TEMPLATE_FLAG_SCORE))), 3)
 
@@ -227,27 +234,17 @@ def with_template(model: RosetteModel, mask: np.ndarray, labels: np.ndarray, hea
     if not lib or not have:
         return out
     grid = photo_grid(mask, labels, head, relabel_map(out, groups, merged))
-    best = choose(grid, lib, exclude_key)
+    best = choose(grid, lib, exclude_key, tail_groups=_tail_groups(out))
     if best is None or best[1]["score"] < (TEMPLATE_MIN_SCORE if min_score is None else min_score):
         return out
     t, f = best
-    tail_groups = _tail_groups(out)
-    mapping = f["mapping"]
-    if tail_groups and TEMPLATE_TAIL_RULE == "map":
-        mapping = tail_consistent_mapping(grid, t, tail_groups)
-    elif tail_groups and TEMPLATE_TAIL_RULE == "check":
-        if any(c in t.tail_categories and tail_groups.get(c) != g for c, g in mapping.items()):
-            mapping = None
-    if mapping is None:
-        out.warnings.append(TEMPLATE_COLOR_WARNING.format(tid=t.sid))
-        return out
-    mapping = {c: g for c, g in mapping.items() if g in have}
+    mapping = {c: g for c, g in f["mapping"].items() if g in have}
     if not mapping:
         return out
     first = next(pc.category for pc in t.pieces if pc.category in mapping)
     params: dict = {"template_id": t.sid, "cx": round(frame.x(head[0]), 3), "cy": round(frame.y(head[1]), 3),
                     "r": round(frame.d(head[2]), 3), "rotation_deg": 0.0, "score": round(f["score"], 3),
-                    "points": int(t.points)}
+                    "partition": round(f["partition"], 3), "points": int(t.points)}
     for c in t.categories:
         params[f"group_{c}"] = int(mapping.get(c, mapping[first]))
     part = Part(TEMPLATE_PART_ID, "template", params, int(mapping[first]), 10, template_confidence(f["score"]))
@@ -340,10 +337,15 @@ def analyze_with_fit(data: bytes, template: bool = True,
         if lib.alternatives:
             lib_fit = head_fit(p, labels, lib, merged)
             if prefer_template(fit, lib_fit):
-                overlap = head_overlap(out, lib)
-                out, fit = lib, lib_fit
-                if overlap is not None and overlap < TEMPLATE_DIFFERS_IOU:
-                    out.warnings.append(TEMPLATE_DIFFERS_WARNING.format(iou=overlap))
+                tmpl = next(q for q in lib.parts if q.role == "template")
+                if colors_agree(float(tmpl.params.get("partition", 0.0))):
+                    overlap = head_overlap(out, lib)
+                    out, fit = lib, lib_fit
+                    if overlap is not None and overlap < TEMPLATE_DIFFERS_IOU:
+                        out.warnings.append(TEMPLATE_DIFFERS_WARNING.format(iou=overlap))
+                else:  # the rule-based head, with the library head ready on the toggle
+                    out = use_rules_head(lib)
+                    out.warnings.append(TEMPLATE_COLORS_WARNING.format(tid=tmpl.params["template_id"]))
     out = _check_head(out, fit)
     by_id = {g.id: g for g in groups}
     for gid in mixed_texture_groups(p, labels, groups):

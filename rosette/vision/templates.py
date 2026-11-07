@@ -44,8 +44,10 @@ WINDOW_V = 0.55
 # Roles of reference pieces that belong to the head (everything but tail stripes).
 HEAD_ROLES = ("head", "ring", "points", "center", "unknown")
 # Feature weights (partition, iou, profile, lobes, colors) and scales of the template
-# score (H7 fix round 1: chosen on own-design retrieval over the 76 photos, docs/pipeline.md).
-WEIGHTS = (0.4, 0.3, 0.2, 0.1, 0.1)
+# score (H7 fix rounds 1-2: chosen on own-design retrieval over the 76 photos with the
+# partition scored under the tail-bound mapping, docs/pipeline.md). The lobe count acts
+# through LOBE_GATE only: as a score term it put S30-15 over S35-19's own template.
+WEIGHTS = (0.4, 0.3, 0.2, 0.0, 0.1)
 PROFILE_SCALE, LOBE_SCALE = 0.4, 2.0
 # Lobe gate: a template whose outer-profile lobe count (per 360 deg) differs from the
 # photo's by more than LOBE_GATE is not considered (a disc for a star photo). The count
@@ -275,8 +277,23 @@ def head_colors(values: np.ndarray, background) -> int:
     return int((counts >= COLOR_MIN_SHARE * sel.sum()).sum())
 
 
-def features(labels: np.ndarray, tgrid: np.ndarray, weights=None) -> dict:
-    """Feature values, the weighted score and the category -> label mapping."""
+def partition_under(labels: np.ndarray, tgrid: np.ndarray, mapping: dict[int, int]) -> float:
+    """Share of the window's foreground union where the template category, turned into a
+    photo label by mapping, equals the photo label."""
+    pf, tf = (labels >= 0) & _WIN, (tgrid > 0) & _WIN
+    union = pf | tf
+    if not union.any():
+        return 0.0
+    mapped = np.full(tgrid.shape, -2, np.int32)
+    for c, g in mapping.items():
+        mapped[tgrid == c] = g
+    return float(((mapped == labels) & union).sum() / union.sum())
+
+
+def features(labels: np.ndarray, tgrid: np.ndarray, weights=None, mapping: dict[int, int] | None = None) -> dict:
+    """Feature values, the weighted score and the category -> label mapping. mapping:
+    score the partition under this mapping (the one the head will be drawn with)
+    instead of the free one-to-one overlap mapping."""
     w = WEIGHTS if weights is None else weights
     wp, wi, wf, wl = w[:4]
     wc = w[4] if len(w) > 4 else 0.0
@@ -286,7 +303,10 @@ def features(labels: np.ndarray, tgrid: np.ndarray, weights=None) -> dict:
     th, rp = _outer_profile(pf)
     _, rt = _outer_profile(tf)
     arc = math.degrees(len(th) * 2 * math.pi / N_RAYS)
-    part, mapping = partition(labels, tgrid)
+    if mapping is None:
+        part, mapping = partition(labels, tgrid)
+    else:
+        part = partition_under(labels, tgrid, mapping)
     lp, lt = lobes(rp, arc), lobes(rt, arc)
     prof = float(np.abs(rp - rt).mean())
     cp, ct = head_colors(labels, -1), head_colors(tgrid, 0)
@@ -297,15 +317,22 @@ def features(labels: np.ndarray, tgrid: np.ndarray, weights=None) -> dict:
 
 
 def choose(labels: np.ndarray, lib, exclude_key: str | None = None, weights=None,
-           gate: float | None = LOBE_GATE) -> tuple[Template, dict] | None:
+           gate: float | None = LOBE_GATE, tail_groups: dict[int, int] | None = None) -> tuple[Template, dict] | None:
     """Best-scoring template (and its features) for the photo grid labels among those
     passing the lobe gate (LOBE_GATE; None: no gate), or None; templates of exclude_key
-    (a design_key) are skipped (leave-one-out evaluation)."""
+    (a design_key) are skipped (leave-one-out evaluation). tail_groups (our tail Color ->
+    group): each template is scored under the tail-bound mapping it would be drawn with
+    (tail_consistent_mapping), and one that cannot be mapped is skipped."""
     best = None
     for t in lib:
         if exclude_key is not None and t.key == exclude_key:
             continue
-        f = features(labels, t.grid, weights)
+        mapping = None
+        if tail_groups:
+            mapping = tail_consistent_mapping(labels, t, tail_groups)
+            if mapping is None:
+                continue
+        f = features(labels, t.grid, weights, mapping)
         if gate is not None and abs(f["lobes_photo"] - f["lobes_template"]) > gate + 1e-6:
             continue
         if best is None or f["score"] > best[1]["score"]:
