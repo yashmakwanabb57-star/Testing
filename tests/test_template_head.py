@@ -273,9 +273,9 @@ def test_library_head_path_floor_override_or_rules_with_the_warning():
     failed, fine = HeadFit(0.42, 0.60), HeadFit(0.9, 0.85)
     assert library_head_path(fine, HeadFit(0.9, 0.88), TEMPLATE_MIN_PARTITION) == "floor"
     assert library_head_path(fine, HeadFit(0.9, 0.86), 0.9) is None  # outline gain under 0.02
-    assert library_head_path(fine, HeadFit(0.9, 0.95), 0.35) == "colors"  # no gross failure, colors disagree
-    assert library_head_path(failed, HeadFit(0.5, 0.88), 0.35) == "override"
-    assert library_head_path(failed, HeadFit(0.5, 0.65), 0.35) == "colors"  # gain 0.05: rules + warning
+    assert library_head_path(fine, HeadFit(0.9, 0.95), 0.40) == "colors"  # no gross failure, colors disagree
+    assert library_head_path(failed, HeadFit(0.5, 0.88), 0.40) == "override"
+    assert library_head_path(failed, HeadFit(0.5, 0.65), 0.40) == "colors"  # gain 0.05: rules + warning
     assert library_head_path(failed, HeadFit(0.5, 0.88), 0.23) == "colors"  # partition under 0.30
     assert library_head_path(None, HeadFit(0.5, 0.88), 0.9) == "floor"
 
@@ -396,7 +396,7 @@ def test_none_path_keeps_the_three_candidates_and_warns_nothing(three):
 def test_override_caps_the_library_head_and_warns_that_the_heads_differ(three):
     from rosette.pipeline import FLAGGED_CONF, choose_head, drawn_head
     fits = _fits(rules=GROSS, T1_15=(0.8, 0.9), T7_15=(0.8, 0.85), T8_15=(0.8, 0.85))
-    m, fit = choose_head(_detected(), _lib_model(0.35), fits, lambda a, b: 0.85)
+    m, fit = choose_head(_detected(), _lib_model(0.4), fits, lambda a, b: 0.85)
     assert drawn_head(m) == "T1-15" and fit.silhouette == 0.9
     assert next(q for q in m.parts if q.role == "template").confidence <= FLAGGED_CONF
     assert any("differ a lot" in w for w in m.warnings)
@@ -416,7 +416,7 @@ def test_floor_path_warns_only_when_the_heads_overlap_under_the_bar(three):
 def test_colors_path_draws_the_rules_head_keeps_the_candidates_and_warns(three):
     from rosette.pipeline import RULES_HEAD, choose_head, drawn_head
     fits = _fits(rules=FINE, T1_15=(0.9, 0.95), T7_15=(0.9, 0.9), T8_15=(0.9, 0.9))
-    m, _ = choose_head(_detected(), _lib_model(0.35), fits, lambda a, b: 0.85)
+    m, _ = choose_head(_detected(), _lib_model(0.4), fits, lambda a, b: 0.85)
     assert drawn_head(m) == RULES_HEAD
     assert len([q for q in m.alternatives if q.role == "template"]) == 3
     assert [w for w in m.warnings if "colors do not agree" in w]
@@ -444,7 +444,7 @@ def test_no_head_fit_counts_as_a_failed_rules_head_for_the_override():
 def test_switching_heads_swaps_flags_warnings_and_fit(three):
     from rosette.pipeline import FLAGGED_CONF, choose_head, drawn_head, use_head
     fits = _fits(rules=GROSS, T1_15=(0.8, 0.9), T7_15=(0.5, 0.7), T8_15=(0.8, 0.85))
-    m, _ = choose_head(_detected(), _lib_model(0.35), fits, lambda a, b: 0.85)
+    m, _ = choose_head(_detected(), _lib_model(0.4), fits, lambda a, b: 0.85)
     differs = [w for w in m.warnings if "differ a lot" in w]
     rules = use_head(m, "rules")
     head = next(q for q in rules.parts if q.id == "head")
