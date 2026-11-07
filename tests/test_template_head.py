@@ -322,3 +322,23 @@ def test_use_head_draws_the_picked_candidate_or_the_rules_head(monkeypatch):
     assert use_rules_head(back).parts == rules.parts
     with pytest.raises(ValueError):
         use_head(out, "nope")
+
+
+def test_without_a_head_layer_the_override_skips_the_partition_bar():
+    from rosette.pipeline import (TEMPLATE_OVERRIDE_GAIN, TEMPLATE_OVERRIDE_PARTITION, HeadFit, has_head_layer,
+                                  library_head_path, override_allowed)
+    failed = HeadFit(0.42, 0.60)
+    big = HeadFit(0.2, 0.60 + TEMPLATE_OVERRIDE_GAIN)
+    low = TEMPLATE_OVERRIDE_PARTITION - 0.07
+    # rules drew only a center and unrecognised blobs: the library head is drawn
+    no_head = RosetteModel([_tail(), Part("c", "center", {"cx": 300, "cy": 200, "r": 30}, 3, 60, 0.97),
+                            Part("u", "unknown", {"cx": 280, "cy": 190, "r": 30}, 1, 60, 0.11)], _groups())
+    assert not has_head_layer(no_head)
+    assert override_allowed(failed, big, low, head_layer=False)
+    assert library_head_path(failed, big, low, head_layer=False) == "override"
+    # the same with a head part present: the partition bar holds
+    assert has_head_layer(_detected())
+    assert not override_allowed(failed, big, low, head_layer=True)
+    assert library_head_path(failed, big, low, head_layer=True) == "colors"
+    # the gain bar holds either way
+    assert not override_allowed(failed, HeadFit(0.2, 0.60 + TEMPLATE_OVERRIDE_GAIN - 0.01), low, head_layer=False)

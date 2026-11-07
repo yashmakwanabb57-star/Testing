@@ -392,16 +392,16 @@ S57-17's head is loop blocks around a pinked ring (outline lobes like the photo'
 | S36-15B | S36-15 | 0.327 | 0.516 | 0.782 -> 0.830 | +0.043 | override |
 | S51-19 | A1-15 | 0.265 | 0.526 | 0.919 -> 0.860 | +0.008 | override |
 | S9-19 | S1-15B | 0.151 | 0.359 | 0.896 -> 0.971 | +0.032 | override |
-| S29-15 | S57-17 | 0.285 | 0.231 | 0.257 -> 0.257 | +0.031 | rules (partition) |
+| S29-15 | S57-17 | 0.285 | 0.231 | 0.257 -> 0.257 | +0.031 | override (no head layer) |
 | S52-19 | S31-15 | 0.163 | 0.282 | 0.908 -> 0.876 | -0.023 | rules (partition) |
 
 | 76 photos | head IoU (rules 0.8299) | library heads (override) | color >= 0.9 (rules 47) | color gate losers | shape losers > 0.02 |
 |---|---|---|---|---|---|
 | fix round 3, full | 0.8597 | 23 (8) | 48 | S51-19 -0.059, S52-19 -0.032 | S52-19 -0.023 |
-| **fix round 4, full** | 0.8586 | 21 (6) | 49 | S51-19 -0.059 | none |
-| fix round 4, LOO | 0.8460 | 14 (5) | 45 | S30-15, S35-19, S61-19 (floor); S51-19 (override) | none |
+| **fix round 4, full** | 0.8602 | 22 (7) | 49 | S51-19 -0.059 | none |
+| fix round 4, LOO | 0.8476 | 15 (6) | 45 | S30-15, S35-19, S61-19 (floor); S51-19 (override) | none |
 
-S52-19 is back on its rule-based head. S29-15 is too (its partition 0.231 is under 0.30), so it no longer gets a library head by default; S51-19 still does (gain 0.265, partition 0.526: no gain or partition bar separates it from S10-19, S15-15 and S36-15B, which gain color). The only bars that give S29-15 a library head and put S51-19 and S52-19 on the rules head are a gain bar above S51-19's 0.265 and at most S15-15's 0.278 (0.27) with no partition bar (full: 18 library heads, 3 by override, no color or shape losers, head 0.8542; LOO 0.8431), which also drops S10-19, S9-19 and S17-15 and sits 0.013 from S15-15; not taken without a ruling.
+S52-19 is back on its rule-based head (it has points parts, so the partition bar applies). Ruling: the partition bar does not apply when the rule-based path drew no head layer at all (no head, ring or points part: only a center and/or unrecognised blobs; `has_head_layer`, `HEAD_LAYER_ROLES`): a missing head is worse than any mappable library head, whose colors the user can fix on the head card. The gain bar still applies and the library head is flagged (confidence cap 0.5) with the heads-differ warning. Among the photos above S10-19, S29-15, S36-15B and S9-19 have no head layer; only S29-15 (partition 0.231) changes, it draws S57-17 by default again. S51-19 keeps its override (gain 0.265, partition 0.526, flagged; color -0.059 accepted by ruling, the picker is the way out).
 
 Head card picker. `templates.rank` lists the matcher's best templates (the decision rule's choice first) and `with_template` keeps the next `TEMPLATE_CANDIDATES` - 1 in `alternatives` (part ids `template_2`, `template_3`; params `rank` and `description`), next to the detected head parts. `templates.describe` mines the one-line description from the template pieces: a piece around the center is a ring (with a hole), a center or a disc (reach over 0.65 R), or an N-point star (4 or more lobes deeper than 1.3x); a piece away from it is a strip (4x longer than wide), a trim (under 0.6 of its hull), a loop (as wide at its outer end as half its angular width), a kite (tapered, at most 4 corners) or a point; a piece repeated with the same outline counts once (S35-19: "6 loops, 6 kites, 12 strips, 6 trims, ring, center"). The head card (Workbench and Guided share it) lists "Rule-based head (the detected parts)" and each candidate as "Library template <id> - match NN%, N points - <description>" with radio buttons; picking one draws it (`logic.js switchHead`, mirror of `pipeline.use_head`; the render API takes the same choice as `head` and returns the switched model), unconfirms the head cards and the head check, and the picked head is flagged like any library head (a candidate's confidence is its own match score). The default stays the decision rule's choice. Candidates for the IDs above: S29-15 S57-17 / S69-19 / S58-17 (its own star template is not among them); S51-19 A1-15 / A13-15B / S63-17; S52-19 S31-15 / own / S69-19; S35-19 own / S30-15 / S31-15.
 
@@ -418,7 +418,7 @@ Constants are module-level names; read their comments in the source before chang
 | part detection driver, leftovers as `unknown` | `rosette/vision/parts.py` | `LEFTOVER_OPEN_UNITS`, `TAIL_TOUCH_PX`, `HEAD_MARGIN`, `UNKNOWN_CONFIDENCE` |
 | head: rings, points, bows, center, blob rings | `rosette/vision/parts_head.py`, `parts_common.py` | `RING_EXTEND_COV`, `FULL_COV`, `MIN_BAND_UNITS`, `MIN_LAYER_COV`, `MAX_COUNT`, `BOW_ENDS`, `PETAL_FULLNESS`, `BLOB_UNCONFIRMED_CONF`, `MIN_INNER_RATIO`, `HEAD_ROUND`, `PINKED_DEPTH`, `RING_MAX_GAP`, `PLEATED_FULL_MIN`, `PLEATED_REACH_UNITS` |
 | tail stripes, glitter read as two tones, fans (H6) | `rosette/vision/parts_tails.py` | `ROW_FRACS`, `COUNT_ROWS`, `DENSE_SPAN`, `GAP_UNITS`, `ROW_BAND_PX`, `TOP_INSET`, `GLITTER_*`, `FAN_*` |
-| head shape library and matcher (H7) | `rosette/vision/templates.py`, cache `rosette/data/head_templates.json`; decision in `rosette/pipeline.py` | `WEIGHTS`, `PROFILE_SCALE`, `LOBE_SCALE`, `WINDOW_V`, `GRID`, `EXTENT`, `TEMPLATE_MIN_GAIN`, `TEMPLATE_MIN_SCORE`, `TEMPLATE_MIN_PARTITION`, `TEMPLATE_OVERRIDE_GAIN`, `TEMPLATE_OVERRIDE_PARTITION`, `TEMPLATE_CANDIDATES`, describe: `STRIP_ASPECT`, `TRIM_SOLIDITY`, `LOOP_END`, `STAR_DEPTH` |
+| head shape library and matcher (H7) | `rosette/vision/templates.py`, cache `rosette/data/head_templates.json`; decision in `rosette/pipeline.py` | `WEIGHTS`, `PROFILE_SCALE`, `LOBE_SCALE`, `WINDOW_V`, `GRID`, `EXTENT`, `TEMPLATE_MIN_GAIN`, `TEMPLATE_MIN_SCORE`, `TEMPLATE_MIN_PARTITION`, `TEMPLATE_OVERRIDE_GAIN`, `TEMPLATE_OVERRIDE_PARTITION`, `HEAD_LAYER_ROLES`, `TEMPLATE_CANDIDATES`, describe: `STRIP_ASPECT`, `TRIM_SOLIDITY`, `LOOP_END`, `STAR_DEPTH` |
 | tidy: unknown specks, tail slivers (H6) | `rosette/tidy.py` | `SPECK_MAX_HEAD_SHARE` (and `SLIVER_SHARE` from assign) |
 | Color 1-4 assignment, confidence, warnings | `rosette/assign.py`, `rosette/roles.py`, rules in `rosette/data/assign_rules.json` (mined by `tools/mine_rules.py`) | `FLAG_BELOW`, `MAX_COLORS`, `PATTERN_MIN_RIBBON_SHARE`, `TAIL_POS_TOL`, `FLAGGED_CONF`, `PATTERN_MERGE_PENALTY`, `SLIVER_SHARE`, `RULE_LOGODDS` |
 | geometry, shapes, occlusion cuts | `rosette/geometry/`, `rosette/shapes.py`, `rosette/build.py`, `rosette/geometry/clip.py` | `QUAD_SEGS`, `SIMPLIFY`, `MIN_PIECE` |
@@ -436,7 +436,7 @@ Every generated file must satisfy section 3 of the [design spec](superpowers/spe
 
 ### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H7 fix round 4)
 
-Re-recorded after H7 fix round 4 (9d71440; only S29-15 changed against fix round 3: back on its rule-based head); the last column is the H7 start (1339a24, the H6 table). `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only). IDs drawn with a library head: those listed in the H7 fix round 3 and 4 sections (full library: 21 of 76 photos, among them S35-19 with its own template; S29-15 is on its rule-based head).
+Re-recorded after H7 fix round 4 (no-head-layer clause; the table equals fix round 3's: S52-19 is not among the 34, S29-15 draws S57-17 again); the last column is the H7 start (1339a24, the H6 table). `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only). IDs drawn with a library head: those listed in the H7 fix round 3 and 4 sections (full library: 22 of 76 photos, among them S35-19 with its own template and S29-15 with S57-17).
 
 | ID | agree | uni | success | uni success | shape | headS | stack reversed | before H7 (1339a24) agree / shape / headS |
 |---|---|---|---|---|---|---|---|---|
@@ -452,7 +452,7 @@ Re-recorded after H7 fix round 4 (9d71440; only S29-15 changed against fix round
 | S2-15B | 0.687 | 0.687 | no | no | 0.966 | 0.920 | 0 | 0.687 / 0.934 / 0.815 |
 | S26-15 | 0.800 | 0.985 | no | yes | 0.933 | 0.856 | 0 | 0.800 / 0.933 / 0.856 |
 | S28-15 | 0.998 | 0.995 | yes | yes | 0.980 | 0.964 | 1 (star>loop) | 0.998 / 0.980 / 0.964 |
-| S29-15 | 0.257 | 0.229 | no | no | 0.897 | 0.699 | 0 | 0.257 / 0.897 / 0.699 |
+| S29-15 | 0.257 | 0.293 | no | no | 0.928 | 0.818 | 0 | 0.257 / 0.897 / 0.699 |
 | S30-15 | 0.983 | 0.983 | yes | yes | 0.967 | 0.944 | 0 | 0.975 / 0.900 / 0.759 |
 | S31-15 | 0.929 | 0.966 | yes | yes | 0.929 | 0.838 | 0 | 0.929 / 0.929 / 0.838 |
 | S33-15 | 0.905 | 0.905 | yes | yes | 0.955 | 0.890 | 0 | 0.905 / 0.955 / 0.890 |
@@ -475,7 +475,7 @@ Re-recorded after H7 fix round 4 (9d71440; only S29-15 changed against fix round
 | S80-22 | 0.989 | 1.000 | yes | yes | 0.934 | 0.878 | 0 | 0.989 / 0.934 / 0.878 |
 | s34-15 | 0.956 | 0.951 | yes | yes | 0.928 | 0.844 | 1 (backing>star) | 0.956 / 0.928 / 0.844 |
 
-Official (per-axis), tools/score.py summary: `success 23  flagged-not-success 10  silently-wrong 1  errors 0` / `PASS 23/34 (target >= 80%)` / `shape: mean IoU 0.921  head 0.848  tail 0.955  shape_ok 26/34 (IoU >= 0.9)` / `stacking: 3 kind pairs reversed vs the designer in 3/34 IDs (reported only)` / `reported only (not the bar): success under uniform-scale alignment 25/34`. The per-axis column is the metric and the bar; the uniform column only explains misses.
+Official (per-axis), tools/score.py summary: `success 23  flagged-not-success 10  silently-wrong 1  errors 0` / `PASS 23/34 (target >= 80%)` / `shape: mean IoU 0.922  head 0.851  tail 0.955  shape_ok 27/34 (IoU >= 0.9)` / `stacking: 3 kind pairs reversed vs the designer in 3/34 IDs (reported only)` / `reported only (not the bar): success under uniform-scale alignment 25/34`. The per-axis column is the metric and the bar; the uniform column only explains misses.
 
 Flagged although correct: 21 of the 23 successes; S28-15 and S43-15 are unflagged successes with visibly wrong heads (see 5b). S46-15 is silent again: its head fit (0.82 agreement, 0.94 outline) is not a gross failure; its miss is the scorer alignment effect described below.
 
@@ -494,7 +494,7 @@ Before uploading either file to the shop, the user should open each photo in the
 
 ### Known limitations
 
-- **Library heads (H7, after fix round 4) pick the photo's own design for 48 of 76 photos (top-3 58, offered on the head card).** S29-15 is drawn with its rule-based head (the override needs partition 0.30; S57-17 is the first candidate on the head card); S51-19 still loses 0.059 color through the override. See the H7 section.
+- **Library heads (H7, after fix round 4) pick the photo's own design for 48 of 76 photos (top-3 58, offered on the head card).** S29-15 draws S57-17's head (loop blocks around a pinked ring, flagged), not its own star, which is not among its 3 candidates; S51-19 loses 0.059 color through the override (flagged; accepted). See the H7 section.
 
 - **The success bar is not met: 23/34 succeed against 28 needed (80 %).** `pytest -m slow` fails accordingly. Tuning stopped; it is not finished.
 - **S46-15 counts as silently wrong under per-axis scoring** (0.741, not flagged). It is a scorer alignment effect (the designer drew a larger head and narrower tails; uniform scale gives 0.926); its head fit (0.82) is not a gross failure.

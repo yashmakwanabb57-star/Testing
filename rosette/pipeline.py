@@ -106,6 +106,11 @@ TEMPLATE_MIN_PARTITION = 0.54
 # 0.282) on its rule-based head, and with it S29-15 (0.231).
 TEMPLATE_OVERRIDE_GAIN = 0.10
 TEMPLATE_OVERRIDE_PARTITION = 0.30
+# When the rule-based path drew no head layer at all (no head, ring or points part: only a
+# center and/or unrecognised blobs, as on S29-15) the partition bar does not apply: a
+# missing head is worse than any mappable library head, whose colors the user can fix on
+# the head card. The gain bar still applies and the library head is flagged.
+HEAD_LAYER_ROLES = ("head", "ring", "points")
 TEMPLATE_COLORS_WARNING = ("The library head {tid} fits the head outline better, but its colors do not agree "
                            "with the photo under the tail colors - the rule-based head is drawn; compare the head "
                            "with the photo and pick a library head on the head card if one is closer.")
@@ -237,16 +242,25 @@ def gross_failure(fit: HeadFit | None) -> bool:
     return fit is not None and (fit.agreement < HEAD_FIT_MIN or fit.silhouette < HEAD_SILHOUETTE_MIN)
 
 
-def override_allowed(rules: HeadFit | None, library: HeadFit | None, partition: float) -> bool:
+def has_head_layer(model: RosetteModel) -> bool:
+    """The model draws a head layer (a head, ring or points part), not only a center and
+    unrecognised shapes."""
+    return any(q.role in HEAD_LAYER_ROLES for q in model.parts)
+
+
+def override_allowed(rules: HeadFit | None, library: HeadFit | None, partition: float,
+                     head_layer: bool = True) -> bool:
     """A grossly failed rule-based head (gross_failure) is replaced by the library head
     below the color floor only when the library outline wins by TEMPLATE_OVERRIDE_GAIN and
-    its tail-mapped partition reaches TEMPLATE_OVERRIDE_PARTITION."""
+    its tail-mapped partition reaches TEMPLATE_OVERRIDE_PARTITION; the partition bar is
+    dropped when the rule-based path drew no head layer (head_layer False)."""
     return (gross_failure(rules) and library is not None
             and library.silhouette >= rules.silhouette + TEMPLATE_OVERRIDE_GAIN - 1e-9
-            and partition >= TEMPLATE_OVERRIDE_PARTITION - 1e-9)
+            and (not head_layer or partition >= TEMPLATE_OVERRIDE_PARTITION - 1e-9))
 
 
-def library_head_path(rules: HeadFit | None, library: HeadFit | None, partition: float) -> str | None:
+def library_head_path(rules: HeadFit | None, library: HeadFit | None, partition: float,
+                      head_layer: bool = True) -> str | None:
     """How the best library head is used: None (its outline does not win, prefer_template),
     "floor" (its colors agree, colors_agree), "override" (the rule-based head failed,
     override_allowed: drawn flagged) or "colors" (the rule-based head is drawn with the
@@ -255,7 +269,7 @@ def library_head_path(rules: HeadFit | None, library: HeadFit | None, partition:
         return None
     if colors_agree(partition):
         return "floor"
-    return "override" if override_allowed(rules, library, partition) else "colors"
+    return "override" if override_allowed(rules, library, partition, head_layer) else "colors"
 
 
 def colors_agree(partition: float) -> bool:
@@ -422,7 +436,7 @@ def analyze_with_fit(data: bytes, template: bool = True,
         if lib.alternatives:
             lib_fit = head_fit(p, labels, lib, merged)
             tmpl = next(q for q in lib.parts if q.role == "template")
-            path = library_head_path(fit, lib_fit, float(tmpl.params.get("partition", 0.0)))
+            path = library_head_path(fit, lib_fit, float(tmpl.params.get("partition", 0.0)), has_head_layer(out))
             if path is not None:
                 agree = path == "floor"
                 if path != "colors":
