@@ -5,7 +5,7 @@ import math
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
-Role = Literal["head", "ring", "points", "center", "tail_stripe", "unknown"]
+Role = Literal["head", "ring", "points", "center", "tail_stripe", "unknown", "template"]
 
 MAX_COUNT = 200
 _COUNT_PARAMS = ("count", "tails_count", "tail_index", "stripe_index")
@@ -79,6 +79,9 @@ class RosetteModel:
     groups: list[ColorGroup] = field(default_factory=list)
     rose: bool = False
     warnings: list[str] = field(default_factory=list)
+    # Parts kept in the model but not drawn: with a library head (role "template", H7)
+    # the detected head parts wait here so the user can switch back to them.
+    alternatives: list[Part] = field(default_factory=list)
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -90,7 +93,8 @@ class RosetteModel:
     def from_json(cls, d: dict) -> "RosetteModel":
         groups = [ColorGroup(**{**g, "rgb": tuple(g["rgb"])}) for g in d.get("groups", [])]
         parts = [Part(**p) for p in d.get("parts", [])]
-        for q in parts:
+        alternatives = [Part(**p) for p in d.get("alternatives", [])]
+        for q in parts + alternatives:
             check_params(q.params)
         return cls(parts=parts, groups=groups, rose=bool(d.get("rose", False)),
-                   warnings=list(d.get("warnings", [])))
+                   warnings=list(d.get("warnings", [])), alternatives=alternatives)

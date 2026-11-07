@@ -4,11 +4,13 @@ from __future__ import annotations
 import math
 
 from shapely import LineString, Polygon, make_valid, set_precision, unary_union
+from shapely.affinity import affine_transform
 
 from .geometry import disc, outlines, pinked_circle, place_rose, points_ring, ring, tails
 from .geometry.clip import SIMPLIFY, clip_occluded, from_geom, to_geom
 from .model import Part, RosetteModel
 from .shapes import Shape
+from .vision.templates import template_by_id
 
 # Tail tops (H5). The reference files never draw a free tail top: in 60 of 78 files every
 # stripe's top row is under 0.06 head radii wide; of 511 stripe tops 298 follow the lower
@@ -27,7 +29,11 @@ TAIL_HIDDEN_WARNING = ("Tail stripe {part} lies wholly under the head and is not
                        "check the tails against the photo.")
 # Grid (canvas units) the extension above a stripe is snapped to before it is cut.
 _GRID = 1e-3
-_HEAD_ROLES = ("head", "ring", "points", "center")
+
+# Library heads (H7): a `template` part is drawn as the reference head's pieces placed
+# on its head circle, piece i (the reference's paint order) at z TEMPLATE_Z + i, so the
+# occlusion cuts stack them exactly as the reference does whatever Colors they map to.
+TEMPLATE_Z = 10
 
 _TAIL_KEYS = ("tails_count", "top_y", "bottom_y", "top_width", "bottom_width",
               "spread_deg", "stripes", "stripes_bottom")
@@ -64,19 +70,92 @@ def _under_head(stripe: Shape, top_y: float, bottom_y: float, head) -> tuple[Sha
     return shape, covered
 
 
+def _template(part: Part):
+    t = template_by_id(str(part.params.get("template_id", "")))
+    if t is None:
+        raise ValueError(f"part {part.id}: unknown head template {part.params.get('template_id')}")
+    return t
+
+
+def _template_matrix(q: dict) -> list[float]:
+    """Head radii -> canvas units: scale by r, turn by rotation_deg, move to (cx, cy)."""
+    r, a = float(q["r"]), math.radians(float(q.get("rotation_deg", 0.0)))
+    c, s = math.cos(a) * r, math.sin(a) * r
+    return [c, -s, s, c, float(q["cx"]), float(q["cy"])]
+
+
+def template_groups(part: Part) -> dict[int, int]:
+    """Reference category -> color group of a template part (params group_1..group_4;
+    a category without one takes the part's color_group)."""
+    q = part.params
+    return {c: int(q.get(f"group_{c}", part.color_group)) for c in range(1, 5)}
+
+
+def template_pieces(part: Part) -> list[tuple[Shape, int]]:
+    """(shape, color group) per reference piece of a template part, in paint order; the
+    shapes carry role (the piece's), z and kind but no category yet."""
+    m = _template_matrix(part.params)
+    groups = template_groups(part)
+    pieces = _template(part).pieces
+    # a piece drawn again later with the same outline is wholly hidden (some reference
+    # files repeat an element): only the last copy is drawn, so no duplicate is written
+    keys = [tuple(tuple(r.reshape(-1).tolist()) for r in pc.rings) for pc in pieces]
+    out = []
+    for i, pc in enumerate(pieces):
+        if keys[i] in keys[i + 1:]:
+            continue
+        geom = None
+        for ring_ in pc.rings:
+            poly = Polygon(ring_).buffer(0)
+            geom = poly if geom is None else geom.symmetric_difference(poly)
+        if geom is None:
+            continue
+        shape = from_geom(affine_transform(geom, m), Shape("polygon", {}, None, role=pc.role, z=TEMPLATE_Z + i))
+        if shape is not None:
+            out.append((shape, groups[pc.category]))
+    return out
+
+
+def template_center(part: Part) -> tuple[float, float, float] | None:
+    """(cx, cy, r) for the rose of a template head: its center pieces' reach, or None."""
+    reach = [float((ring_ ** 2).sum(axis=1).max() ** 0.5) for pc in _template(part).pieces
+             if pc.role == "center" for ring_ in pc.rings[:1]]
+    if not reach:
+        return None
+    q = part.params
+    return float(q["cx"]), float(q["cy"]), max(reach) * float(q["r"])
+
+
+def _rose_center(model: RosetteModel) -> tuple[float, float, float, int] | None:
+    center = next((p for p in model.parts if p.role == "center"), None)
+    if center is not None:
+        c = center.params
+        return float(c["cx"]), float(c["cy"]), float(c["r"]), center.z
+    tmpl = next((p for p in model.parts if p.role == "template"), None)
+    if tmpl is None:
+        return None
+    hidden = next((p for p in model.alternatives if p.role == "center"), None)
+    at = template_center(tmpl)
+    if at is None and hidden is not None:  # the detected center, moved onto the template
+        at = float(tmpl.params["cx"]), float(tmpl.params["cy"]), float(hidden.params["r"])
+    if at is None:
+        return None
+    return (*at, TEMPLATE_Z + len(_template(tmpl).pieces))
+
+
 def build(model: RosetteModel) -> list[Shape]:
     pairs = color_shapes(model)
     colors = clip_occluded([s for s, _ in pairs])  # Color 1 is painted first whatever the stacking
     result = list(colors)
     result += outlines(colors)
 
-    center = next((p for p in model.parts if p.role == "center"), None)
+    center = _rose_center(model)
     if model.rose and center is not None:
-        c = center.params
-        rose = place_rose(c["cx"], c["cy"], 0.8 * c["r"])
+        cx, cy, r, z = center
+        rose = place_rose(cx, cy, 0.8 * r)
         result += rose
-        circel = disc(c["cx"], c["cy"], c["r"])
-        circel.kind, circel.role, circel.z = "circel", "center", center.z
+        circel = disc(cx, cy, r)
+        circel.kind, circel.role, circel.z = "circel", "center", z
         result.append(circel)
     return result
 
@@ -87,12 +166,16 @@ def color_shapes(model: RosetteModel) -> list[tuple[Shape, Part]]:
     groups = {g.id: g for g in model.groups}
     colors: list[tuple[Shape, Part]] = []
 
-    def finish(part: Part, shapes: list[Shape]) -> None:
-        g = groups.get(part.color_group)
+    def group(part: Part, gid: int):
+        g = groups.get(gid)
         if g is None:
-            raise ValueError(f"part {part.id}: unknown color group {part.color_group}")
+            raise ValueError(f"part {part.id}: unknown color group {gid}")
         if g.category is None:
             raise ValueError(f"part {part.id}: color group {g.id} has no category; run assignment first")
+        return g
+
+    def finish(part: Part, shapes: list[Shape]) -> None:
+        g = group(part, part.color_group)
         for s in shapes:
             s.category = g.category
             s.pattern = g.pattern
@@ -101,10 +184,19 @@ def color_shapes(model: RosetteModel) -> list[tuple[Shape, Part]]:
             s.kind = "color"
             colors.append((s, part))
 
+    head_parts: list[int] = []  # ids of the parts whose shapes make the head
+
     tail_groups: dict[tuple, list[Part]] = {}
     for p in model.parts:
         q = p.params
-        if p.role == "head":
+        if p.role != "tail_stripe" and not (p.role == "unknown" and p.z >= 60):
+            head_parts.append(id(p))
+        if p.role == "template":
+            for s, gid in template_pieces(p):
+                g = group(p, gid)
+                s.category, s.pattern, s.kind = g.category, g.pattern, "color"
+                colors.append((s, p))
+        elif p.role == "head":
             s = pinked_circle(q["cx"], q["cy"], q["r"]) if int(q.get("pinked", 1)) else disc(q["cx"], q["cy"], q["r"])
             finish(p, [s])
         elif p.role == "ring":
@@ -124,7 +216,7 @@ def color_shapes(model: RosetteModel) -> list[tuple[Shape, Part]]:
                 model.warnings.append(msg)
             finish(p, [disc(q["cx"], q["cy"], q["r"])])
 
-    head = [s for s, _ in colors if s.role in _HEAD_ROLES or (s.role == "unknown" and s.z < 60)]
+    head = [s for s, p in colors if id(p) in head_parts]
     # on a 0.001 grid: unions of pinked and cut shapes can trip GEOS on near-coincident edges
     head_geom = set_precision(unary_union([make_valid(to_geom(s)) for s in head]), 1e-3) if head else None
     for key, parts in tail_groups.items():
