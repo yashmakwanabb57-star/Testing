@@ -206,7 +206,8 @@ def test_star_tips_found_from_their_blobs_when_pixel_symmetry_is_weak():
     dark = min(groups, key=lambda g: sum(g.rgb)).id
     pts = [q for q in detect_parts(p, labels) if q.role == "points" and q.color_group == dark]
     assert len(pts) == 1 and pts[0].params["count"] == 6
-    assert 50 < pts[0].params["r_inner"] < pts[0].params["r_outer"] < 110
+    # H11: the tips continue under the gold points drawn above them, down to the ring
+    assert 40 < pts[0].params["r_inner"] < 50 < pts[0].params["r_outer"] < 110
 
 
 

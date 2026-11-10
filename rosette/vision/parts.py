@@ -65,9 +65,10 @@ def detect_parts(p: Prepared, labels: np.ndarray, groups: list[ColorGroup] | Non
     added to them once (detect_tails gives it the same id on every call)."""
     fr = Frame.of(p)
     head = detect_head(p, labels, fr)
-    pts = [q for q in head if q.role == "points"]
-    if pts:  # re-center on the points' symmetry and measure again
-        p = refine_center(p, labels, fr, int(pts[0].params["count"]))
+    pts = [int(q.params["count"]) for q in head if q.role == "points"]
+    pts += [int(q.params["pleats"]) for q in head if q.role == "ring" and q.params.get("pleats")]
+    if pts:  # re-center on the points' (or pleats', H11) symmetry and measure again
+        p = refine_center(p, labels, fr, pts[0])
         head = detect_head(p, labels, fr)
     tails, glitter = detect_tails(p, labels, fr, groups)
     if glitter is not None and groups is not None and all(g.id != glitter.id for g in groups):

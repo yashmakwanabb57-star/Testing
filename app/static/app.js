@@ -52,7 +52,7 @@ const ROLE_LABELS = {
 // Editable params per role. type: num | int | kind | bool.
 const PARAMS = {
   head: [['r', 'Radius', 'num'], ['pinked', 'Pinked edge', 'bool'], ['cx', 'Center x', 'num'], ['cy', 'Center y', 'num']],
-  ring: [['r_outer', 'Outer radius', 'num'], ['r_inner', 'Inner radius', 'num'], ['cx', 'Center x', 'num'], ['cy', 'Center y', 'num']],
+  ring: [['r_outer', 'Outer radius', 'num'], ['r_inner', 'Inner radius', 'num'], ['pinked', 'Pinked edge', 'bool'], ['cx', 'Center x', 'num'], ['cy', 'Center y', 'num']],
   points: [['kind', 'Kind', 'kind'], ['count', 'Count', 'int'], ['r_inner', 'Inner radius', 'num'],
     ['r_outer', 'Outer radius', 'num'], ['rotation_deg', 'Rotation (deg)', 'num'],
     ['width_ratio', 'Width ratio', 'num'], ['inner_ratio', 'Inner ratio (bow)', 'num'],

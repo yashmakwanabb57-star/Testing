@@ -125,6 +125,35 @@ HEAD_ROUND = 0.12
 # Outline detrend window (canvas units of arc) and pinked threshold (canvas units).
 RIM_TREND_UNITS = 40.0
 PINKED_DEPTH = 1.2
+# H11: a points layer whose lobes continue inward under layers painted above it starts at
+# the cover (_cover_start): at its lobe axes the rows just inside its inner end hold the
+# label of a part drawn above it on >= COVER_CUT_SHARE of the visible lobes, and the
+# cover runs down to the outer edge of a ring or the center (at most COVER_MAX_UNITS
+# further in), where the layer then starts.
+COVER_CUT_SHARE, COVER_PROBE_UNITS = 0.6, 3.0
+COVER_MAX_UNITS = 80.0
+# H11: an unknown layer whose outline (outermost radius per angle) has an n-fold symmetry
+# (self-correlation >= SYM_T), n >= STAR_MIN_ORDER equal to the count of a points layer of
+# the head or half of it (two lobes per tip) and not reaching beyond its tips by more than STAR_INSIDE_TOL of its r_outer,
+# is a points layer of n lobes (a star under another star; S29-15's dark inner star) read
+# from its outline, flagged (BLOB_UNCONFIRMED_CONF).
+STAR_MIN_ORDER, STAR_INSIDE_TOL = 3, 0.05
+# H11: a star whose valleys lie at or beyond STAR_CONVEX of the convex limit
+# (r_inner >= STAR_CONVEX * r_outer * cos(180 deg / count)) has no concave notches: it
+# would be drawn as a square or polygon. Its valleys are hidden under the layer inside it
+# (they were read where the visible lobes are widest), so they move to the start of its
+# zone, or to STAR_HIDDEN_DEPTH of the convex limit when that is still hidden inside the
+# zone's start; a star that cannot get notches that way is read as an annulus from its
+# valleys to its tips instead (a ring, flagged).
+STAR_CONVEX = 0.95
+STAR_HIDDEN_DEPTH = 0.85
+# H11 (Task 4): a points layer of PLEAT_MIN_COUNT or more lobes that fill
+# >= PLEAT_FILL of their angular spacing where they are widest, in a zone closed by
+# bands on both sides, is the pleated edge of a ring: drawn as a ring with a pinked edge.
+PLEAT_MIN_COUNT, PLEAT_FILL = 16, 0.8
+# Two such layers of one count and radii (ALT_RADIUS_UNITS) whose lobes are offset by half
+# a spacing (within ALT_OFFSET of it) are one two-tone pleated edge: kept as points.
+ALT_RADIUS_UNITS, ALT_OFFSET = 3.0, 0.25
 # Center search: +- units along the axis, over radii RECENTER_FROM..RECENTER_TO head
 # radii sampled every RECENTER_RADIAL_STEP units.
 RECENTER_UNITS = 12.0
@@ -461,8 +490,31 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             # a star with a core: the band is this layer's body, the star polygon covers it
             meta.append(dict(zone=(a, b), rows=(ra, rb), eats=inner if has_core else None, inner=inner))
 
+    _star_from_outline(layers, meta, pol, radii, win, fr, ccx, ccy)
     layers, meta = explain_trims(layers, meta, pol, radii, win, fr, RING_MAX_GROWTH_UNITS)
     layers, meta = fold_specks(layers, meta, bands, head_band, pleated, radii, fr, RING_MAX_GROWTH_UNITS)
+    # H11: convex "stars" and pleated edges are rings (annuli), flagged / pinked
+    keep = []
+    for k, lay in enumerate(layers):
+        role, g, share, params = lay[:4]
+        if role == "points" and not meta[k].get("trim"):
+            convex = _convex_star(params)
+            if convex:  # its valleys are hidden under the layers inside its zone
+                deeper = _hidden_valleys(params, unit(meta[k]["zone"][0]))
+                if deeper is not None:
+                    layers[k] = (role, g, share, deeper) + tuple(lay[4:])
+                    keep.append(k)
+                    continue
+            if convex or (_pleat_layer(params, meta[k]["zone"], bands)
+                          and not _alternating(k, layers, meta)):
+                i0 = int(np.searchsorted(radii, float(params["r_inner"]) * fr.scale))
+                i1 = min(len(radii), int(np.searchsorted(radii, float(params["r_outer"]) * fr.scale)) + 1)
+                if i1 > i0:
+                    conf = min(share, BLOB_UNCONFIRMED_CONF) if convex else share
+                    pleated.append((i0, i1, g, conf, 0 if convex else int(params["count"])))
+                    continue
+        keep.append(k)
+    layers, meta = [layers[k] for k in keep], [meta[k] for k in keep]
     eaten = {id(m["eats"]) for m in meta if m["eats"] is not None}
 
     z_of = dict(enumerate(points_z([(lay[0], lay[3].get("kind"), lay[5]) for lay in layers])))
@@ -478,22 +530,26 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
     if center_band is not None and id(center_band) not in eaten:
         parts.append(Part("center", "center", {"cx": r3(ccx), "cy": r3(ccy), "r": r3(unit(center_band.i1))},
                           center_band.label, 50, r3(center_band.cov)))
-    rings = [(bd.i0, bd) for bd in bands
+    # by outer edge (H11: a pleated annulus can enclose a narrower ring, which lies on it)
+    rings = [(bd.i1, bd) for bd in bands
              if bd is not head_band and bd is not center_band and id(bd) not in eaten]
-    rings += [(i0, (i0, i1, g, conf)) for i0, i1, g, conf in pleated]
+    rings += [(ring[1], tuple(ring) + (0,) * (5 - len(ring))) for ring in pleated]
     rings.sort(key=lambda t: t[0])
     for depth, (_, bd) in enumerate(reversed(rings)):  # outermost first, inner rings on top
+        pinked = 0
         if isinstance(bd, tuple):  # a pleated layer, already measured
-            i0, i1, label, conf = bd
+            i0, i1, label, conf, pinked = bd
         else:
             i0, label, conf = bd.i0, bd.label, bd.cov
             i1 = _ring_outer(bd, bands, dom, cov, radii, fr, [
                 (float(q.params["r_inner"]), q.color_group) for q in parts
                 if q.role == "points" and id(q) not in trims])
-        parts.append(Part(f"ring-{depth}", "ring", {"cx": r3(ccx), "cy": r3(ccy),
-                                                    "r_outer": r3(unit(i1)), "r_inner": r3(unit(i0))},
-                          label, min(49, 30 + depth), r3(conf)))
+        rp = {"cx": r3(ccx), "cy": r3(ccy), "r_outer": r3(unit(i1)), "r_inner": r3(unit(i0))}
+        if pinked:  # a pleated edge (H11): pinked, with its pleat count (re-centering)
+            rp["pinked"], rp["pleats"] = 1, int(pinked)
+        parts.append(Part(f"ring-{depth}", "ring", rp, label, min(49, 30 + depth), r3(conf)))
     _points_start_at_cover(parts)
+    _cover_start(parts, pol, radii, win, fr, head["label"] if head else -2, trims)
     return parts
 
 
@@ -540,6 +596,170 @@ def _points_start_at_cover(parts: list[Part]) -> None:
             w = float(q.params["width_ratio"]) * (ro - ri)
             q.params["r_inner"] = r3(top)
             q.params["width_ratio"] = r3(w / (ro - top))
+
+
+def _cover_start(parts: list[Part], pol: np.ndarray, radii: np.ndarray, win: np.ndarray, fr: Frame,
+                 head_label: int, trims: set[int]) -> None:
+    """H11: a points layer (not a star: its r_inner is its valleys) whose lobes are cut by
+    layers painted above it starts at the cover, not at its first visible row (COVER_*).
+    At the lobe axes (rotation + k 360/count, the visible ones) the rows just inside
+    r_inner must hold, on >= COVER_CUT_SHARE of the lobes, the label of a part drawn
+    above the layer (a ring, the center, or a points layer of higher z); r_inner then
+    moves inward while each row is still covered that way (or shows the layer's own
+    label) and must reach the outer edge of a ring or the center, where it stops. The
+    width stays (width_ratio rescaled)."""
+    t = pol.shape[1]
+    edges = sorted({float(q.params["r" if q.role == "center" else "r_outer"])
+                    for q in parts if q.role in ("ring", "center")})
+    probe = max(1, int(round(COVER_PROBE_UNITS / RADIAL_STEP_UNITS)))
+    top_z: dict[int, int] = {}
+    for q in parts:
+        if q.role in ("ring", "center", "points"):
+            top_z[q.color_group] = max(top_z.get(q.color_group, -1), q.z)
+    n_lab = int(max([pol.max(), head_label, *top_z]) + 2)
+    for q in parts:
+        if q.role != "points" or id(q) in trims or q.params.get("kind") == "star":
+            continue
+        n, rot = int(q.params["count"]), float(q.params["rotation_deg"])
+        cols = {(int(round((rot + 360.0 * k / n) / 360.0 * t)) + d) % t for k in range(n) for d in (-2, 0, 2)}
+        cols = np.array(sorted(c for c in cols if win[c]), int)
+        if cols.size == 0:
+            continue
+        ri, ro = float(q.params["r_inner"]), float(q.params["r_outer"])
+        i_in = int(np.searchsorted(radii, ri * fr.scale))
+        if i_in <= probe:
+            continue
+        g = q.color_group
+        above = np.zeros(n_lab, bool)
+        for lab, z in top_z.items():
+            above[lab] = lab != g and lab != head_label and z > q.z
+        lut = lambda a: above[np.clip(a, 0, n_lab - 1)] & (a >= 0)  # noqa: E731
+        if lut(pol[i_in - probe:i_in][:, cols]).mean() < COVER_CUT_SHARE:
+            continue
+        stop = max((e for e in edges if e <= ri + RADIAL_STEP_UNITS), default=None)
+        if stop is None or stop >= ri - RADIAL_STEP_UNITS or ri - stop > COVER_MAX_UNITS:
+            continue  # no ring or center inside, or the layer already starts at one
+        i = i_in - 1
+        while i > 0 and fr.d(radii[i]) > stop:
+            row = pol[i, cols]
+            if (lut(row) | (row == g)).mean() < COVER_CUT_SHARE:
+                break
+            i -= 1
+        if fr.d(radii[i]) > stop + RADIAL_STEP_UNITS or stop >= ro - MIN_ZONE_UNITS:
+            continue  # the cover does not reach down to a ring or the center
+        w = float(q.params["width_ratio"]) * (ro - ri)
+        q.params["r_inner"] = r3(stop)
+        q.params["width_ratio"] = r3(w / (ro - stop))
+
+
+def _outline_order(ind: np.ndarray, win: np.ndarray) -> tuple[int, float, float, np.ndarray]:
+    """(order n, score, rotation deg, outline row per angle; -1 where empty) of a layer's
+    outline: the outermost row of the (radii, theta) indicator per angle. The order is
+    the largest n whose turned self-correlation over the visible angles reaches SYM_T."""
+    t = ind.shape[1]
+    rows = np.where(ind, np.arange(ind.shape[0])[:, None], -1).max(axis=0)
+    valid = win & (rows >= 0)
+    x = rows.astype(np.float64)
+    best: tuple[int, float] = (0, 0.0)
+    for n in range(2, MAX_COUNT + 1):
+        cs = []
+        for m in range(1, n):
+            sh = int(round(m * t / n))
+            ok = valid & np.roll(valid, -sh)
+            if ok.sum() < 8:
+                continue
+            cs.append(_pearson(x[ok], np.roll(x, -sh)[ok]))
+        sc = float(np.mean(cs)) if cs else 0.0
+        if sc >= SYM_T:
+            best = (n, sc)
+    n, sc = best
+    if n == 0:
+        return 0, 0.0, 0.0, rows
+    th = np.linspace(0, 2 * np.pi, t, endpoint=False)
+    c = ((x[valid] - x[valid].mean()) * np.exp(-1j * n * th[valid])).sum()
+    return n, sc, float((-np.degrees(np.angle(c)) / n) % (360.0 / n)), rows
+
+
+def _star_from_outline(layers: list, meta: list[dict], pol: np.ndarray, radii: np.ndarray, win: np.ndarray,
+                       fr: Frame, ccx: float, ccy: float) -> None:
+    """H11: an unknown layer whose outline has the symmetry of a points layer of the head
+    and lies inside it (STAR_*) becomes a points layer of its outline's order, flagged."""
+    counts = [(int(lay[3]["count"]), float(lay[3]["r_outer"])) for lay in layers if lay[0] == "points"]
+    for k, (role, g, share, params, area, rb) in enumerate(layers):
+        if role != "unknown":
+            continue
+        ra, rb_ = meta[k]["rows"]
+        ind = pol[ra:rb_] == g
+        n, sc, rot, rows = _outline_order(ind, win)
+        if n < STAR_MIN_ORDER:
+            continue
+        out = rows[win & (rows >= 0)] + ra
+        r_tip = fr.d(radii[int(np.percentile(out, 95))])
+        if not any(m in (n, 2 * n) and r_tip <= (1 + STAR_INSIDE_TOL) * ro for m, ro in counts):
+            continue
+        cov = ind[:, win].mean(axis=1)
+        w = cov * 2 * np.pi * radii[ra:rb_] / n
+        kind = _kind(w, 2 * np.pi * radii[ra:rb_] / n)
+        r_in = fr.d(radii[int(np.percentile(out, 10))]) if kind == "star" else fr.d(radii[ra])
+        if r_tip - r_in < MIN_ZONE_UNITS:
+            continue
+        layers[k] = ("points", g, min(sc, BLOB_UNCONFIRMED_CONF),
+                     {"cx": r3(ccx), "cy": r3(ccy), "kind": kind, "count": int(n), "r_inner": r3(r_in),
+                      "r_outer": r3(r_tip), "rotation_deg": r3(rot),
+                      "width_ratio": r3(fr.d(w.max()) / max(r_tip - r_in, 1e-6))}, area, rb)
+
+
+def _convex_star(params: dict) -> bool:
+    """H11: a star without concave notches (STAR_CONVEX): drawn it would be a polygon."""
+    n = int(params["count"])
+    return (params.get("kind") == "star" and n >= 2
+            and float(params["r_inner"]) >= STAR_CONVEX * float(params["r_outer"]) * np.cos(np.pi / n))
+
+
+def _hidden_valleys(params: dict, zone_start: float) -> dict | None:
+    """H11: the star with its valleys moved under the layers inside its zone (they were
+    read where its visible lobes are widest): at the zone's start when that gives notches,
+    else at STAR_HIDDEN_DEPTH of the convex limit when that still lies inside the zone's
+    start (hidden); None when neither does."""
+    deeper = dict(params, r_inner=r3(zone_start))
+    if not _convex_star(deeper):
+        return deeper
+    n = int(params["count"])
+    r_in = STAR_HIDDEN_DEPTH * float(params["r_outer"]) * float(np.cos(np.pi / n))
+    return dict(params, r_inner=r3(r_in)) if r_in < zone_start else None
+
+
+def _alternating(k: int, layers: list, meta: list[dict]) -> bool:
+    """H11: layer k and another points layer of the same zone, count and radii (within
+    ALT_RADIUS_UNITS) whose lobes sit between each other's: a two-tone pleated edge whose
+    colors alternate, kept as points (as rings one color would hide the other)."""
+    q = layers[k][3]
+    n = int(q["count"])
+    for j, lay in enumerate(layers):
+        p2 = lay[3]
+        if (j == k or lay[0] != "points" or meta[j]["zone"] != meta[k]["zone"] or int(p2.get("count", 0)) != n
+                or abs(float(p2["r_inner"]) - float(q["r_inner"])) > ALT_RADIUS_UNITS
+                or abs(float(p2["r_outer"]) - float(q["r_outer"])) > ALT_RADIUS_UNITS):
+            continue
+        off = (float(p2["rotation_deg"]) - float(q["rotation_deg"])) % (360.0 / n) / (360.0 / n)
+        if abs(off - 0.5) <= ALT_OFFSET:
+            return True
+    return False
+
+
+def _pleat_layer(params: dict, zone: tuple[int, int], bands: list[_Band]) -> bool:
+    """H11 Task 4: a high-count points layer filling its spacing between two bands is a
+    ring's pleated edge (PLEAT_*)."""
+    n = int(params["count"])
+    if n < PLEAT_MIN_COUNT or params.get("kind") == "star":
+        return False
+    a, b = zone
+    if not (any(bd.i1 == a for bd in bands) and any(bd.i0 == b for bd in bands)):
+        return False
+    ri, ro = float(params["r_inner"]), float(params["r_outer"])
+    w = float(params["width_ratio"]) * (ro - ri)
+    peak = {"diamond": 0.4, "petal": 0.5, "bow": 0.7}.get(params.get("kind"), 0.5)
+    return w >= PLEAT_FILL * 2 * np.pi * (ri + peak * (ro - ri)) / n
 
 
 def _pleated_ring(g: int, a: int, b: int, bridges: list[_Band], cov: np.ndarray,

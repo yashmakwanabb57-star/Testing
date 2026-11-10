@@ -6,7 +6,7 @@ import math
 from shapely import LineString, Polygon, make_valid, set_precision, unary_union
 from shapely.affinity import affine_transform
 
-from .geometry import disc, outlines, pinked_circle, place_rose, points_ring, ring, tails
+from .geometry import disc, outlines, pinked_circle, pinked_ring, place_rose, points_ring, ring, tails
 from .geometry.clip import SIMPLIFY, clip_occluded, from_geom, to_geom
 from .model import Part, RosetteModel
 from .shapes import Shape
@@ -200,7 +200,8 @@ def color_shapes(model: RosetteModel) -> list[tuple[Shape, Part]]:
             s = pinked_circle(q["cx"], q["cy"], q["r"]) if int(q.get("pinked", 1)) else disc(q["cx"], q["cy"], q["r"])
             finish(p, [s])
         elif p.role == "ring":
-            finish(p, [ring(q["cx"], q["cy"], q["r_outer"], q["r_inner"])])
+            ring_of = pinked_ring if int(q.get("pinked", 0)) else ring
+            finish(p, [ring_of(q["cx"], q["cy"], q["r_outer"], q["r_inner"])])
         elif p.role == "points":
             ir, ew = q.get("inner_ratio"), q.get("edge_width")
             finish(p, points_ring(q["cx"], q["cy"], q["kind"], int(q["count"]), q["r_inner"],
