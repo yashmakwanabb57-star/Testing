@@ -128,10 +128,10 @@ FREE_COLORS_WARNING = "Library head colors are not anchored to the tails - check
 # H11 Task 2b: a library head whose head-fit layer agreement beats the rule-based head's
 # by TEMPLATE_AGREE_GAIN is preferred too when its silhouette is at most
 # TEMPLATE_AGREE_SIL_LOSS worse (a wrong rule-based head whose outline happens to fit).
-# Margins 0.05-0.20 swept on the 76 photos (docs/pipeline.md H11): 0.10 is the smallest
-# with no LOO head IoU loss (0.08 and below draw S6-15's own head, -0.018 head IoU); it
-# switches S3-15 (LOO and known) and S32-15 (known), color 0.844 -> 0.946 / 1.000 and
-# 0.858 -> 1.000, no color losers.
+# Margins 0.05-0.20 swept on the 76 photos (docs/pipeline.md H11): no margin changes the
+# LOO head IoU or loses color; 0.10 is the smallest that adds no known-design head IoU
+# loss over 0.01 (0.08 and below also draw S6-15's own head, -0.018). It switches S3-15
+# (LOO and known) and S32-15 (known): color 0.844 -> 0.946 / 1.000 and 0.858 -> 1.000.
 TEMPLATE_AGREE_GAIN, TEMPLATE_AGREE_SIL_LOSS = 0.10, 0.02
 TEMPLATE_COLORS_WARNING = ("The library head {tid} fits the head outline better, but its colors do not agree "
                            "with the photo under the tail colors - the rule-based head is drawn; compare the head "
