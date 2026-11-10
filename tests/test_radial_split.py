@@ -106,7 +106,7 @@ def test_a_six_point_star_with_twelve_strips_at_the_rim_is_split():
     strips = [q for q in pink if "edge_width" in q.params]
     assert len(stars) == 1 and stars[0].params["count"] == 6 and stars[0].params["kind"] == "star"
     assert abs((stars[0].params["rotation_deg"] - 30 + 30) % 60 - 30) < 3
-    assert stars[0].params["r_outer"] <= 0.9 * R / 2
+    assert abs(stars[0].params["r_outer"] - 0.85 * R / 2) < 6  # its tips, not where the 12 lobes start
     # the rim lobes are the loops' edge strips
     assert len(strips) == 1 and strips[0].params["count"] == 6
     assert strips[0].params["rotation_deg"] == loops[0].params["rotation_deg"]

@@ -825,7 +825,9 @@ def _block_width(ind: np.ndarray, win: np.ndarray, n: int, rot: float, rr: np.nd
 def _layer_params(ind: np.ndarray, win: np.ndarray, n: int, radii: np.ndarray, ra: int,
                   fr: Frame, ccx: float, ccy: float) -> dict:
     """Points params of n lobes read off a (radii from row ra, theta) indicator: kind by
-    the lobe width profile, rotation by the n-th harmonic, radial extent its rows."""
+    the lobe width profile, rotation by the n-th harmonic, radial extent its rows (a star:
+    from where its lobes are widest to the last row the label holds on most lobe axes;
+    the rows end where the outer count starts, which lies beyond the tips)."""
     x = ind.astype(np.float32)
     t = x.shape[1]
     th = np.linspace(0, 2 * np.pi, t, endpoint=False)
@@ -835,8 +837,9 @@ def _layer_params(ind: np.ndarray, win: np.ndarray, n: int, radii: np.ndarray, r
     w = _axis_widths(ind, win, n, rot) * 2 * np.pi * rr / t
     kind = _kind(w, 2 * np.pi * rr / n) if w.max() > 0 else "petal"
     r_in, r_out = fr.d(rr[0]), fr.d(rr[-1])
-    if kind == "star":  # valleys sit where the lobes are widest
+    if kind == "star":  # valleys sit where the lobes are widest, tips where most axes end
         r_in = fr.d(rr[int(np.argmax(w))])
+        r_out = fr.d(rr[int(np.flatnonzero(w > 0).max())])
     return {"cx": r3(ccx), "cy": r3(ccy), "kind": kind, "count": int(n), "r_inner": r3(r_in),
             "r_outer": r3(r_out), "rotation_deg": r3(rot),
             "width_ratio": r3(fr.d(w.max()) / max(r_out - r_in, 1e-6))}
