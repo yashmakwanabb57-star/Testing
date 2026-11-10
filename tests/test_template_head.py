@@ -174,7 +174,7 @@ def test_the_library_head_is_drawn_only_when_its_outline_fits_better():
     from rosette.pipeline import TEMPLATE_MIN_GAIN, HeadFit, prefer_template
     rules = HeadFit(agreement=0.8, silhouette=0.80)
     assert prefer_template(rules, HeadFit(0.5, 0.80 + TEMPLATE_MIN_GAIN))
-    assert not prefer_template(rules, HeadFit(0.99, 0.80 + TEMPLATE_MIN_GAIN / 2))
+    assert not prefer_template(rules, HeadFit(0.85, 0.80 + TEMPLATE_MIN_GAIN / 2))
     assert prefer_template(None, HeadFit(0.5, 0.5))
     assert not prefer_template(rules, None)
 
@@ -621,3 +621,17 @@ def test_the_re_centered_line_follows_the_drawn_head(three):
     switched = use_head(m, "T7-15")
     assert line in switched.info
     assert line not in use_head(switched, "rules").info
+
+
+# ---------------------------------------------------------------- H11: layer agreement
+
+
+def test_library_head_with_much_better_layer_agreement_is_preferred():
+    from rosette.pipeline import TEMPLATE_AGREE_GAIN, TEMPLATE_AGREE_SIL_LOSS, HeadFit, library_head_path, \
+        prefer_template
+    rules = HeadFit(agreement=0.77, silhouette=0.95)  # a wrong head whose outline fits
+    assert prefer_template(rules, HeadFit(0.77 + TEMPLATE_AGREE_GAIN, 0.95 - TEMPLATE_AGREE_SIL_LOSS))
+    assert not prefer_template(rules, HeadFit(0.77 + TEMPLATE_AGREE_GAIN - 0.01, 0.95))
+    assert not prefer_template(rules, HeadFit(0.99, 0.95 - TEMPLATE_AGREE_SIL_LOSS - 0.01))
+    assert library_head_path(rules, HeadFit(0.95, 0.94), 0.73) == "floor"
+    assert library_head_path(rules, HeadFit(0.95, 0.94), 0.40) == "colors"

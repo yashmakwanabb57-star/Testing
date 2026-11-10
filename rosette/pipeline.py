@@ -125,6 +125,14 @@ HEAD_LAYER_ROLES = ("head", "ring", "points")
 # A library head chosen from the library whose tail Colors have no tail group on the photo is
 # colored by the free overlap mapping (param free_colors 1): flagged, with this warning.
 FREE_COLORS_WARNING = "Library head colors are not anchored to the tails - check every Color on the head card."
+# H11 Task 2b: a library head whose head-fit layer agreement beats the rule-based head's
+# by TEMPLATE_AGREE_GAIN is preferred too when its silhouette is at most
+# TEMPLATE_AGREE_SIL_LOSS worse (a wrong rule-based head whose outline happens to fit).
+# Margins 0.05-0.20 swept on the 76 photos (docs/pipeline.md H11): 0.10 is the smallest
+# with no LOO head IoU loss (0.08 and below draw S6-15's own head, -0.018 head IoU); it
+# switches S3-15 (LOO and known) and S32-15 (known), color 0.844 -> 0.946 / 1.000 and
+# 0.858 -> 1.000, no color losers.
+TEMPLATE_AGREE_GAIN, TEMPLATE_AGREE_SIL_LOSS = 0.10, 0.02
 TEMPLATE_COLORS_WARNING = ("The library head {tid} fits the head outline better, but its colors do not agree "
                            "with the photo under the tail colors - the rule-based head is drawn; compare the head "
                            "with the photo and pick a library head on the head card if one is closer.")
@@ -244,11 +252,16 @@ def _check_head(model: RosetteModel, fit: HeadFit | None) -> RosetteModel:
 
 
 def prefer_template(rules: HeadFit | None, library: HeadFit | None) -> bool:
-    """Draw the library head: its silhouette beats the detected head's by TEMPLATE_MIN_GAIN
-    (or the detected model has no head parts to measure)."""
+    """Draw the library head: its silhouette beats the detected head's by TEMPLATE_MIN_GAIN,
+    or (H11) its layer agreement beats the detected head's by TEMPLATE_AGREE_GAIN while its
+    silhouette is at most TEMPLATE_AGREE_SIL_LOSS worse (or the detected model has no head
+    parts to measure)."""
     if library is None:
         return False
-    return rules is None or library.silhouette >= rules.silhouette + TEMPLATE_MIN_GAIN - 1e-9
+    if rules is None or library.silhouette >= rules.silhouette + TEMPLATE_MIN_GAIN - 1e-9:
+        return True
+    return (library.agreement >= rules.agreement + TEMPLATE_AGREE_GAIN - 1e-9
+            and library.silhouette >= rules.silhouette - TEMPLATE_AGREE_SIL_LOSS - 1e-9)
 
 
 def gross_failure(fit: HeadFit | None) -> bool:
@@ -278,7 +291,7 @@ def override_allowed(rules: HeadFit | None, library: HeadFit | None, partition: 
 
 def library_head_path(rules: HeadFit | None, library: HeadFit | None, partition: float,
                       head_layer: bool = True) -> str | None:
-    """How the best library head is used: None (its outline does not win, prefer_template),
+    """How the best library head is used: None (it does not fit better, prefer_template),
     "floor" (its colors agree, colors_agree), "override" (the rule-based head failed,
     override_allowed: drawn flagged) or "colors" (the rule-based head is drawn with the
     colors warning, the library head waits on the head card)."""
