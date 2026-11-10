@@ -39,7 +39,7 @@ A result is **flagged** (`pipeline.is_flagged`, mirrored by `flagItems` in `app/
 | S2-15B | 0.000 | 0.047 | 0.90 | no | no | 4/4 | 1/1 | yes | yes |
 | S26-15 | 0.892 | 0.751 | 0.93 | yes | no | 6/6 | 1/1 | yes | yes |
 | S28-15 | 0.888 | 0.755 | 0.98 | no | no | 4/4 | 1/1 | yes | yes |
-| S29-15 | 0.237 | 0.237 | no | no | 0.908 | 0.765 | 0 | 0.237 / no / 0.765 |
+| S29-15 | 0.211 | 0.263 | 0.88 | yes | no | 0/6 | 1/1 | no | yes |
 | S30-15 | 0.872 | 0.693 | 0.84 | yes | no | 6/6 | 1/1 | yes | yes |
 | S31-15 | 0.929 | 0.759 | 0.93 | no | yes | 6/6 | 1/1 | yes | yes |
 | S33-15 | 0.802 | 0.736 | 0.92 | no | no | 6/6 | 1/1 | yes | yes |
@@ -51,16 +51,16 @@ A result is **flagged** (`pipeline.is_flagged`, mirrored by `flagItems` in `app/
 | S45-15 | 0.902 | 0.606 | 0.93 | yes | yes | 7/8 | 1/1 | no | yes |
 | S46-15 | 0.715 | 0.508 | 0.83 | no | no | 6/6 | 1/1 | yes | yes |
 | S5-15 | 0.773 | 0.555 | 0.85 | yes | no | 4/4 | 1/1 | yes | yes |
-| S53-19 | 0.501 | 0.501 | no | no | 0.773 | 0.855 | 1 (star>ring) | 0.501 / no / 0.855 |
+| S53-19 | 0.476 | 0.398 | 0.77 | yes | no | 22/12 | 3/1 | no | no |
 | S56-17B | 0.693 | 0.602 | 0.88 | no | no | 6/6 | 1/1 | yes | yes |
 | S58-17 | 1.000 | 0.762 | 0.90 | yes | yes | 6/6 | 1/1 | yes | yes |
 | S67-19 | 0.943 | 0.797 | 0.95 | no | yes | 6/6 | 1/1 | yes | yes |
 | S68-19 | 0.600 | 0.556 | 0.88 | yes | no | 0/8 | 1/1 | no | yes |
-| S69-19 | 0.993 | 0.988 | yes | yes | 0.933 | 0.801 | 0 | 0.993 / yes / 0.801 |
+| S69-19 | 0.973 | 0.781 | 0.90 | no | yes | 6/8 | 1/1 | no | yes |
 | S70-19 | 0.960 | 0.790 | 0.96 | yes | yes | 6/6 | 1/1 | yes | yes |
 | S8-15 | 0.637 | 0.592 | 0.93 | yes | no | 0/8 | 1/1 | no | yes |
 | S80-22 | 0.598 | 0.547 | 0.93 | no | no | 6/6 | 1/1 | yes | yes |
-| s34-15 | 0.951 | 0.946 | yes | yes | 0.926 | 0.838 | 1 (backing>star) | 0.951 / yes / 0.838 |
+| s34-15 | 0.897 | 0.746 | 0.94 | yes | no | 6/6 | 1/1 | yes | yes |
 
 **Summary:** success 10, flagged-not-success 15, silently-wrong 9, errors 0 - `PASS 10/34 (target >= 80%)`.
 
@@ -664,7 +664,7 @@ Re-recorded after H11 (1d51263): the columns are the new-image case (each photo'
 | S2-15B | 0.613 | 0.613 | no | no | 0.930 | 0.820 | 0 | 0.687 / no / 0.920 |
 | S26-15 | 0.800 | 0.985 | no | yes | 0.933 | 0.856 | 0 | 0.800 / no / 0.856 |
 | S28-15 | 0.998 | 0.995 | yes | yes | 0.980 | 0.964 | 1 (star>loop) | 0.998 / yes / 0.964 |
-| S29-15 | 0.321 | 0.241 | no | no | 0.935 | 0.851 | 0 | 0.321 / no / 0.851 |
+| S29-15 | 0.237 | 0.237 | no | no | 0.908 | 0.765 | 0 | 0.237 / no / 0.765 |
 | S30-15 | 0.972 | 0.972 | yes | yes | 0.945 | 0.879 | 0 | 0.983 / yes / 0.944 |
 | S31-15 | 0.929 | 0.966 | yes | yes | 0.929 | 0.838 | 0 | 0.929 / yes / 0.838 |
 | S33-15 | 0.905 | 0.905 | yes | yes | 0.955 | 0.890 | 0 | 0.905 / yes / 0.890 |
@@ -676,16 +676,16 @@ Re-recorded after H11 (1d51263): the columns are the new-image case (each photo'
 | S45-15 | 0.935 | 0.935 | yes | yes | 0.926 | 0.809 | 0 | 0.935 / yes / 0.809 |
 | S46-15 | 0.751 | 0.936 | no | yes | 0.835 | 0.660 | 0 | 0.751 / no / 0.660 |
 | S5-15 | 0.910 | 0.988 | yes | yes | 0.852 | 0.734 | 0 | 0.910 / yes / 0.734 |
-| S53-19 | 0.513 | 0.513 | no | no | 0.763 | 0.814 | 0 | 0.513 / no / 0.814 |
+| S53-19 | 0.501 | 0.501 | no | no | 0.773 | 0.855 | 1 (star>ring) | 0.501 / no / 0.855 |
 | S56-17B | 0.969 | 0.963 | yes | yes | 0.902 | 0.817 | 0 | 0.988 / yes / 0.848 |
 | S58-17 | 0.972 | 0.986 | yes | yes | 0.940 | 0.868 | 0 | 0.972 / yes / 0.868 |
 | S67-19 | 0.964 | 0.964 | yes | yes | 0.947 | 0.861 | 0 | 0.964 / yes / 0.861 |
 | S68-19 | 0.966 | 0.620 | yes | no | 0.885 | 0.676 | 0 | 0.966 / yes / 0.676 |
-| S69-19 | 0.993 | 0.988 | yes | yes | 0.920 | 0.759 | 0 | 0.993 / yes / 0.759 |
+| S69-19 | 0.993 | 0.988 | yes | yes | 0.933 | 0.801 | 0 | 0.993 / yes / 0.801 |
 | S70-19 | 0.956 | 0.956 | yes | yes | 0.957 | 0.939 | 0 | 0.956 / yes / 0.939 |
 | S8-15 | 0.640 | 0.640 | no | no | 0.936 | 0.841 | 0 | 0.640 / no / 0.841 |
 | S80-22 | 0.989 | 1.000 | yes | yes | 0.934 | 0.878 | 0 | 0.989 / yes / 0.878 |
-| s34-15 | 0.956 | 0.951 | yes | yes | 0.928 | 0.844 | 1 (backing>star) | 0.956 / yes / 0.844 |
+| s34-15 | 0.951 | 0.946 | yes | yes | 0.926 | 0.838 | 1 (backing>star) | 0.951 / yes / 0.838 |
 
 Official (per-axis), tools/score.py summary: new image `success 23  flagged-not-success 10  silently-wrong 1  errors 0` / `PASS 23/34 (target >= 80%)` / `color agreement mean 0.852  shape: mean IoU 0.919  head 0.842  tail 0.955  shape_ok 27/34`; known design (reported only) `PASS 23/34`, color 0.856, shape 0.920, head 0.847, shape_ok 27/34; `stacking: 4 kind pairs reversed vs the designer in 4/34 IDs (reported only)` / `success under uniform-scale alignment 25/34` (reported only).
 
@@ -706,14 +706,14 @@ Before uploading either file to the shop, the user should open each photo in the
 
 ### Known limitations
 
-- **Library heads (H7, after fix round 4) pick the photo's own design for 48 of 76 photos (top-3 58, offered on the head card).** S29-15 draws S57-17's head (loop blocks around a pinked ring, flagged), not its own star, which is not among its 3 candidates; S51-19 loses 0.059 color through the override (flagged; accepted). See the H7 section.
+- **Library heads pick the photo's own design for 54 of 76 photos (H10; H7 after fix round 4: 48).** S29-15 draws its rule-based head since H11 (loops, a dark 6-point star, pink tips; its own star template ranks 21st and its head fit loses to the rule-based head); S51-19 loses 0.059 color through the override (flagged; accepted). See the H7, H10 and H11 sections.
 
 - **s44-15's two 6-point stars are read as 4-petal layers (H11).** Its head fit and its reference agree with the wrong head as well as with its own template; it is flagged by the point-count warning only when its own design is not in the library.
 - **The success bar is not met: 23/34 succeed against 28 needed (80 %).** `pytest -m slow` fails accordingly. Tuning stopped; it is not finished.
 - **S46-15 counts as silently wrong under per-axis scoring** (0.741, not flagged). It is a scorer alignment effect (the designer drew a larger head and narrower tails; uniform scale gives 0.926); its head fit (0.82) is not a gross failure.
 - **Head shape errors are mostly not flagged.** The head flag fires on gross failures only (23 of 76 reference heads). S42-15, S43-15 and S28-15 have wrong head shapes that pixel overlap cannot tell from right heads; the fixed UI checklist item "Compare the head with the photo" is the safeguard until shape features land.
 - The holdout is no longer clean (see Task 12 phase B), so the numbers on the tuned IDs overstate how the tool will do on new photos.
-- Most successes are still flagged (21 of 23: placeholder `unknown` discs, or a part read below 0.6, mostly points rings). The flag is warranted but means most results need a human look.
+- Most successes are still flagged (22 of 23: placeholder `unknown` discs, or a part read below 0.6, mostly points rings). The flag is warranted but means most results need a human look.
 - Remaining failure clusters:
   - Head structure not modeled: S17-15 (three layered stars, no head disc), S29-15 (since H11 its loops, dark star and pink tips are drawn, but the loops lie over the stars by the H5 stacking rule and most of the pink star reads as the dark color), S68-19 (stacked chevron points), A16-17 (irregular 8-point star in the head's own black), S13-15 (loops drawn as a star because the navy ruffle merged into the blue group).
   - Mask: S53-19 (pure white stripes on a pure white background are cut out; one tail reads as three).

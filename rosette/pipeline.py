@@ -142,7 +142,7 @@ TEMPLATE_AGREE_GAIN, TEMPLATE_AGREE_SIL_LOSS = 0.10, 0.02
 POINTS_COUNT_MIN = 3
 POINTS_COUNT_WARNING = ("The head's point count differs from the closest library design - "
                         "check the number of points against the photo.")
-TEMPLATE_COLORS_WARNING = ("The library head {tid} fits the head outline better, but its colors do not agree "
+TEMPLATE_COLORS_WARNING = ("The library head {tid} fits the head better, but its colors do not agree "
                            "with the photo under the tail colors - the rule-based head is drawn; compare the head "
                            "with the photo and pick a library head on the head card if one is closer.")
 

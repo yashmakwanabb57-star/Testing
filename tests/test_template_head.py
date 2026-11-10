@@ -673,3 +673,25 @@ def test_no_point_count_warning_when_counts_match_colors_disagree_or_no_points(t
                                      (_detected(), 0.9, 6)):               # no rule-based points layer
         m, _ = choose_head(rules, _lib_with_points(rules, partition, points), fits, lambda a, b: 0.85)
         assert POINTS_COUNT_WARNING not in m.warnings
+
+
+def test_colors_warning_is_true_for_the_outline_and_the_agreement_paths(three):
+    from rosette.pipeline import RULES_HEAD, TEMPLATE_AGREE_GAIN, choose_head, drawn_head
+    # chosen by layer agreement with a slightly worse outline, colors under the floor
+    fits = _fits(rules=(0.6, 0.95), T1_15=(0.6 + TEMPLATE_AGREE_GAIN, 0.94), T7_15=(0.5, 0.9), T8_15=(0.5, 0.9))
+    m, _ = choose_head(_detected(), _lib_model(0.4), fits, lambda a, b: 0.85)
+    assert drawn_head(m) == RULES_HEAD
+    warn = [w for w in m.warnings if "colors do not agree" in w]
+    assert warn == ["The library head T1-15 fits the head better, but its colors do not agree with the photo under "
+                    "the tail colors - the rule-based head is drawn; compare the head with the photo and pick a "
+                    "library head on the head card if one is closer."]
+    assert "outline" not in warn[0] and "–" not in warn[0] and "—" not in warn[0]
+
+
+def test_no_point_count_warning_for_a_library_design_colored_freely(three):
+    from rosette.pipeline import POINTS_COUNT_WARNING, points_count_warnings
+    first = Part("template", "template", {"template_id": "T1-15", "points": 6, "partition": 0.9}, 1, 10, 0.9)
+    rules = _detected_with_points(4)
+    assert points_count_warnings(rules, first) == [POINTS_COUNT_WARNING]
+    first.params["free_colors"] = 1  # its colors do not follow the tails: no agreement to lean on
+    assert points_count_warnings(rules, first) == []

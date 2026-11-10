@@ -243,3 +243,47 @@ def test_pinked_ring_builds_and_writes():
     plain = RosetteModel(parts=[Part("ring-0", "ring", {"cx": 300.0, "cy": 200.0, "r_inner": 40.0,
                                                         "r_outer": 80.0}, 1, 30, 0.9)], groups=m.groups)
     assert len(write_svg(build(m))) > len(write_svg(build(plain)))  # the zigzag edge
+
+
+def test_a_star_that_cannot_get_hidden_valleys_becomes_a_flagged_plain_ring(monkeypatch):
+    """The annulus fallback (_hidden_valleys finds no hidden notches; with the current
+    constants it is not reached on the 76 photos): a plain ring, flagged."""
+    monkeypatch.setattr(H, "_hidden_valleys", lambda params, zone_start: None)
+    yy, xx, r, th = _grid()
+    R = 300.0
+    labels = np.full(r.shape, -1, np.int32)
+    labels[(yy > 330 + 0.5 * R) & (yy < 1150) & (np.abs(xx - 450) < 120)] = 3
+    ph = np.abs(((np.degrees(th) % 90) - 45) / 45)
+    labels[r <= (0.3 + 0.65 * ph) * R] = 1
+    labels[r <= 0.72 * R] = 2  # the disc hides the star up to 0.75 of its tips: read without notches
+    labels[r <= 0.2 * R] = 0
+    parts = [q for q in detect_parts(_photo(labels, R), labels) if q.role != "tail_stripe"]
+    assert not any(q.role == "points" and q.color_group == 1 for q in parts)
+    rings = [q for q in parts if q.role == "ring" and q.color_group == 1]
+    assert len(rings) == 1 and not rings[0].params.get("pinked")
+    assert rings[0].confidence <= H.BLOB_UNCONFIRMED_CONF
+
+
+def _pleat_pair(rot2, r_inner2=50.0):
+    p1 = {"kind": "diamond", "count": 17, "r_inner": 50.0, "r_outer": 80.0, "rotation_deg": 3.9, "width_ratio": 0.8}
+    p2 = dict(p1, kind="petal", r_inner=r_inner2, rotation_deg=rot2)
+    layers = [("points", 0, 0.45, p1, 1.0, 80), ("points", 1, 0.45, p2, 1.0, 80)]
+    meta = [dict(zone=(40, 90)), dict(zone=(40, 90))]
+    return layers, meta
+
+
+def test_an_interleaved_two_tone_pleat_pair_stays_points():
+    spacing = 360 / 17
+    layers, meta = _pleat_pair(3.9 + spacing / 2)  # lobes between each other's
+    assert H._alternating(0, layers, meta) and H._alternating(1, layers, meta)
+    layers, meta = _pleat_pair(3.9)  # on top of each other: not alternating
+    assert not H._alternating(0, layers, meta)
+    layers, meta = _pleat_pair(3.9 + spacing / 2, r_inner2=60.0)  # other radii (nested rings)
+    assert not H._alternating(0, layers, meta)
+
+
+def test_a_16_point_star_is_never_read_as_pleats():
+    bands = [H._Band(10, 20, 2, 1.0), H._Band(40, 50, 0, 1.0)]
+    q = {"kind": "star", "count": 16, "r_inner": 72.5, "r_outer": 127.5, "width_ratio": 1.0}
+    assert not H._pleat_layer(q, (20, 40), bands)
+    assert H._pleat_layer(dict(q, kind="diamond"), (20, 40), bands)
