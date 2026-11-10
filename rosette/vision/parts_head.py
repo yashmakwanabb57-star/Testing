@@ -36,7 +36,10 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 from scipy import ndimage
+from shapely import contains_xy, unary_union
 
+from rosette.geometry import disc, pinked_ring, points_ring, ring
+from rosette.geometry.clip import to_geom
 from rosette.model import Part
 from rosette.vision.parts_common import Frame, blob_rings, majority, polar_sample, r3
 from rosette.vision.parts_trims import explain_trims, fold_specks
@@ -166,6 +169,15 @@ ALT_RADIUS_UNITS, ALT_OFFSET = 3.0, 0.25
 # edge strips of the loops it flanks (_keep_explained_splits). S29-15: a pink 6-point
 # star whose rim shows the pink edge strips of the six loops, 12 lobes.
 SPLIT_BANDS, SPLIT_FLOOR, SPLIT_MARGIN, SPLIT_MIN_INNER = 8, 0.2, 0.1, 2
+# H12: two drawn points layers of different colors that overlap are stacked as the photo
+# shows them: over their drawn overlap (less the rings, the center and other layers of
+# either color, and the tails sector), the layer whose label holds more than
+# STACK_SHARE of the two labels' samples (1 canvas unit apart) is on top, when the two
+# labels hold at least STACK_MIN_UNITS2 samples there; otherwise the H5 order (points_z)
+# stands. The decided pairs, strongest first, are kept unless they close a cycle, and the
+# layers are ordered by them, the H5 order breaking the ties; trims keep their place
+# next to their host and the layers keep their set of z values.
+STACK_SHARE, STACK_MIN_UNITS2 = 0.65, 200.0
 # Center search: +- units along the axis, over radii RECENTER_FROM..RECENTER_TO head
 # radii sampled every RECENTER_RADIAL_STEP units.
 RECENTER_UNITS = 12.0
@@ -564,6 +576,7 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
         parts.append(Part(f"ring-{depth}", "ring", rp, label, min(49, 30 + depth), r3(conf)))
     _points_start_at_cover(parts)
     _cover_start(parts, pol, radii, win, fr, head["label"] if head else -2, trims)
+    photo_stacking(parts, labels, p, fr, trims)
     return parts
 
 
@@ -950,3 +963,123 @@ def _pleated_ring(g: int, a: int, b: int, bridges: list[_Band], cov: np.ndarray,
     if full_share < PLEATED_FULL_MIN or reach > PLEATED_REACH_UNITS:
         conf = min(conf, BLOB_UNCONFIRMED_CONF)
     return i0, i1, g, conf
+
+
+def _part_geom(q: Part):
+    """Shapely geometry (canvas units) of a drawn head part, or None."""
+    a = q.params
+    if q.role == "points":
+        shapes = points_ring(a["cx"], a["cy"], a["kind"], int(a["count"]), a["r_inner"], a["r_outer"],
+                             a["rotation_deg"], a["width_ratio"],
+                             None if a.get("inner_ratio") is None else float(a["inner_ratio"]),
+                             None if a.get("edge_width") is None else float(a["edge_width"]))
+    elif q.role == "ring":
+        shapes = [(pinked_ring if int(a.get("pinked", 0)) else ring)(a["cx"], a["cy"], a["r_outer"], a["r_inner"])]
+    elif q.role in ("center", "unknown"):
+        shapes = [disc(a["cx"], a["cy"], a["r"])]
+    else:
+        return None
+    return unary_union([to_geom(sh) for sh in shapes])
+
+
+def stack_votes(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame,
+                trims: set[int]) -> list[tuple[int, int, int, int]]:
+    """H12: (index a, index b, samples of a's label, samples of b's label) over the drawn
+    overlap of every pair of non-trim points parts of different colors (STACK_*)."""
+    geoms = {k: _part_geom(q) for k, q in enumerate(parts) if q.role in ("points", "ring", "center", "unknown")}
+    pts = [k for k, q in enumerate(parts) if q.role == "points" and id(q) not in trims]
+    cover = [geoms[k] for k, q in enumerate(parts) if q.role in ("ring", "center", "unknown") and geoms.get(k)]
+    cover = unary_union(cover) if cover else None
+    cx, cy, _ = p.head
+    h, w = labels.shape
+    out = []
+    for i, a in enumerate(pts):
+        for b in pts[i + 1:]:
+            ga, gb = parts[a].color_group, parts[b].color_group
+            if ga == gb:
+                continue
+            o = geoms[a].intersection(geoms[b])
+            if o.is_empty:
+                continue
+            others = [geoms[k] for k, q in enumerate(parts)
+                      if k not in (a, b) and q.role == "points" and q.color_group in (ga, gb)]
+            cut = [g for g in [cover, *others] if g is not None]
+            if cut:
+                o = o.difference(unary_union(cut))
+            if o.is_empty or o.area < 1.0:
+                continue
+            x0, y0, x1, y1 = o.bounds
+            xs, ys = np.meshgrid(np.arange(np.floor(x0), x1 + 1), np.arange(np.floor(y0), y1 + 1))
+            xs, ys = xs.ravel(), ys.ravel()
+            inside = contains_xy(o, xs, ys)
+            px = np.rint(fr.axis_x + (xs[inside] - 300.0) * fr.scale).astype(int)
+            py = np.rint(fr.py(ys[inside])).astype(int)
+            ang = np.degrees(np.arctan2(py - cy, px - cx))
+            ok = (px >= 0) & (px < w) & (py >= 0) & (py < h) & (np.abs(ang - 90.0) > TAIL_SECTOR_DEG)
+            lab = labels[py[ok], px[ok]]
+            out.append((a, b, int((lab == ga).sum()), int((lab == gb).sum())))
+    return out
+
+
+def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame, trims: set[int]) -> None:
+    """H12: points layers re-stacked as the photo shows them where they overlap (STACK_*);
+    only their z values change."""
+    pts = [k for k, q in enumerate(parts) if q.role == "points"]
+    if len(pts) < 2:
+        return
+    edges = []  # (strength, lower, upper)
+    for a, b, na, nb in stack_votes(parts, labels, p, fr, trims):
+        n = na + nb
+        if n < STACK_MIN_UNITS2:
+            continue
+        share = na / n
+        if share >= STACK_SHARE:
+            edges.append((share, b, a))
+        elif share <= 1 - STACK_SHARE:
+            edges.append((1 - share, a, b))
+    if not edges:
+        return
+    hosts = [k for k in pts if id(parts[k]) not in trims]
+    prior = {k: i for i, k in enumerate(sorted(hosts, key=lambda k: (parts[k].z, k)))}
+    above: dict[int, set[int]] = {k: set() for k in hosts}  # lower -> uppers
+
+    def reaches(x: int, y: int) -> bool:
+        seen, todo = set(), [x]
+        while todo:
+            u = todo.pop()
+            if u == y:
+                return True
+            if u not in seen:
+                seen.add(u)
+                todo.extend(above[u])
+        return False
+
+    for _, lo, up in sorted(edges, key=lambda e: -e[0]):
+        if not reaches(up, lo):
+            above[lo].add(up)
+    below = {k: sum(k in above[j] for j in hosts) for k in hosts}
+    order, ready = [], [k for k in hosts if below[k] == 0]
+    while ready:
+        k = min(ready, key=prior.get)
+        ready.remove(k)
+        order.append(k)
+        for u in above[k]:
+            below[u] -= 1
+            if below[u] == 0:
+                ready.append(u)
+    # trims next to their host (under it when they were under it)
+    host_of = {}
+    for t in pts:
+        if id(parts[t]) in trims:
+            q = parts[t]
+            host_of[t] = min(hosts, key=lambda k: (parts[k].params.get("count") != q.params.get("count"),
+                                                   parts[k].params.get("rotation_deg") != q.params.get("rotation_deg"),
+                                                   abs(parts[k].z - q.z), k))
+    full = []
+    for k in order:
+        full += [t for t in pts if host_of.get(t) == k and parts[t].z < parts[k].z]
+        full.append(k)
+        full += [t for t in pts if host_of.get(t) == k and parts[t].z >= parts[k].z]
+    zs = sorted(parts[k].z for k in pts)
+    for k, z in zip(full, zs):
+        parts[k].z = z

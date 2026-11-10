@@ -1,10 +1,12 @@
 """H12: a points layer whose symmetry changes with radius is split (a 6-point star plus
-the loops' edge strips at the rim, S29-15). Synthetic labels only."""
+the loops' edge strips at the rim, S29-15); points layers are stacked as the photo shows
+them where they overlap. Synthetic labels only."""
 import numpy as np
 
+from rosette.model import Part
 from rosette.vision import parts_head as H
 from rosette.vision.parts import detect_parts
-from rosette.vision.parts_common import polar_sample
+from rosette.vision.parts_common import Frame, polar_sample
 from rosette.vision.prepare import Prepared
 
 R = 300.0
@@ -134,6 +136,75 @@ def test_a_six_point_star_over_a_twelve_pleat_ring_is_not_split_by_the_pleats():
     labels[r <= 0.2 * R] = 2
     pts = [q for q in _head(labels) if q.role == "points" and q.color_group == 1]
     assert [q.params["count"] for q in pts] == [6]
+
+
+def _pts(g, kind, n, ri, ro, rot, wr, z):
+    return Part(f"points-{g}", "points", {"cx": 300.0, "cy": 200.0, "kind": kind, "count": n, "r_inner": ri,
+                                          "r_outer": ro, "rotation_deg": rot, "width_ratio": wr}, g, z, 0.8)
+
+
+def _painted(parts_bottom_up, fr, shape=(1200, 900)):
+    """Labels painted from the parts' drawn shapes, bottom first (canvas -> px by fr)."""
+    from shapely import contains_xy
+    yy, xx = np.mgrid[:shape[0], :shape[1]].astype(float)
+    x = 300.0 + (xx - fr.axis_x) / fr.scale
+    y = 25.0 + (yy - fr.top) / fr.scale
+    labels = np.full(shape, -1, np.int32)
+    for q in parts_bottom_up:
+        labels[contains_xy(H._part_geom(q), x, y)] = q.color_group
+    return labels
+
+
+def test_the_layer_the_photo_shows_on_top_is_stacked_on_top():
+    """The H5 prior puts loops over a star; the labels show the star over the loops, so
+    the star goes over them. Only the z values change: the two keep their set of z."""
+    fr = Frame(axis_x=CX, top=float(CY - R), scale=2.0)
+    cy = 25.0 + R / 2
+    prior = H.points_z([("points", "bow", 140.0), ("points", "star", 120.0)])
+    assert prior[0] > prior[1]  # loops over the star
+    loops = _pts(1, "bow", 6, 40.0, 140.0, 0.0, 0.5, prior[0])
+    star = _pts(4, "star", 6, 50.0, 120.0, 30.0, 0.5, prior[1])
+    for q in (loops, star):
+        q.params["cy"] = cy
+    labels = _painted([loops, star], fr)
+    H.photo_stacking([loops, star], labels, _photo(labels), fr, set())
+    assert star.z > loops.z and sorted((star.z, loops.z)) == sorted(prior)
+    # painted the other way round, the prior stands
+    loops.z, star.z = prior
+    labels = _painted([star, loops], fr)
+    H.photo_stacking([loops, star], labels, _photo(labels), fr, set())
+    assert (loops.z, star.z) == tuple(prior)
+
+
+def test_loops_the_photo_shows_on_top_stay_on_top():
+    parts = _head(star_over_loops(strips=False, star_on_top=False))
+    star = next(q for q in parts if q.role == "points" and q.color_group == 4)
+    loops = next(q for q in parts if q.role == "points" and q.color_group == 1)
+    assert loops.z > star.z
+
+
+def test_photo_stacking_keeps_the_prior_without_overlap():
+    yy, xx, dx, dy, r, th = _grid()
+    labels = np.full(r.shape, -1, np.int32)
+    fr = Frame(axis_x=CX, top=float(CY - R), scale=2.0)
+    a = _pts(1, "bow", 6, 60.0, 140.0, 0.0, 0.2, 21)
+    b = _pts(4, "bow", 6, 60.0, 140.0, 30.0, 0.2, 20)
+    H.photo_stacking([a, b], labels, _photo(labels), fr, set())
+    assert (a.z, b.z) == (21, 20)
+
+
+def test_photo_stacking_keeps_the_prior_when_the_labels_are_split():
+    """Overlap present but its labels are half one color, half the other: the prior stands."""
+    yy, xx, dx, dy, r, th = _grid()
+    fr = Frame(axis_x=CX, top=float(CY - R), scale=2.0)
+    labels = np.where(xx < CX, 1, 4).astype(np.int32)
+    a = _pts(1, "bow", 6, 30.0, 140.0, 0.0, 0.5, 21)
+    b = _pts(4, "bow", 6, 30.0, 140.0, 20.0, 0.5, 20)
+    H.photo_stacking([a, b], labels, _photo(labels), fr, set())
+    assert (a.z, b.z) == (21, 20)
+    labels[:] = 4  # every overlap sample is b's color: b goes on top
+    H.photo_stacking([a, b], labels, _photo(labels), fr, set())
+    assert b.z > a.z
 
 
 def test_a_split_whose_rim_lobes_flank_no_other_layer_is_undone():
