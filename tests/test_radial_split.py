@@ -7,6 +7,7 @@ from rosette.model import Part
 from rosette.vision import parts_head as H
 from rosette.vision.parts import detect_parts
 from rosette.vision.parts_common import Frame, polar_sample
+from rosette.vision.parts_trims import EXPLAIN_MAX_CONF as H_EXPLAIN
 from rosette.vision.prepare import Prepared
 
 R = 300.0
@@ -95,6 +96,9 @@ def test_radial_split_rules():
     assert H.radial_split([6, 3, 3, 6, 6, 6, 6, 6]) is None  # the outer count shows inside too
     assert H.radial_split([12, 12, 6, 6, 6, 6, 6, 6]) is None  # finer inside, not outside
     assert H.radial_split([6, 6, 6, 6, 6, 6, 9, 9]) is None  # not a multiple
+    # the largest inner count dividing c2, not the bands' noisy majority
+    assert H.radial_split([6, 6, 4, 4, 4, 4, 12, 12]) == (6, 12, 6)
+    assert H.radial_split([6, 5, 5, 5, 5, 6, 12, 12]) == (6, 12, 6)
 
 
 def test_a_six_point_star_with_twelve_strips_at_the_rim_is_split():
@@ -224,33 +228,92 @@ def test_a_loop_block_is_as_wide_as_it_shows_at_mid_radius():
     assert abs(width - 0.4 * R / 2) < 3  # the block is 0.4 R (60 units) wide
 
 
-def test_a_split_whose_rim_lobes_flank_no_other_layer_is_undone():
-    """S56-17B: loops whose notched ends read 12 at the rim. Their outer part explains no
-    other layer's trims, so the layer is put back whole (and trims hosted by its inner
-    part go with it); a split whose outer part became trims stands."""
-    whole = ("points", 1, 0.8, {"kind": "star", "count": 6}, 1.0, 100)
+def _fake_trims(host_label, victim):
+    """An explain_trims stand-in: every points layer `victim(layer)` picks is replaced by a
+    trim copy of the first layer of `host_label` (meta: the host's, trim=True)."""
+    def run(layers, meta, *args):
+        host = next(k for k, lay in enumerate(layers) if lay[1] == host_label and lay[0] == "points")
+        out, out_meta, trims = [], [], []
+        for lay, mm in zip(layers, meta):
+            if lay[0] == "points" and victim(lay):
+                trims.append((("points", lay[1], lay[2], dict(layers[host][3], edge_width=1.0), 0.0, layers[host][5]),
+                              dict(meta[host], trim=True)))
+                continue
+            out.append(lay)
+            out_meta.append(mm)
+        for t, tm in trims:
+            out.append(t)
+            out_meta.append(tm)
+        return out, out_meta
+    return run
+
+
+def _forced_split(whole, m):
+    inner = ("points", whole[1], whole[2], dict(whole[3], r_outer=80.0), 1.0, 80)
+    outer = ("points", whole[1], 0.5, dict(whole[3], count=12, kind="bow"), 0.0, 100)
+
+    def split(layers, meta, *args):
+        out, out_meta = [], []
+        for lay, mm in zip(layers, meta):
+            if lay is whole:
+                out += [inner, outer]
+                out_meta += [dict(mm, rows=(10, 80), split=0, whole=(lay, mm)),
+                             dict(mm, rows=(80, 100), eats=None, split=0, outer=True)]
+            else:
+                out.append(lay)
+                out_meta.append(mm)
+        return out, out_meta
+    return split
+
+
+def _undo_case(monkeypatch, whole, others, fake):
     m = dict(zone=(0, 120), rows=(10, 100), eats=None, inner=None)
-    inner = ("points", 1, 0.8, {"kind": "star", "count": 6}, 1.0, 80)
-    outer = ("points", 1, 0.5, {"kind": "bow", "count": 12}, 0.0, 100)
-    other = ("points", 2, 0.9, {"kind": "bow", "count": 6}, 1.0, 110)
-    on_inner = ("points", 3, 0.5, {"kind": "star", "count": 6, "edge_width": 1.0}, 0.0, 80)
-    layers = [other, inner, outer, on_inner]
-    meta = [dict(m), dict(m, split=1, whole=(whole, m)), dict(m, split=1, outer=True),
-            dict(m, split=1, whole=(whole, m), trim=True)]
-    out, _ = H._keep_explained_splits(layers, meta)
-    assert out == [other, whole]
-    # the outer part was replaced by the other layer's strips: the split stands
-    strips = ("points", 1, 0.5, {"kind": "bow", "count": 6, "edge_width": 2.0}, 0.0, 110)
-    layers = [other, inner, strips]
-    meta = [dict(m), dict(m, split=1, whole=(whole, m)), dict(m, trim=True)]
-    out, _ = H._keep_explained_splits(layers, meta)
-    assert out == layers
+    layers = [whole] + others
+    meta = [dict(m) for _ in layers]
+    monkeypatch.setattr(H, "_star_from_outline", lambda *a: None)
+    monkeypatch.setattr(H, "explain_trims", fake)
+    expected = fake(list(layers), list(meta))
+    monkeypatch.setattr(H, "_split_by_radius", _forced_split(whole, m))
+    got = H._split_and_explain(layers, meta, None, None, None, None, 300.0, 200.0)
+    return got, expected
+
+
+def test_an_undone_split_leaves_the_layers_as_they_were_with_a_trim_hosting_inner_part(monkeypatch):
+    """S56-17B: loops whose notched ends read 12 at the rim; the outer part explains no
+    other layer, so the split is undone. Here the inner part also hosts another layer's
+    trims: after the undo the trims are those the whole layer hosts, as without a split."""
+    whole = ("points", 1, 0.8, {"kind": "bow", "count": 6, "r_outer": 100.0}, 1.0, 100)
+    band = ("points", 3, 0.4, {"kind": "bow", "count": 6, "r_outer": 90.0}, 1.0, 90)
+    got, expected = _undo_case(monkeypatch, whole, [band], _fake_trims(1, lambda lay: lay[1] == 3))
+    assert got == expected
+    assert not any(mm.get("outer") for mm in got[1])
+
+
+def test_an_undone_split_leaves_the_layers_as_they_were_when_its_inner_part_is_a_trim(monkeypatch):
+    """The inner part is read under EXPLAIN_MAX_CONF and replaced by another layer's trims;
+    the outer part stays its own layer, so the split is undone and the whole layer goes
+    through the trims rule again as it would without the split."""
+    whole = ("points", 1, 0.5, {"kind": "star", "count": 6, "r_outer": 100.0}, 1.0, 100)
+    other = ("points", 2, 0.9, {"kind": "bow", "count": 6, "r_outer": 110.0}, 1.0, 110)
+    fake = _fake_trims(2, lambda lay: lay[1] == 1 and lay[2] < H_EXPLAIN and lay[3]["count"] == 6)
+    got, expected = _undo_case(monkeypatch, whole, [other], fake)
+    assert got == expected
+    assert [lay[3].get("count") for lay in got[0]] == [6, 6]
+
+
+def test_a_split_whose_outer_part_became_trims_stands(monkeypatch):
+    whole = ("points", 1, 0.8, {"kind": "star", "count": 6, "r_outer": 100.0}, 1.0, 100)
+    other = ("points", 2, 0.9, {"kind": "bow", "count": 6, "r_outer": 110.0}, 1.0, 110)
+    fake = _fake_trims(2, lambda lay: lay[1] == 1 and lay[3]["count"] == 12)
+    got, _ = _undo_case(monkeypatch, whole, [other], fake)
+    assert [(lay[1], lay[3].get("r_outer"), "edge_width" in lay[3]) for lay in got[0]] == [
+        (1, 80.0, False), (2, 110.0, False), (1, 110.0, True)]
 
 
 def test_of_two_nested_stars_the_photo_cannot_order_the_smaller_is_on_top():
     """Two concentric 6-point stars of different colors on the same axes, the overlap's
-    labels split half and half: the star with the shorter tips lies on top, and the larger
-    one behind has its valleys hidden under it (its border shows around the arms)."""
+    labels split half and half: the star with the shorter tips lies on top; only the z
+    values change."""
     yy, xx, dx, dy, r, th = _grid()
     fr = Frame(axis_x=CX, top=float(CY - R), scale=2.0)
     labels = np.where(xx < CX, 1, 4).astype(np.int32)
@@ -258,10 +321,31 @@ def test_of_two_nested_stars_the_photo_cannot_order_the_smaller_is_on_top():
     small = _pts(4, "star", 6, 60.0, 110.0, 31.0, 1.0, 20)
     H.photo_stacking([big, small], labels, _photo(labels), fr, set())
     assert small.z > big.z
-    assert big.params["r_inner"] == round(60.0 * 130.0 / 110.0, 3) and big.params["r_outer"] == 130.0
+    assert (big.params["r_inner"], big.params["r_outer"]) == (80.0, 130.0)
     # when the photo decides, it wins: every overlap sample is the big star's color
     big.z, small.z = 21, 20
-    big.params["r_inner"] = 80.0
     labels[:] = 1
     H.photo_stacking([big, small], labels, _photo(labels), fr, set())
-    assert big.z > small.z and big.params["r_inner"] == 80.0
+    assert big.z > small.z
+
+
+def test_the_cover_step_reads_the_order_the_photo_gives():
+    """12 petals (1, prior z 22 over a 12-lobe layer 4 at z 21) whose bases the photo shows
+    under layer 4's lobes: the photo puts layer 4 on top, and only then are the petals
+    read as starting under it, at the ring."""
+    fr = Frame(axis_x=CX, top=float(CY - R), scale=2.0)
+    cy = 25.0 + R / 2
+    ring = Part("ring-0", "ring", {"cx": 300.0, "cy": cy, "r_inner": 30.0, "r_outer": 50.0}, 0, 30, 0.9)
+    petals = _pts(1, "petal", 12, 70.0, 120.0, 0.0, 0.5, 22)
+    cover = _pts(4, "bow", 12, 50.0, 125.0, 0.0, 0.25, 21)
+    for q in (petals, cover):
+        q.params["cy"] = cy
+    labels = _painted([petals, cover, ring], fr)
+    radii = np.arange(0.5, 150, 1.0) * fr.scale
+    pol = polar_sample(labels, CX, fr.py(cy), radii, H.RING_THETA, fill=-1)
+    theta = np.degrees(np.linspace(0, 2 * np.pi, H.RING_THETA, endpoint=False))
+    win = np.abs(theta - 90.0) > H.TAIL_SECTOR_DEG
+    parts = [ring, petals, cover]
+    H._finish_points(parts, labels, _photo(labels), fr, pol, radii, win, -2, set())
+    assert cover.z > petals.z
+    assert petals.params["r_inner"] == 50.0
