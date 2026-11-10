@@ -154,6 +154,18 @@ PLEAT_MIN_COUNT, PLEAT_FILL = 16, 0.8
 # Two such layers of one count and radii (ALT_RADIUS_UNITS) whose lobes are offset by half
 # a spacing (within ALT_OFFSET of it) are one two-tone pleated edge: kept as points.
 ALT_RADIUS_UNITS, ALT_OFFSET = 3.0, 0.25
+# H12: a points layer whose symmetry changes with radius is two layers. Its radial
+# extent is cut into SPLIT_BANDS bands; a band's count is the largest n whose turned
+# self-correlation lies within SPLIT_MARGIN of the band's best (divisors of the true
+# count score as high; n from STAR_MIN_ORDER: a half turn also maps the mirror-symmetric
+# head onto itself), undecided when the best is under SPLIT_FLOOR. When the outermost
+# decided bands agree on a count c2 that is a multiple of the count c1 held by most of
+# the decided bands inside them (at least SPLIT_MIN_INNER of them, none holding c2),
+# the layer splits where c2 starts: the inner part is a layer of c1 lobes, the outer
+# part a flagged layer of c2 lobes. The split stands only when the trims rule reads the outer part as the
+# edge strips of the loops it flanks (_keep_explained_splits). S29-15: a pink 6-point
+# star whose rim shows the pink edge strips of the six loops, 12 lobes.
+SPLIT_BANDS, SPLIT_FLOOR, SPLIT_MARGIN, SPLIT_MIN_INNER = 8, 0.2, 0.1, 2
 # Center search: +- units along the axis, over radii RECENTER_FROM..RECENTER_TO head
 # radii sampled every RECENTER_RADIAL_STEP units.
 RECENTER_UNITS = 12.0
@@ -490,8 +502,10 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             # a star with a core: the band is this layer's body, the star polygon covers it
             meta.append(dict(zone=(a, b), rows=(ra, rb), eats=inner if has_core else None, inner=inner))
 
+    layers, meta = _split_by_radius(layers, meta, pol, radii, win, fr, ccx, ccy)
     _star_from_outline(layers, meta, pol, radii, win, fr, ccx, ccy)
     layers, meta = explain_trims(layers, meta, pol, radii, win, fr, RING_MAX_GROWTH_UNITS)
+    layers, meta = _keep_explained_splits(layers, meta)
     layers, meta = fold_specks(layers, meta, bands, head_band, pleated, radii, fr, RING_MAX_GROWTH_UNITS)
     # H11: convex "stars" and pleated edges are rings (annuli), flagged / pinked
     keep = []
@@ -707,6 +721,149 @@ def _star_from_outline(layers: list, meta: list[dict], pol: np.ndarray, radii: n
                      {"cx": r3(ccx), "cy": r3(ccy), "kind": kind, "count": int(n), "r_inner": r3(r_in),
                       "r_outer": r3(r_tip), "rotation_deg": r3(rot),
                       "width_ratio": r3(fr.d(w.max()) / max(r_tip - r_in, 1e-6))}, area, rb)
+
+
+def band_orders(ind: np.ndarray, win: np.ndarray, nb: int = SPLIT_BANDS) -> tuple[np.ndarray, list[int]]:
+    """H12: (band edges as row offsets, count per band; 0 = undecided) of a layer's
+    (radii, theta) indicator cut into nb radial bands (SPLIT_*)."""
+    edges = np.linspace(0, ind.shape[0], nb + 1).astype(int)
+    orders = []
+    for a, b in zip(edges[:-1], edges[1:]):
+        x = ind[a:b].astype(np.float32)
+        if b - a < 2 or x[:, win].mean() < MIN_LAYER_COV:
+            orders.append(0)
+            continue
+        sc = {n: _score_at(x, win, n) for n in range(STAR_MIN_ORDER, MAX_COUNT + 1)}
+        best = max(sc.values())
+        orders.append(0 if best < SPLIT_FLOOR else max(n for n, s in sc.items() if s >= best - SPLIT_MARGIN))
+    return edges, orders
+
+
+def radial_split(orders: list[int]) -> tuple[int, int, int] | None:
+    """H12: (c1, c2, first outer band) when the outermost decided bands agree on a count
+    c2 that is a multiple of the count c1 most of the decided bands inside them hold
+    (SPLIT_MIN_INNER or more of them) and none of those holds c2 (or a multiple of it):
+    the finer symmetry shows only outside. Else None."""
+    decided = [(k, o) for k, o in enumerate(orders) if o]
+    if not decided:
+        return None
+    c2 = decided[-1][1]
+    j = len(decided)
+    while j > 0 and decided[j - 1][1] == c2:
+        j -= 1
+    inner = [o for _, o in decided[:j]]
+    if not inner:
+        return None
+    c1 = max(set(inner), key=inner.count)
+    if (inner.count(c1) < SPLIT_MIN_INNER or 2 * inner.count(c1) <= len(inner)
+            or c1 < STAR_MIN_ORDER or c2 <= c1 or c2 % c1 or any(o % c2 == 0 for o in inner)):
+        return None
+    return c1, c2, decided[j][0]
+
+
+def _axis_widths(ind: np.ndarray, win: np.ndarray, n: int, rot: float) -> np.ndarray:
+    """H12: per row, the median (over the visible lobes) of the angular run of the
+    indicator through each lobe's axis, in columns (0 where the axis is not covered):
+    the width of the lobes themselves, leaving out other pieces of the label between
+    them (a split layer's inner part still holds the outer part's strips)."""
+    t = ind.shape[1]
+    cols = [int(round((rot + k * 360.0 / n) % 360 * t / 360)) % t for k in range(n)]
+    cols = [c for c in cols if win[c]]
+    if not cols:
+        return np.zeros(ind.shape[0])
+    reach = t // (2 * n)
+    out = np.zeros((ind.shape[0], len(cols)))
+    for j, c in enumerate(cols):
+        for i in range(ind.shape[0]):
+            if not ind[i, c]:
+                continue
+            run = 1
+            for d in (1, -1):
+                s = 1
+                while s <= reach and ind[i, (c + d * s) % t]:
+                    s += 1
+                run += s - 1
+            out[i, j] = run
+    return np.median(out, axis=1)
+
+
+def _layer_params(ind: np.ndarray, win: np.ndarray, n: int, radii: np.ndarray, ra: int,
+                  fr: Frame, ccx: float, ccy: float) -> dict:
+    """Points params of n lobes read off a (radii from row ra, theta) indicator: kind by
+    the lobe width profile, rotation by the n-th harmonic, radial extent its rows."""
+    x = ind.astype(np.float32)
+    t = x.shape[1]
+    th = np.linspace(0, 2 * np.pi, t, endpoint=False)
+    c = (x[:, win] * np.exp(-1j * n * th[win])[None]).sum()
+    rot = (-np.degrees(np.angle(c)) / n) % (360.0 / n)
+    rr = radii[ra:ra + x.shape[0]]
+    w = _axis_widths(ind, win, n, rot) * 2 * np.pi * rr / t
+    kind = _kind(w, 2 * np.pi * rr / n) if w.max() > 0 else "petal"
+    r_in, r_out = fr.d(rr[0]), fr.d(rr[-1])
+    if kind == "star":  # valleys sit where the lobes are widest
+        r_in = fr.d(rr[int(np.argmax(w))])
+    return {"cx": r3(ccx), "cy": r3(ccy), "kind": kind, "count": int(n), "r_inner": r3(r_in),
+            "r_outer": r3(r_out), "rotation_deg": r3(rot),
+            "width_ratio": r3(fr.d(w.max()) / max(r_out - r_in, 1e-6))}
+
+
+def _split_by_radius(layers: list, meta: list[dict], pol: np.ndarray, radii: np.ndarray, win: np.ndarray,
+                     fr: Frame, ccx: float, ccy: float) -> tuple[list, list[dict]]:
+    """H12: a points layer whose count changes with radius (radial_split) is replaced by
+    its inner part (c1 lobes, its own confidence) and its outer part (c2 lobes, flagged)."""
+    out, out_meta = [], []
+    for lay, m in zip(layers, meta):
+        role, g, share, params, area, rb = lay
+        ra, rb_ = m["zone"][0], m["zone"][1]
+        rows = np.flatnonzero((pol[ra:rb_] == g)[:, win].mean(axis=1) > EXTENT_COV)
+        if role != "points" or rows.size == 0:
+            out.append(lay)
+            out_meta.append(m)
+            continue
+        ra, rb_ = ra + rows[0], ra + rows[-1] + 1
+        ind = pol[ra:rb_] == g
+        edges, orders = band_orders(ind, win)
+        found = radial_split(orders)
+        if found is None:
+            out.append(lay)
+            out_meta.append(m)
+            continue
+        c1, c2, k = found
+        rs = ra + int(edges[k])
+        if rs - ra < 2 or rb_ - rs < 2 or fr.d(radii[rs - 1] - radii[ra]) < MIN_ZONE_UNITS:
+            out.append(lay)
+            out_meta.append(m)
+            continue
+        inner = _layer_params(pol[ra:rs] == g, win, c1, radii, ra, fr, ccx, ccy)
+        outer = _layer_params(pol[rs:rb_] == g, win, c2, radii, rs, fr, ccx, ccy)
+        if m["eats"] is not None:  # a star over its body band stays that star
+            inner.update(kind="star", r_inner=params["r_inner"])
+        out.append(("points", g, share, inner, area, rs))
+        key = len(out)
+        out_meta.append(dict(m, rows=(ra, rs), split=key, whole=(lay, m)))
+        out.append(("points", g, min(share, BLOB_UNCONFIRMED_CONF), outer, 0.0, rb_))
+        out_meta.append(dict(m, rows=(rs, rb_), eats=None, split=key, outer=True))
+    return out, out_meta
+
+
+def _keep_explained_splits(layers: list, meta: list[dict]) -> tuple[list, list[dict]]:
+    """H12: a split stands only when its outer part became another layer's trims (edge
+    strips: SPLIT_*); otherwise the layer is put back whole, with no trims on its inner
+    part. Over the 76 photos the splits whose outer part stayed a layer of its own were
+    loops' notched ends (S56-17B) and striped loop borders (S57-17), not new lobes."""
+    undo = {mm["split"] for mm in meta if mm.get("outer") and not mm.get("trim")}
+    if not undo:
+        return layers, meta
+    out, out_meta = [], []
+    for lay, mm in zip(layers, meta):
+        key = mm.get("split")
+        if key not in undo:
+            out.append(lay)
+            out_meta.append(mm)
+        elif "whole" in mm and not mm.get("trim"):
+            out.append(mm["whole"][0])
+            out_meta.append(mm["whole"][1])
+    return out, out_meta
 
 
 def _convex_star(params: dict) -> bool:
