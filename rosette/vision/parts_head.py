@@ -169,6 +169,10 @@ ALT_RADIUS_UNITS, ALT_OFFSET = 3.0, 0.25
 # edge strips of the loops it flanks (_keep_explained_splits). S29-15: a pink 6-point
 # star whose rim shows the pink edge strips of the six loops, 12 lobes.
 SPLIT_BANDS, SPLIT_FLOOR, SPLIT_MARGIN, SPLIT_MIN_INNER = 8, 0.2, 0.1, 2
+# H12: a loop block's width is the width it shows through its axis over the middle
+# BLOCK_MID of its radial extent (_block_width), unless that reads under BLOCK_MIN_SHARE
+# of the mean-coverage width (the axis falls on another color: a center stripe, a print).
+BLOCK_MID, BLOCK_MIN_SHARE = 0.6, 0.5
 # H12: two drawn points layers of different colors that overlap are stacked as the photo
 # shows them: over their drawn overlap (less the rings, the center and other layers of
 # either color, and the tails sector), the layer whose label holds more than
@@ -507,9 +511,13 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             r_in, r_out = unit(ra), unit(rb - 1)
             if kind == "star" and not has_core:  # valleys sit where the lobes are widest
                 r_in = unit(ra + int(np.argmax(w)))
+            wide = w.max()
+            if kind == "bow":  # H12: a loop block is as wide as it shows at mid radius
+                block = _block_width(ind, win, n, rot, radii[ra:rb])
+                wide = block if block >= BLOCK_MIN_SHARE * wide else wide
             params = {"cx": r3(ccx), "cy": r3(ccy), "kind": kind, "count": int(n),
                       "r_inner": r3(r_in), "r_outer": r3(r_out), "rotation_deg": r3(rot),
-                      "width_ratio": r3(fr.d(w.max()) / max(r_out - r_in, 1e-6))}
+                      "width_ratio": r3(fr.d(wide) / max(r_out - r_in, 1e-6))}
             layers.append(("points", g, share, params, area, rb))
             # a star with a core: the band is this layer's body, the star polygon covers it
             meta.append(dict(zone=(a, b), rows=(ra, rb), eats=inner if has_core else None, inner=inner))
@@ -798,6 +806,20 @@ def _axis_widths(ind: np.ndarray, win: np.ndarray, n: int, rot: float) -> np.nda
                 run += s - 1
             out[i, j] = run
     return np.median(out, axis=1)
+
+
+def _block_width(ind: np.ndarray, win: np.ndarray, n: int, rot: float, rr: np.ndarray) -> float:
+    """H12: lateral width (px) of a loop block layer as it shows: per row of the middle
+    BLOCK_MID share of its radial extent the median, over the visible lobes, of the run
+    of its label through each lobe's axis; the widest of those rows (the loop profile's
+    full width; the base under the cover and the folded end are left out). 0 when no
+    lobe shows there. The mean coverage the other kinds use counts every piece of the
+    label between the loops too."""
+    m = len(rr)
+    i0 = int(m * (0.5 - BLOCK_MID / 2))
+    i1 = max(int(np.ceil(m * (0.5 + BLOCK_MID / 2))), i0 + 1)
+    runs = _axis_widths(ind[i0:i1], win, n, rot) * 2 * np.pi * rr[i0:i1] / ind.shape[1]
+    return float(runs.max()) if runs.size else 0.0
 
 
 def _layer_params(ind: np.ndarray, win: np.ndarray, n: int, radii: np.ndarray, ra: int,

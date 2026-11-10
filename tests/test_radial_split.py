@@ -207,6 +207,23 @@ def test_photo_stacking_keeps_the_prior_when_the_labels_are_split():
     assert b.z > a.z
 
 
+def test_a_loop_block_is_as_wide_as_it_shows_at_mid_radius():
+    """Loops (1) plus wedges of their own color between their bases: the mean coverage
+    reads the loops wider than they are; the drawn width is the block's own at mid radius."""
+    from test_points_layers import loops_photo
+    p, labels = loops_photo(profile=[1.0] * 11)
+    yy, xx = np.mgrid[:labels.shape[0], :labels.shape[1]].astype(float)
+    dx, dy = xx - 450.0, yy - 330.0
+    r = np.hypot(dx, dy)
+    wedge = _blocks(dx, dy, 6, 30, 0.6 * R, 0.8 * R, 0.03 * R) & (labels != 3)
+    labels[wedge] = 1
+    loops = [q for q in detect_parts(p, labels) if q.role == "points" and q.color_group == 1]
+    assert len(loops) == 1 and loops[0].params["kind"] == "bow"
+    a = loops[0].params
+    width = a["width_ratio"] * (a["r_outer"] - a["r_inner"])
+    assert abs(width - 0.4 * R / 2) < 3  # the block is 0.4 R (60 units) wide
+
+
 def test_a_split_whose_rim_lobes_flank_no_other_layer_is_undone():
     """S56-17B: loops whose notched ends read 12 at the rim. Their outer part explains no
     other layer's trims, so the layer is put back whole (and trims hosted by its inner
