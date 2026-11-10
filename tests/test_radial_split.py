@@ -245,3 +245,23 @@ def test_a_split_whose_rim_lobes_flank_no_other_layer_is_undone():
     meta = [dict(m), dict(m, split=1, whole=(whole, m)), dict(m, trim=True)]
     out, _ = H._keep_explained_splits(layers, meta)
     assert out == layers
+
+
+def test_of_two_nested_stars_the_photo_cannot_order_the_smaller_is_on_top():
+    """Two concentric 6-point stars of different colors on the same axes, the overlap's
+    labels split half and half: the star with the shorter tips lies on top, and the larger
+    one behind has its valleys hidden under it (its border shows around the arms)."""
+    yy, xx, dx, dy, r, th = _grid()
+    fr = Frame(axis_x=CX, top=float(CY - R), scale=2.0)
+    labels = np.where(xx < CX, 1, 4).astype(np.int32)
+    big = _pts(1, "star", 6, 80.0, 130.0, 30.0, 1.0, 21)
+    small = _pts(4, "star", 6, 60.0, 110.0, 31.0, 1.0, 20)
+    H.photo_stacking([big, small], labels, _photo(labels), fr, set())
+    assert small.z > big.z
+    assert big.params["r_inner"] == round(60.0 * 130.0 / 110.0, 3) and big.params["r_outer"] == 130.0
+    # when the photo decides, it wins: every overlap sample is the big star's color
+    big.z, small.z = 21, 20
+    big.params["r_inner"] = 80.0
+    labels[:] = 1
+    H.photo_stacking([big, small], labels, _photo(labels), fr, set())
+    assert big.z > small.z and big.params["r_inner"] == 80.0

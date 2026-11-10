@@ -182,6 +182,15 @@ BLOCK_MID, BLOCK_MIN_SHARE = 0.6, 0.5
 # layers are ordered by them, the H5 order breaking the ties; trims keep their place
 # next to their host and the layers keep their set of z values.
 STACK_SHARE, STACK_MIN_UNITS2 = 0.65, 200.0
+# H12: where the photo does not decide, of two concentric points layers of one count and
+# different colors (axes within NEST_AXIS_DEG) whose tips are nested (NEST_UNITS or more
+# apart) the one with the shorter tips lies on top: a rosette is built from layers each
+# sitting on a larger one. The larger star behind then has its valleys hidden under the
+# front star (the front star scaled to its tips) when they were read further out: its
+# visible part is the border around the front star's arms. Mined on the 76 photos: 7
+# such pairs; the photo decides 6, agreeing with the rule on 5 (S47-15, S58-17, S59-17,
+# S61-19, S69-19; A15-17 disagrees and the photo wins); the rule decides S29-15.
+NEST_AXIS_DEG, NEST_UNITS = 6.0, 3.0
 # Center search: +- units along the axis, over radii RECENTER_FROM..RECENTER_TO head
 # radii sampled every RECENTER_RADIAL_STEP units.
 RECENTER_UNITS = 12.0
@@ -1053,6 +1062,7 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
     if len(pts) < 2:
         return
     edges = []  # (strength, lower, upper)
+    decided = set()
     for a, b, na, nb in stack_votes(parts, labels, p, fr, trims):
         n = na + nb
         if n < STACK_MIN_UNITS2:
@@ -1062,9 +1072,14 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
             edges.append((share, b, a))
         elif share <= 1 - STACK_SHARE:
             edges.append((1 - share, a, b))
+        else:
+            continue
+        decided.add(frozenset((a, b)))
+    hosts = [k for k in pts if id(parts[k]) not in trims]
+    nested = [(b, a) for a, b in nested_pairs(parts, hosts) if frozenset((a, b)) not in decided]
+    edges += [(STACK_SHARE / 2, lo, up) for lo, up in nested]  # after every photo decision
     if not edges:
         return
-    hosts = [k for k in pts if id(parts[k]) not in trims]
     prior = {k: i for i, k in enumerate(sorted(hosts, key=lambda k: (parts[k].z, k)))}
     above: dict[int, set[int]] = {k: set() for k in hosts}  # lower -> uppers
 
@@ -1108,3 +1123,26 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
     zs = sorted(parts[k].z for k in pts)
     for k, z in zip(full, zs):
         parts[k].z = z
+    for back, front in nested:
+        qb, qf = parts[back].params, parts[front].params
+        if parts[back].z < parts[front].z and qb.get("kind") == qf.get("kind") == "star":
+            hidden = float(qf["r_inner"]) * float(qb["r_outer"]) / float(qf["r_outer"])
+            if hidden < float(qb["r_inner"]):
+                qb["r_inner"] = r3(hidden)
+
+
+def nested_pairs(parts: list[Part], hosts: list[int]) -> list[tuple[int, int]]:
+    """H12: (front, back) indices of concentric points layers of one count and different
+    colors whose tips are nested (NEST_*)."""
+    out = []
+    for a in hosts:
+        for b in hosts:
+            qa, qb = parts[a].params, parts[b].params
+            if (a == b or parts[a].color_group == parts[b].color_group or int(qa["count"]) != int(qb["count"])
+                    or abs(float(qa["cx"]) - float(qb["cx"])) > 1 or abs(float(qa["cy"]) - float(qb["cy"])) > 1):
+                continue
+            sp = 360.0 / int(qa["count"])
+            d = (float(qa["rotation_deg"]) - float(qb["rotation_deg"])) % sp
+            if min(d, sp - d) <= NEST_AXIS_DEG and float(qa["r_outer"]) + NEST_UNITS <= float(qb["r_outer"]):
+                out.append((a, b))
+    return out
