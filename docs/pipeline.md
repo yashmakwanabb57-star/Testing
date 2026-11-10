@@ -39,7 +39,7 @@ A result is **flagged** (`pipeline.is_flagged`, mirrored by `flagItems` in `app/
 | S2-15B | 0.000 | 0.047 | 0.90 | no | no | 4/4 | 1/1 | yes | yes |
 | S26-15 | 0.892 | 0.751 | 0.93 | yes | no | 6/6 | 1/1 | yes | yes |
 | S28-15 | 0.888 | 0.755 | 0.98 | no | no | 4/4 | 1/1 | yes | yes |
-| S29-15 | 0.211 | 0.263 | 0.88 | yes | no | 0/6 | 1/1 | no | yes |
+| S29-15 | 0.237 | 0.237 | no | no | 0.908 | 0.765 | 0 | 0.237 / no / 0.765 |
 | S30-15 | 0.872 | 0.693 | 0.84 | yes | no | 6/6 | 1/1 | yes | yes |
 | S31-15 | 0.929 | 0.759 | 0.93 | no | yes | 6/6 | 1/1 | yes | yes |
 | S33-15 | 0.802 | 0.736 | 0.92 | no | no | 6/6 | 1/1 | yes | yes |
@@ -51,16 +51,16 @@ A result is **flagged** (`pipeline.is_flagged`, mirrored by `flagItems` in `app/
 | S45-15 | 0.902 | 0.606 | 0.93 | yes | yes | 7/8 | 1/1 | no | yes |
 | S46-15 | 0.715 | 0.508 | 0.83 | no | no | 6/6 | 1/1 | yes | yes |
 | S5-15 | 0.773 | 0.555 | 0.85 | yes | no | 4/4 | 1/1 | yes | yes |
-| S53-19 | 0.476 | 0.398 | 0.77 | yes | no | 22/12 | 3/1 | no | no |
+| S53-19 | 0.501 | 0.501 | no | no | 0.773 | 0.855 | 1 (star>ring) | 0.501 / no / 0.855 |
 | S56-17B | 0.693 | 0.602 | 0.88 | no | no | 6/6 | 1/1 | yes | yes |
 | S58-17 | 1.000 | 0.762 | 0.90 | yes | yes | 6/6 | 1/1 | yes | yes |
 | S67-19 | 0.943 | 0.797 | 0.95 | no | yes | 6/6 | 1/1 | yes | yes |
 | S68-19 | 0.600 | 0.556 | 0.88 | yes | no | 0/8 | 1/1 | no | yes |
-| S69-19 | 0.973 | 0.781 | 0.90 | no | yes | 6/8 | 1/1 | no | yes |
+| S69-19 | 0.993 | 0.988 | yes | yes | 0.933 | 0.801 | 0 | 0.993 / yes / 0.801 |
 | S70-19 | 0.960 | 0.790 | 0.96 | yes | yes | 6/6 | 1/1 | yes | yes |
 | S8-15 | 0.637 | 0.592 | 0.93 | yes | no | 0/8 | 1/1 | no | yes |
 | S80-22 | 0.598 | 0.547 | 0.93 | no | no | 6/6 | 1/1 | yes | yes |
-| s34-15 | 0.897 | 0.746 | 0.94 | yes | no | 6/6 | 1/1 | yes | yes |
+| s34-15 | 0.951 | 0.946 | yes | yes | 0.926 | 0.838 | 1 (backing>star) | 0.951 / yes / 0.838 |
 
 **Summary:** success 10, flagged-not-success 15, silently-wrong 9, errors 0 - `PASS 10/34 (target >= 80%)`.
 
@@ -559,6 +559,64 @@ No own design lost. Changes: S51-19 gains its own design (full pick A1-15 -> S51
 
 **Scoreboard (34 IDs, `tools/score.py`, after H10 with the rebuilt library, the lobe gate and the guard).** New image (headline): PASS 23/34, color 0.855, shape 0.919, head 0.842 (before H10 0.854 / 0.920 / 0.844). Known design: PASS 23/34, color 0.859, shape 0.921, head 0.847 (before H10 0.859 / 0.921 / 0.847). The lobe gate changes S29-15 (agree 0.221 -> 0.321, headS 0.740 -> 0.851: S10-19's head), S30-15 (0.907 -> 0.972, headS 0.934 -> 0.879) and S2-15B (0.687 -> 0.613, headS 0.853 -> 0.820). Before the gate change: new image PASS 23/34, color 0.852, shape 0.919, head 0.842; known 23/34, 0.856, 0.920, 0.844; against before H10 only S29-15 (agree 0.265 -> 0.221, headS 0.815 -> 0.740) and S10-19 (0.950 -> 0.942, headS 0.780 -> 0.768; known 0.987 -> 0.942) change; the rebuilt library changes no row. Ruling: the head drop is a reference-proportion artifact (the S29-15 head is now centered on the photo's head and sized to it).
 
+## H11: star layers under loops, pleated edges, convex stars; layer agreement in the head decision
+
+Started at 43589ba; commits b42f66a (detector), 8823344 and 0714d88 (layer agreement), 1d51263 (point-count warning). Full notes: `.superpowers/sdd/2026-11-05-rosette-svg-generator/h11-report.md`. Seen on S29-15 (a pink 6-point star over a dark 6-point star over glitter cross loops), A10-15 (three concentric pleated rings read as 24 bows and 24 kites), S53-19 (two 4-point "stars" drawn as a square and a turned square) and s44-15 (two layered 6-point stars read as 4-petal layers, unflagged).
+
+**Detector rules (`rosette/vision/parts_head.py`).**
+- Start at the cover (`_cover_start`, `COVER_CUT_SHARE` 0.6, `COVER_PROBE_UNITS` 3, `COVER_MAX_UNITS` 80). A points layer that is not a star, whose lobe axes just inside its r_inner show (on >= 0.6 of the visible lobes) the label of a part drawn above it (a ring, the center, or a points layer of higher z), starts at the outer edge of the ring or center that cover reaches down to; the width stays. The H4 rule (loops under a ring, kites within a pleat depth of a ring) is unchanged. Stars keep their valleys: moving them inward too made stars skinny (mean rules silhouette over the 76 photos 0.875 -> 0.851, S9-19 0.937 -> 0.658), and a version without the "drawn above" and "reaches a ring" conditions ran loops to the middle (A14-17, S2-15, S56-17 r_inner 1.5); both dropped.
+- A star outline under a star (`_star_from_outline`, `STAR_MIN_ORDER` 3, `STAR_INSIDE_TOL` 0.05). An unknown whose outline (its outermost radius per angle) has an n-fold turned self-correlation >= SYM_T, where n is a points layer's count or half of it and the outline's tips stay within 5 % of that layer's r_outer, becomes a points layer of n lobes, valleys at the outline's 10th percentile and tips at its 95th, flagged (confidence at most 0.5). "n divides the count" was tried first and turned S29-15's badge print into a 4-point kite layer.
+- Convex stars (`STAR_CONVEX` 0.95, `STAR_HIDDEN_DEPTH` 0.85). A star whose valleys lie at or beyond 0.95 of the convex limit (r_outer cos(180/n)) would be drawn as a polygon (a square for 4 points). Its valleys are hidden under the layers inside its zone: they move to the zone's start, or to 0.85 of the convex limit when that still lies inside it; a star that cannot get notches either way becomes a flagged annulus (fires on none of the 76). Drawing the annulus directly cost S18-15, S3-15 and S18-15B 0.3-0.4 silhouette.
+- Pleated edges (`PLEAT_MIN_COUNT` 16, `PLEAT_FILL` 0.8, `ALT_RADIUS_UNITS` 3, `ALT_OFFSET` 0.25). A points layer of 16 or more lobes that fill >= 0.8 of their angular spacing where widest, in a zone closed by bands on both sides, is a ring with a pinked outer edge (ring params `pinked` 1 and `pleats` n; `geometry.rings.pinked_ring`; the re-centering uses the pleat count). Two such layers of one count and radii whose lobes interleave are a two-tone pleated edge and stay points (S6-15, S69-19, 17 + 17: as rings one color hid the other, S69-19 agreement 0.80 -> 0.70). Rings now stack by their outer edge (a pleated annulus can enclose a narrower ring: A10-15).
+
+Rules head fit over the 76 photos (head_fit of the detected model): mean silhouette 0.8750 -> 0.8848, mean agreement 0.7192 -> 0.7279; 17 photos change, 59 are identical.
+
+| rule | layers (photos) | r_inner or result | head fit change (agreement / silhouette) |
+|---|---|---|---|
+| start at the cover | 8 (8) | S29-15 loops 74.5 -> 52.5, S40-15 petals 70.5 -> 42.5, S48-17 petals 63.5 -> 26.5, S58-17 loops 67.5 -> 58.5, S59-17 petals 81.5 -> 46.5, S61-19 petals 94.5 -> 42.5, S69-19 kites 83.5 -> 35.5, s34-15 kites 76.5 -> 41.5 | S40-15 +0.005 / +0.014, S48-17 -0.026 / -0.020, S58-17 -0.016 / -0.003, S59-17 +0.023 / +0.033, S61-19 +0.040 / +0.045, S69-19 -0.012 / -0.004, s34-15 -0.015 / -0.013 |
+| star outline under a star | 2 (2) | S29-15 dark 6-point star 81.5-129.5; S15-15 8-point star 83.5-142.5 (an unknown disc before) | S15-15 +0.087 / +0.285 |
+| convex star valleys | 10 (7) | S18-15 x2, S18-15B x2, S3-15, S32-15, S47-15, S53-19 x2, S58-17 (S18-15 110.5 / 116.5 -> 91.7, S53-19 99.5 / 95.5 -> 79.6 / 79.0) | S18-15 +0.106 / +0.042, S3-15 +0.069 / +0.022, S18-15B +0.076 / +0.050 |
+| pleats -> pinked rings | 7 (3) | A10-15 (24 bows, 24 kites), A9-15B (22, 19), S53-19 (19, 18, 24) | A10-15 +0.124 / +0.006, S53-19 +0.145 / +0.066 |
+
+**Layer agreement in the decision (`pipeline.prefer_template`, `TEMPLATE_AGREE_GAIN` 0.10, `TEMPLATE_AGREE_SIL_LOSS` 0.02).** Besides the outline gain (silhouette +0.02), a library head is preferred when its head_fit agreement beats the rule-based head's by 0.10 and its silhouette is at most 0.02 worse; the color floor and the override rules apply as before. Measured offline on the 76 photos after b42f66a (rule-based head and the matcher's top 3 plus best-IoU templates each drawn alone, the decision replayed; LOO = own design left out):
+
+| agreement margin | LOO head IoU | full head IoU | LOO layer | full layer | color >= 0.9 LOO / full | library heads LOO / full | color losers |
+|---|---|---|---|---|---|---|---|
+| none | 0.8513 | 0.8588 | 0.2230 | 0.2425 | 47 / 49 | 16 / 20 | - |
+| 0.05 | 0.8513 | 0.8581 | 0.2253 | 0.2523 | 48 / 51 | 17 / 25 | none |
+| 0.08 | 0.8513 | 0.8584 | 0.2253 | 0.2508 | 48 / 51 | 17 / 23 | none |
+| **0.10 (kept)** | 0.8513 | 0.8587 | 0.2253 | 0.2484 | 48 / 51 | 17 / 22 | none |
+| 0.12-0.20 | 0.8513 | 0.8587 | 0.2230 | 0.2484 | 47 / 51 | 16 / 22 | none |
+
+0.10 switches S3-15 (LOO S18-15, known its own head; color 0.844 -> 0.946 / 1.000) and S32-15 (known, 0.858 -> 1.000); 0.08 and below also draw S6-15's own head (head IoU -0.018) and, at 0.05, S47-15 and S55-15. It does not reach the two IDs that prompted it. S53-19's rule-based head after the detector rules fits its photo better than its own template on both measures (rules 0.791 / 0.931, own 0.707 / 0.877; against the reference headS 0.855 vs 0.871, color 0.501 vs 0.588). Ruling: accepted on its rule-based head, the photo is the truth. s44-15's wrong rule-based head has the higher agreement too (0.774 / 0.950 vs own 0.692 / 0.903) and is not worse against its reference (headS 0.654 vs 0.648); its own file has 4 points.
+
+**Point-count warning (`pipeline.points_count_warnings`, `POINTS_COUNT_MIN` 3).** When the rule-based head is drawn, the closest library design (the first candidate) agrees in colors (partition >= 0.54, anchored to the tails), has 3 or more points, and no rule-based points layer has its count, the rule-based head's state gets "The head's point count differs from the closest library design - check the number of points against the photo." (a warning, so the result is flagged). On the 76 photos it fires with the full library on S10-19, S18-15, S53-19, S69-19 and S9-19 (all flagged already) and with the own design left out on S28-15 (an unflagged success whose head is wrong: a gain), S45-15, S53-19, S63-17, S80-22 (a false alarm: its neighbour S10-19's file has 4 points; accepted by ruling), S9-19 and s44-15 (flagged by it in the new-image case only; with the full library its own file's 4 points match).
+
+**Shape-first pick (tried, left out).** A gated, mappable template whose silhouette IoU beats the best-scoring template's by SHAPE_FIRST_IOU_GAIN was ranked first and drawn flagged below the color floor ("Library head shape chosen over its colors"). The brief's rule kept it only if known top-1 rises without a LOO head IoU loss:
+
+| SHAPE_FIRST_IOU_GAIN | known top-1 (without: 54) | LOO head IoU (0.8513) | full head IoU (0.8588) | color losers |
+|---|---|---|---|---|
+| 0.02 | 51 | 0.8513 | 0.8594 | LOO S36-15 1.000 -> 0.817, S51-19 0.905 -> 0.795; known S65-18 1.000 -> 0.746, S69-19 0.993 -> 0.944 |
+| 0.03 | 53 | 0.8513 | 0.8596 | known S65-18, S69-19 |
+| 0.04 | 53 | 0.8513 | 0.8597 | known S69-19 |
+| 0.05 | 54 | 0.8513 | 0.8596 | none |
+| 0.07 | 54 | 0.8513 | 0.8588 | none |
+
+Top-1 never rises; the code was removed. It would not have drawn S29-15's own star either: that template is shape-first from 0.03 (IoU 0.930 vs S10-19's 0.899), but its head fit (0.188 / 0.867) loses to the new rule-based head (0.539 / 0.885).
+
+**Before and after.**
+
+| photo | rule-based head before (head fit) | after | drawn before -> after (both columns) |
+|---|---|---|---|
+| S29-15 | 6 glitter loops 74.5-151.5, 12 thin pink tips 106-150, a dark unknown disc r 70.7, ring, center (0.515 / 0.674) | 6 loops 52.5-151.5, dark 6-point star 81.5-129.5 (flagged), 12 pink petals 106-150, ring, center (0.539 / 0.885) | S10-19 -> rule-based head |
+| A10-15 | disc, 24 bows, 24 kites, ring, center (0.733 / 0.940) | disc, pinked ring 71.5-129.5 (24 pleats) under a ring 98.5-122.5, ring, center (0.857 / 0.945) | rule-based head |
+| S53-19 | 19 and 18 petals, 24 kites, two 4-point "stars" drawn as a square and a turned square, center (0.645 / 0.865) | three pinked rings, two 4-point stars with valleys at 79 (an 8-point outline in two colors), center (0.791 / 0.931); point-count warning | rule-based head (flagged) |
+| s44-15 | pinked disc, two 4-petal layers, ring, center (0.774 / 0.950) | unchanged | rule-based head; flagged by the point-count warning in the new-image case only |
+
+Scoreboard (`tools/score.py`, 34 IDs): new image PASS 23/34, color 0.855 -> 0.852, shape 0.919, head 0.842 (the gate: not below 0.842); known design PASS 23/34, color 0.859 -> 0.856, shape 0.921 -> 0.920, head 0.847. Changed rows (agree / shape / headS, both columns alike): S29-15 0.321 / 0.935 / 0.851 -> 0.237 / 0.908 / 0.765, S53-19 0.513 / 0.763 / 0.814 -> 0.501 / 0.773 / 0.855, S69-19 shape 0.920 -> 0.933, headS 0.759 -> 0.801, s34-15 0.956 / 0.928 / 0.844 -> 0.951 / 0.926 / 0.838. S28-15 is now flagged (the point-count warning); S53-19 adds a reversed pair (star > ring). The agreement margin changes no scoreboard row (S3-15 and S32-15 are not among the 34).
+
+S29-15 against its reference: agree 0.321 -> 0.237, headS 0.851 -> 0.765 (the reference draws the loops shorter and the dark star pieces at the rim; the drawn head follows the photo). The H5 stacking rule (loops over stars, 89 % of the reference pairs) is kept, so S29-15's loops lie on its dark star where the photo has the stars on top: a known exception. The color grouping reads most of its pink star as the dark color, so only its tips are pink.
+
 ## Final state (Task 16)
 
 ### Stages, modules and tuning constants
@@ -570,9 +628,9 @@ Constants are module-level names; read their comments in the source before chang
 | prepare: decode, 1200 px, mask, axis, head circle | `rosette/vision/prepare.py` | `WORK_HEIGHT`, `CANVAS_SPAN`, `ALPHA_CUTOFF`, `MIN_DELTA_E`, `NOISE_FACTOR`, `MAX_BG_NOISE`, `OPEN_PX`, `CLOSE_PX`, `MIN_AREA_FRAC`, `MAX_AREA_FRAC`, `AXIS_SEARCH_FRAC`, `HEAD_PROFILE_FRAC`, `HEAD_RING_MARGIN`, H10: `TAILS_TRACK_FROM`, `TAILS_FIT_ROWS`, `TAILS_GAP_ROWS`, `TAILS_EDGE_TOL`, `TAILS_RUN_ROWS`, `FIT_CUT_MARGIN`, `FIT_GAP_CAP_DEG`, `FIT_TOL`, `FIT_COVER_GAP_DEG`, `FIT_TAKEOVER`, `FIT_MIN_COVERAGE` |
 | color groups, stripe split, motif absorption, mixed-texture warning | `rosette/vision/colors.py` | `L_WEIGHT`, `SMOOTH_UNITS`, `FLAT_PCT`, `GRAIN_WEIGHT`, `SAMPLE_N`, `MIN_CENTER_SEP`, `PRINT_MAX_FRAC`, `TEXTURE_WIN_UNITS`, `PATTERN_T`, `MIXED_PATTERN_SHARE`, `BADGE_IN_HEAD`, `BADGE_MAX_AREA`, `BADGE_EDGE`, `BADGE_UNSURE`, `BADGE_ENCLOSED`, `BADGE_SHAPE_MIN`, `SEED` |
 | part detection driver, leftovers as `unknown` | `rosette/vision/parts.py` | `LEFTOVER_OPEN_UNITS`, `TAIL_TOUCH_PX`, `HEAD_MARGIN`, `UNKNOWN_CONFIDENCE` |
-| head: rings, points, bows, center, blob rings | `rosette/vision/parts_head.py`, `parts_common.py` | `RING_EXTEND_COV`, `FULL_COV`, `MIN_BAND_UNITS`, `MIN_LAYER_COV`, `MAX_COUNT`, `BOW_ENDS`, `PETAL_FULLNESS`, `BLOB_UNCONFIRMED_CONF`, `MIN_INNER_RATIO`, `HEAD_ROUND`, `PINKED_DEPTH`, `RING_MAX_GAP`, `PLEATED_FULL_MIN`, `PLEATED_REACH_UNITS` |
+| head: rings, points, bows, center, blob rings | `rosette/vision/parts_head.py`, `parts_common.py` | `RING_EXTEND_COV`, `FULL_COV`, `MIN_BAND_UNITS`, `MIN_LAYER_COV`, `MAX_COUNT`, `BOW_ENDS`, `PETAL_FULLNESS`, `BLOB_UNCONFIRMED_CONF`, `MIN_INNER_RATIO`, `HEAD_ROUND`, `PINKED_DEPTH`, `RING_MAX_GAP`, `PLEATED_FULL_MIN`, `PLEATED_REACH_UNITS`, H11: `COVER_CUT_SHARE`, `COVER_PROBE_UNITS`, `COVER_MAX_UNITS`, `STAR_MIN_ORDER`, `STAR_INSIDE_TOL`, `STAR_CONVEX`, `STAR_HIDDEN_DEPTH`, `PLEAT_MIN_COUNT`, `PLEAT_FILL`, `ALT_RADIUS_UNITS`, `ALT_OFFSET` |
 | tail stripes, glitter read as two tones, fans (H6) | `rosette/vision/parts_tails.py` | `ROW_FRACS`, `COUNT_ROWS`, `DENSE_SPAN`, `GAP_UNITS`, `ROW_BAND_PX`, `TOP_INSET`, `GLITTER_*`, `FAN_*` |
-| head shape library and matcher (H7) | `rosette/vision/templates.py`, cache `rosette/data/head_templates.json`; decision in `rosette/pipeline.py` | `WEIGHTS`, `PROFILE_SCALE`, `LOBE_SCALE`, `LOBE_GATE`, `LOBE_BAND`, `LOBE_PROMINENCE`, `ROUND_GUARD_LOBES`, `WINDOW_V`, `GRID`, `EXTENT`, `TEMPLATE_MIN_GAIN`, `TEMPLATE_MIN_SCORE`, `TEMPLATE_MIN_PARTITION`, `TEMPLATE_OVERRIDE_GAIN`, `TEMPLATE_OVERRIDE_PARTITION`, `HEAD_LAYER_ROLES`, `TEMPLATE_CANDIDATES`, describe: `STRIP_ASPECT`, `TRIM_SOLIDITY`, `LOOP_END`, `STAR_DEPTH` |
+| head shape library and matcher (H7) | `rosette/vision/templates.py`, cache `rosette/data/head_templates.json`; decision in `rosette/pipeline.py` | `WEIGHTS`, `PROFILE_SCALE`, `LOBE_SCALE`, `LOBE_GATE`, `LOBE_BAND`, `LOBE_PROMINENCE`, `ROUND_GUARD_LOBES`, `WINDOW_V`, `GRID`, `EXTENT`, `TEMPLATE_MIN_GAIN`, `TEMPLATE_MIN_SCORE`, `TEMPLATE_MIN_PARTITION`, `TEMPLATE_OVERRIDE_GAIN`, `TEMPLATE_OVERRIDE_PARTITION`, `HEAD_LAYER_ROLES`, `TEMPLATE_CANDIDATES`, H11: `TEMPLATE_AGREE_GAIN`, `TEMPLATE_AGREE_SIL_LOSS`, `POINTS_COUNT_MIN`, describe: `STRIP_ASPECT`, `TRIM_SOLIDITY`, `LOOP_END`, `STAR_DEPTH` |
 | tidy: unknown specks, tail slivers (H6) | `rosette/tidy.py` | `SPECK_MAX_HEAD_SHARE` (and `SLIVER_SHARE` from assign) |
 | Color 1-4 assignment, confidence, warnings | `rosette/assign.py`, `rosette/roles.py`, rules in `rosette/data/assign_rules.json` (mined by `tools/mine_rules.py`) | `FLAG_BELOW`, `MAX_COLORS`, `PATTERN_MIN_RIBBON_SHARE`, `TAIL_POS_TOL`, `FLAGGED_CONF`, `PATTERN_MERGE_PENALTY`, `SLIVER_SHARE`, `RULE_LOGODDS` |
 | geometry, shapes, occlusion cuts | `rosette/geometry/`, `rosette/shapes.py`, `rosette/build.py`, `rosette/geometry/clip.py` | `QUAD_SEGS`, `SIMPLIFY`, `MIN_PIECE` |
@@ -588,9 +646,9 @@ Every generated file must satisfy section 3 of the [design spec](superpowers/spe
 
 `app/main.py` (FastAPI, started with `run.bat` or uvicorn on 127.0.0.1:8765) serves `app/static`. **Workbench** shows the photo, the detected model, the solid and pattern previews, edit controls and the flagged items on one screen. **Guided** walks through the same state one question at a time (`guided.js`); switching modes keeps the state. Edits go back through `render`, so the validator runs after every change.
 
-### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H10)
+### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H11)
 
-Re-recorded after H10 (lobe gate commit after ff51cd3): the columns are the new-image case (each photo's own design left out of the head library, the headline); the last column is the known design (full library) agree / success / headS. `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only).
+Re-recorded after H11 (1d51263): the columns are the new-image case (each photo's own design left out of the head library, the headline); the last column is the known design (full library) agree / success / headS. `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only).
 
 | ID | agree | uni | success | uni success | shape | headS | stack reversed | known design agree / success / headS |
 |---|---|---|---|---|---|---|---|---|
@@ -629,15 +687,15 @@ Re-recorded after H10 (lobe gate commit after ff51cd3): the columns are the new-
 | S80-22 | 0.989 | 1.000 | yes | yes | 0.934 | 0.878 | 0 | 0.989 / yes / 0.878 |
 | s34-15 | 0.956 | 0.951 | yes | yes | 0.928 | 0.844 | 1 (backing>star) | 0.956 / yes / 0.844 |
 
-Official (per-axis), tools/score.py summary: new image `success 23  flagged-not-success 10  silently-wrong 1  errors 0` / `PASS 23/34 (target >= 80%)` / `color agreement mean 0.855  shape: mean IoU 0.919  head 0.842  tail 0.955  shape_ok 27/34`; known design (reported only) `PASS 23/34`, color 0.859, shape 0.921, head 0.847, shape_ok 27/34; `stacking: 3 kind pairs reversed vs the designer in 3/34 IDs (reported only)` / `success under uniform-scale alignment 25/34` (reported only).
+Official (per-axis), tools/score.py summary: new image `success 23  flagged-not-success 10  silently-wrong 1  errors 0` / `PASS 23/34 (target >= 80%)` / `color agreement mean 0.852  shape: mean IoU 0.919  head 0.842  tail 0.955  shape_ok 27/34`; known design (reported only) `PASS 23/34`, color 0.856, shape 0.920, head 0.847, shape_ok 27/34; `stacking: 4 kind pairs reversed vs the designer in 4/34 IDs (reported only)` / `success under uniform-scale alignment 25/34` (reported only).
 
-Flagged although correct: 21 of the 23 successes; S28-15 and S43-15 are unflagged successes with visibly wrong heads (see 5b). S46-15 is silent again: its head fit (0.82 agreement, 0.94 outline) is not a gross failure; its miss is the scorer alignment effect described below.
+Flagged although correct: 22 of the 23 successes; S43-15 is an unflagged success with a visibly wrong head (see 5b); S28-15's wrong head is flagged since H11 (the point-count warning). S46-15 is silent again: its head fit (0.82 agreement, 0.94 outline) is not a gross failure; its miss is the scorer alignment effect described below.
 
 Over all 76 reference photos (scratch `compare_all.py`, match >= 0.9 and no issue): 36 -> 45 OK, mean color agreement 0.689 -> 0.832 (H2), then 0.832 -> 0.837 with OK still 45 (H3); mean whole shape IoU 0.902. Silently wrong (not OK, not flagged): A13-15 (designer differs from photo), S46-15 (scorer alignment), S48-17 (0.672, up from 0.382; the remaining miss is not re-diagnosed) and s44-15 (designer differs: much narrower outer tails). The every-head reminder is the UI checklist item, not a flag.
 
 ### Sample outputs
 
-`output/s35-19.svg` and `output/s46-15.svg` were regenerated for H2 (and regenerated again for H3: byte-identical, so unchanged) from `reference/photos/S35-19.png` and `reference/photos/S46-15.png` with `rosette.pipeline.analyze` + `render`, the same code path the UI uses, and checked with `rosette.validate.validate` (both return `[]`). Regenerated again for H5 (pointed tail tops, visible-edge line art; both validate to `[]`), for H6 (`s35-19.svg` changed: its two tail slivers are merged; `s46-15.svg` byte-identical; both validate to `[]`) and for H7 (`s35-19.svg` changed: its head is the S35-19 library template, match 0.68; `s46-15.svg` byte-identical; both validate to `[]`), for H7 fix round 2 (`s35-19.svg` back to the rule-based head) and for fix round 3 (`s35-19.svg` drawn with its own S35-19 library template again, partition 0.68 over the 0.54 floor; `s46-15.svg` byte-identical; both validate to `[]`); for fix round 4 both are byte-identical and validate to `[]`. For H10 (704b6d8) `s35-19.svg` was regenerated after the H9 pose fix 5cb11e6 (H10 and the rebuilt library leave it unchanged); `s46-15.svg` is byte-identical; both validate to `[]`. They are the tool's unedited output, not confirmed by a person.
+`output/s35-19.svg` and `output/s46-15.svg` were regenerated for H2 (and regenerated again for H3: byte-identical, so unchanged) from `reference/photos/S35-19.png` and `reference/photos/S46-15.png` with `rosette.pipeline.analyze` + `render`, the same code path the UI uses, and checked with `rosette.validate.validate` (both return `[]`). Regenerated again for H5 (pointed tail tops, visible-edge line art; both validate to `[]`), for H6 (`s35-19.svg` changed: its two tail slivers are merged; `s46-15.svg` byte-identical; both validate to `[]`) and for H7 (`s35-19.svg` changed: its head is the S35-19 library template, match 0.68; `s46-15.svg` byte-identical; both validate to `[]`), for H7 fix round 2 (`s35-19.svg` back to the rule-based head) and for fix round 3 (`s35-19.svg` drawn with its own S35-19 library template again, partition 0.68 over the 0.54 floor; `s46-15.svg` byte-identical; both validate to `[]`); for fix round 4 both are byte-identical and validate to `[]`. For H10 (704b6d8) `s35-19.svg` was regenerated after the H9 pose fix 5cb11e6 (H10 and the rebuilt library leave it unchanged); `s46-15.svg` is byte-identical; both validate to `[]`. For H11 both are byte-identical and validate to `[]`. They are the tool's unedited output, not confirmed by a person.
 
 | Output | Flagged | Flagged items | Warnings |
 |---|---|---|---|
@@ -650,13 +708,14 @@ Before uploading either file to the shop, the user should open each photo in the
 
 - **Library heads (H7, after fix round 4) pick the photo's own design for 48 of 76 photos (top-3 58, offered on the head card).** S29-15 draws S57-17's head (loop blocks around a pinked ring, flagged), not its own star, which is not among its 3 candidates; S51-19 loses 0.059 color through the override (flagged; accepted). See the H7 section.
 
+- **s44-15's two 6-point stars are read as 4-petal layers (H11).** Its head fit and its reference agree with the wrong head as well as with its own template; it is flagged by the point-count warning only when its own design is not in the library.
 - **The success bar is not met: 23/34 succeed against 28 needed (80 %).** `pytest -m slow` fails accordingly. Tuning stopped; it is not finished.
 - **S46-15 counts as silently wrong under per-axis scoring** (0.741, not flagged). It is a scorer alignment effect (the designer drew a larger head and narrower tails; uniform scale gives 0.926); its head fit (0.82) is not a gross failure.
 - **Head shape errors are mostly not flagged.** The head flag fires on gross failures only (23 of 76 reference heads). S42-15, S43-15 and S28-15 have wrong head shapes that pixel overlap cannot tell from right heads; the fixed UI checklist item "Compare the head with the photo" is the safeguard until shape features land.
 - The holdout is no longer clean (see Task 12 phase B), so the numbers on the tuned IDs overstate how the tool will do on new photos.
 - Most successes are still flagged (21 of 23: placeholder `unknown` discs, or a part read below 0.6, mostly points rings). The flag is warranted but means most results need a human look.
 - Remaining failure clusters:
-  - Head structure not modeled: S17-15 (three layered stars, no head disc), S29-15 (glitter loops over a star, badge), S68-19 (stacked chevron points), A16-17 (irregular 8-point star in the head's own black), S13-15 (loops drawn as a star because the navy ruffle merged into the blue group).
+  - Head structure not modeled: S17-15 (three layered stars, no head disc), S29-15 (since H11 its loops, dark star and pink tips are drawn, but the loops lie over the stars by the H5 stacking rule and most of the pink star reads as the dark color), S68-19 (stacked chevron points), A16-17 (irregular 8-point star in the head's own black), S13-15 (loops drawn as a star because the navy ruffle merged into the blue group).
   - Mask: S53-19 (pure white stripes on a pure white background are cut out; one tail reads as three).
   - Color grouping: S2-15B (snowflake print merged with white satin). A13-15B's glitter is its own group since H6; its colors now differ from the reference's other scheme (royal Color 1 by the mined rules).
   - Designer differs from the photo: S8-15 (centre stripe the same red as the outer), S26-15 (glitter stripe widths), S46-15 (proportions).
