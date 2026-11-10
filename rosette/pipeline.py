@@ -133,6 +133,15 @@ FREE_COLORS_WARNING = "Library head colors are not anchored to the tails - check
 # loss over 0.01 (0.08 and below also draw S6-15's own head, -0.018). It switches S3-15
 # (LOO and known) and S32-15 (known): color 0.844 -> 0.946 / 1.000 and 0.858 -> 1.000.
 TEMPLATE_AGREE_GAIN, TEMPLATE_AGREE_SIL_LOSS = 0.10, 0.02
+# H11 ruling: a rule-based head drawn while the closest library design agrees in colors but
+# has another points count (POINTS_COUNT_MIN or more points, none of the rule-based points
+# layers has that count) is flagged with this warning. On the 76 photos it fires on S10-19,
+# S18-15, S53-19, S69-19 and S9-19 with the full library (all flagged already) and, leaving
+# each photo's own design out, on S28-15, S45-15, S53-19, S63-17, S80-22 (a false alarm:
+# its library neighbour's file has 4 points), S9-19 and s44-15.
+POINTS_COUNT_MIN = 3
+POINTS_COUNT_WARNING = ("The head's point count differs from the closest library design - "
+                        "check the number of points against the photo.")
 TEMPLATE_COLORS_WARNING = ("The library head {tid} fits the head outline better, but its colors do not agree "
                            "with the photo under the tail colors - the rule-based head is drawn; compare the head "
                            "with the photo and pick a library head on the head card if one is closer.")
@@ -495,6 +504,7 @@ def choose_head(rules: RosetteModel, lib: RosetteModel | None,
         conf.update(c)
     colors = ([TEMPLATE_COLORS_WARNING.format(tid=first.params["template_id"])]
               if path in ("colors", "override") else [])
+    colors += points_count_warnings(rules, first)
     checked, warns = _with_head_state(use_head(lib, RULES_HEAD), rules_fit, False, colors)
     conf.update({x.id: x.confidence for x in checked.parts if x.role != "tail_stripe"})
     states[RULES_HEAD] = {"warnings": warns, "fit": _fit_json(rules_fit)}
@@ -510,6 +520,19 @@ def choose_head(rules: RosetteModel, lib: RosetteModel | None,
     out.warnings = base + states[choice]["warnings"]
 
     return out, (fits[choice] if choice != RULES_HEAD else rules_fit)
+
+
+def points_count_warnings(rules: RosetteModel, first: Part) -> list[str]:
+    """H11: [POINTS_COUNT_WARNING] for the rule-based head when the closest library design
+    (the first candidate) has colors that agree with the photo (colors_agree, anchored to
+    the tails), POINTS_COUNT_MIN or more points, and no rule-based points layer has its
+    count; else []. Part of the rule-based head's state (shown while it is drawn)."""
+    n = int(first.params.get("points", 0))
+    if (n < POINTS_COUNT_MIN or first.params.get("free_colors")
+            or not colors_agree(float(first.params.get("partition", 0.0)))):
+        return []
+    counts = {int(q.params["count"]) for q in rules.parts if q.role == "points"}
+    return [POINTS_COUNT_WARNING] if counts and n not in counts else []
 
 
 def _library_head_state(rules: RosetteModel, m: RosetteModel, q: Part, fit: HeadFit | None,

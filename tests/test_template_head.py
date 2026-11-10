@@ -635,3 +635,41 @@ def test_library_head_with_much_better_layer_agreement_is_preferred():
     assert not prefer_template(rules, HeadFit(0.99, 0.95 - TEMPLATE_AGREE_SIL_LOSS - 0.01))
     assert library_head_path(rules, HeadFit(0.95, 0.94), 0.73) == "floor"
     assert library_head_path(rules, HeadFit(0.95, 0.94), 0.40) == "colors"
+
+
+def _detected_with_points(count):
+    m = _detected()
+    m.parts.append(Part("points-1", "points", {"cx": 300, "cy": 200, "kind": "petal", "count": count, "r_inner": 40,
+                                               "r_outer": 100, "rotation_deg": 0, "width_ratio": 0.6}, 2, 22, 0.8))
+    return m
+
+
+def _lib_with_points(rules, partition, points):
+    lib = _lib_model(partition, rules=rules)
+    for q in lib.parts + lib.alternatives:
+        if q.role == "template" and q.params["rank"] == 1:
+            q.params["points"] = points
+    return lib
+
+
+def test_rules_head_with_another_point_count_than_the_closest_library_design_is_flagged(three):
+    from rosette.pipeline import POINTS_COUNT_WARNING, RULES_HEAD, choose_head, drawn_head, use_head
+    assert "–" not in POINTS_COUNT_WARNING and "—" not in POINTS_COUNT_WARNING
+    fits = _fits(rules=(0.9, 0.95), T1_15=(0.8, 0.9), T7_15=(0.8, 0.9), T8_15=(0.8, 0.9))
+    rules = _detected_with_points(4)
+    m, _ = choose_head(rules, _lib_with_points(rules, 0.9, 6), fits, lambda a, b: 0.85)
+    assert drawn_head(m) == RULES_HEAD and POINTS_COUNT_WARNING in m.warnings
+    assert is_flagged(m, [])
+    # the warning belongs to the rule-based head: a library head drawn instead drops it
+    assert POINTS_COUNT_WARNING not in use_head(m, "T1-15").warnings
+
+
+def test_no_point_count_warning_when_counts_match_colors_disagree_or_no_points(three):
+    from rosette.pipeline import POINTS_COUNT_WARNING, choose_head
+    fits = _fits(rules=(0.9, 0.95), T1_15=(0.8, 0.9), T7_15=(0.8, 0.9), T8_15=(0.8, 0.9))
+    for rules, partition, points in ((_detected_with_points(6), 0.9, 6),   # same count
+                                     (_detected_with_points(4), 0.4, 6),   # colors do not agree
+                                     (_detected_with_points(4), 0.9, 2),   # under 3 points
+                                     (_detected(), 0.9, 6)):               # no rule-based points layer
+        m, _ = choose_head(rules, _lib_with_points(rules, partition, points), fits, lambda a, b: 0.85)
+        assert POINTS_COUNT_WARNING not in m.warnings
