@@ -39,6 +39,7 @@ from scipy import ndimage
 from shapely import contains_xy, unary_union
 
 from rosette.geometry import disc, pinked_ring, points_ring, ring
+from rosette.geometry.common import TOOTH
 from rosette.geometry.clip import to_geom
 from rosette.model import Part
 from rosette.vision.parts_common import Frame, blob_rings, majority, polar_sample, r3
@@ -204,6 +205,10 @@ NEST_AXIS_DEG, NEST_UNITS = 6.0, 3.0
 # color). A layer of that color drawing only some of them (a proper divisor of n, its axes
 # on tips, not a trim) is the base read in part (the other arms carry another color:
 # S53-19's glitter triangles) and gives way to the base.
+# H13 (Task 2b): rings of different colors overlapping by more than RING_OVERLAP_UNITS
+# (beyond a pleat's teeth) are re-measured from the band where their color holds at least
+# RING_MAJORITY of the circle (_rings_by_dominance).
+RING_OVERLAP_UNITS, RING_MAJORITY = 8.0, 0.5
 BASE_TIP_UNITS, BASE_TIP_SHARE = 6.0, 0.75
 BASE_FLANK_UNITS, BASE_FLANK_TIP, BASE_REACH = 2.0, 0.95, 0.1
 BASE_Z = 15
@@ -587,19 +592,17 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
         parts.append(Part("center", "center", {"cx": r3(ccx), "cy": r3(ccy), "r": r3(unit(center_band.i1))},
                           center_band.label, 50, r3(center_band.cov)))
     # by outer edge (H11: a pleated annulus can enclose a narrower ring, which lies on it)
-    rings = [(bd.i1, bd) for bd in bands
-             if bd is not head_band and bd is not center_band and id(bd) not in eaten]
-    rings += [(ring[1], tuple(ring) + (0,) * (5 - len(ring))) for ring in pleated]
-    rings.sort(key=lambda t: t[0])
-    for depth, (_, bd) in enumerate(reversed(rings)):  # outermost first, inner rings on top
-        pinked = 0
-        if isinstance(bd, tuple):  # a pleated layer, already measured
-            i0, i1, label, conf, pinked = bd
-        else:
-            i0, label, conf = bd.i0, bd.label, bd.cov
-            i1 = _ring_outer(bd, bands, dom, cov, radii, fr, [
-                (float(q.params["r_inner"]), q.color_group) for q in parts
-                if q.role == "points" and id(q) not in trims])
+    starts = [(float(q.params["r_inner"]), q.color_group) for q in parts if q.role == "points" and id(q) not in trims]
+    found = []  # [sort key, i0, i1, label, confidence, pleats]
+    for bd in bands:
+        if bd is not head_band and bd is not center_band and id(bd) not in eaten:
+            found.append([bd.i1, bd.i0, _ring_outer(bd, bands, dom, cov, radii, fr, starts), bd.label, bd.cov, 0])
+    for ring in pleated:  # a pleated layer, already measured
+        i0, i1, label, conf, pinked = tuple(ring) + (0,) * (5 - len(ring))
+        found.append([i1, i0, i1, label, conf, pinked])
+    _rings_by_dominance(found, dom, domc, fr, radii, center_band)
+    found.sort(key=lambda t: t[0])
+    for depth, (_, i0, i1, label, conf, pinked) in enumerate(reversed(found)):  # outermost first, inner on top
         rp = {"cx": r3(ccx), "cy": r3(ccy), "r_outer": r3(unit(i1)), "r_inner": r3(unit(i0))}
         if pinked:  # a pleated edge (H11): pinked, with its pleat count (re-centering)
             rp["pinked"], rp["pleats"] = 1, int(pinked)
@@ -608,6 +611,58 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
     if head is None:
         _base_star(parts, p, labels, fr, win, trims)
     return parts
+
+
+def _rings_by_dominance(found: list[list], dom: np.ndarray, domc: np.ndarray, fr: Frame,
+                        radii: np.ndarray, center_band) -> None:
+    """H13: rings of different colors overlapping by more than RING_OVERLAP_UNITS (a pleat's
+    depth: the pinked teeth) take their radii from the band where their color holds the
+    majority of the circle (RING_MAJORITY), the run overlapping them most (outside the
+    center's), extended over the rows no color holds to halfway to the next run. Pleated rings
+    whose layers' extents all reach the same pleated edge (S53-19: blue, glitter and white
+    rings all ending at 84.5) become the three concentric bands the photo shows. In place:
+    [sort key, i0, i1, label, ...] rows; a moved ring's sort key becomes its new outer edge."""
+    def over(a, b):
+        return fr.d(radii[min(a[2], b[2]) - 1] - radii[max(a[1], b[1])]) if min(a[2], b[2]) > max(a[1], b[1]) else 0.0
+    moved = {k for k, a in enumerate(found) for b in found
+             if a is not b and a[3] != b[3] and over(a, b) > RING_OVERLAP_UNITS}
+    if not moved:
+        return
+    n = len(dom)
+    held = (domc >= RING_MAJORITY)
+    lab = np.where(held, dom, -1)
+    if center_band is not None:
+        lab[:center_band.i1] = -2  # the center's own rows
+    runs = []  # (i0, i1, label)
+    i = 0
+    while i < n:
+        j = i
+        while j < n and lab[j] == lab[i]:
+            j += 1
+        if lab[i] >= 0:
+            runs.append((i, j, int(lab[i])))
+        i = j
+    min_len = max(1, int(round(MIN_BAND_UNITS / RADIAL_STEP_UNITS)))
+    for k in sorted(moved):
+        row = found[k]
+        mine = [r for r in runs if r[2] == row[3] and r[1] - r[0] >= min_len]
+        if not mine:
+            continue
+        a0, a1, _ = max(mine, key=lambda r: (min(r[1], row[2]) - max(r[0], row[1]),
+                                            -abs((r[0] + r[1]) - (row[1] + row[2]))))
+        lo = a0  # over the unheld rows, halfway to the next run (or the center)
+        while lo > 0 and lab[lo - 1] == -1:
+            lo -= 1
+        hi = a1
+        while hi < n and lab[hi] == -1:
+            hi += 1
+        lo = a0 - (a0 - lo) // 2 if lo > 0 and lab[lo - 1] != -1 else lo
+        hi = a1 + (hi - a1) // 2 if hi < n else a1
+        row[1], row[2], row[0] = lo, hi, hi
+    teeth = max(1, int(np.ceil(TOOTH / RADIAL_STEP_UNITS)))
+    for k in moved:  # a ring reaches under the pinked teeth of the ring inside it (drawn on top)
+        if any(r is not found[k] and r[5] and r[2] == found[k][1] for r in found):
+            found[k][1] = max(0, found[k][1] - teeth)
 
 
 def _head_outline(p: Prepared, fr: Frame) -> np.ndarray:

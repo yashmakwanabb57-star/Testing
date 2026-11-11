@@ -146,3 +146,43 @@ def test_tips_drawn_by_trims_or_by_another_colors_layer_get_no_base():
     assert not _call_base([_layer(0, 8, 1.0, 140.0, kind="bow")])
     # another color's layer off the tip axes does not draw them
     assert len(_call_base([_layer(0, 8, 22.5, 140.0, kind="bow")])) == 1
+
+
+DEPTH = 0.035
+
+
+def pleated_bands():
+    """S53-19's rings: a white center (2) to 0.25 R, then blue (0), glitter (1) and white (2)
+    pleated bands whose edges are zigzags (the pleats: 24 teeth of DEPTH), on a head disc (4)
+    to 0.95 R; tails (3)."""
+    yy, xx, dx, dy, r, th = _grid()
+    labels = np.full(r.shape, -1, np.int32)
+    labels[(yy > CY + 0.5 * R) & (yy < 1150) & (np.abs(xx - CX) < 110)] = 3
+
+    def edge(r0, n, rot=0.0):
+        return r0 + DEPTH * R * np.abs(((np.degrees(th) - rot) * n / 360.0) % 1.0 - 0.5) * 2
+
+    labels[r <= 0.95 * R] = 4
+    labels[r <= edge(0.66 * R, 24)] = 2
+    labels[r <= edge(0.48 * R, 24, 7)] = 1
+    labels[r <= edge(0.32 * R, 24)] = 0
+    labels[r <= edge(0.22 * R, 24, 4)] = 2
+    return labels
+
+
+def test_nested_pleated_bands_are_concentric_rings_that_do_not_overlap():
+    rings = sorted((q for q in _head(pleated_bands()) if q.role == "ring"), key=lambda q: q.params["r_outer"])
+    assert [q.color_group for q in rings] == [0, 1, 2]
+    for a, b in zip(rings, rings[1:]):  # only a pinked edge's teeth may lie under the next ring
+        assert b.params["r_inner"] >= a.params["r_outer"] - 7.0
+        assert b.z < a.z  # the inner ring on top
+    unit = R / SCALE
+    for q, (lo, hi) in zip(rings, [(0.22, 0.36), (0.32, 0.52), (0.48, 0.70)]):
+        assert lo * unit - 8 <= q.params["r_inner"] and q.params["r_outer"] <= hi * unit + 4, q.params
+
+
+def test_ring_overlap_resolution_is_what_separates_the_bands(monkeypatch):
+    monkeypatch.setattr(H, "_rings_by_dominance", lambda *a, **k: None)
+    rings = sorted((q for q in _head(pleated_bands()) if q.role == "ring"), key=lambda q: q.params["r_outer"])
+    white = rings[-1]  # without it the outer white ring runs in to the center (S53-19)
+    assert white.color_group == 2 and white.params["r_inner"] < 0.25 * R / SCALE
