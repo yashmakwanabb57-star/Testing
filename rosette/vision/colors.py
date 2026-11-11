@@ -67,6 +67,16 @@ SEED = 0
 # blob and is absorbed into the group surrounding it.
 MOTIF_MAX_UNITS2 = 900.0
 # Star tips forming an even ring around the head center are kept (parts_common.blob_rings).
+# H13: so are blobs on the head's outline: a blob above the tails whose border touches the
+# background on >= RIM_TOUCH of its pixels and which is at least RIM_THICK_UNITS thick
+# (its deepest pixel that far from its border) is a piece of ribbon cut off by the layers
+# over it (S53-19: the plain arms of the blue base star between the white ring and the
+# rim, 824 and 891 units^2, were absorbed into the white ring), not print or a sparkle,
+# which lie inside their ribbon. Thinner rim blobs are edge blends and shading. Over the
+# 76 photos 46 rim blobs on 13 photos pass, every one a ribbon piece on the photo (rim
+# trims, edgings and tips: S17-15, S31-15, S38-15, S58-17, S69-19, ...) or a shaded edge
+# (S56-17B, A2-15).
+RIM_TOUCH, RIM_THICK_UNITS = 0.3, 3.0
 # Glitter split: a cluster is split in two when at least SPLIT_MIN_FRAC of its pixels
 # have grain below SATIN_GRAIN (satin) and as many above GLITTER_GRAIN (sparkle).
 # The grain feature alone leaves same-hue satin + glitter in one cluster on two
@@ -258,6 +268,30 @@ def _ring_blobs(labels: np.ndarray, mask: np.ndarray, head: tuple[float, float, 
     return keep
 
 
+def _rim_blobs(labels: np.ndarray, mask: np.ndarray, tails_top: float, scale: float,
+               max_area: float) -> np.ndarray:
+    """Pixels of same-label blobs under max_area on the head's outline (RIM_*): ribbon
+    pieces cut off by the layers over them, not motifs."""
+    keep = np.zeros(labels.shape, bool)
+    bg = cv2.dilate((~mask).astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    thick = RIM_THICK_UNITS * scale
+    for j in np.unique(labels[mask]):
+        n, cc, stats, cen = cv2.connectedComponentsWithStats((labels == j).astype(np.uint8), connectivity=8)
+        for i in range(1, n):
+            if stats[i, cv2.CC_STAT_AREA] >= max_area or cen[i, 1] >= tails_top:
+                continue
+            x, y, w, h = stats[i, :4]
+            y0, x0 = max(0, y - 1), max(0, x - 1)
+            comp = cc[y0:y + h + 1, x0:x + w + 1] == i
+            border = comp & ~ndimage.binary_erosion(comp)
+            if (border & bg[y0:y + h + 1, x0:x + w + 1]).sum() < RIM_TOUCH * border.sum():
+                continue
+            if ndimage.distance_transform_edt(np.pad(comp, 1)).max() < thick:
+                continue
+            keep[y0:y + h + 1, x0:x + w + 1] |= comp
+    return keep
+
+
 def _absorb(labels: np.ndarray, mask: np.ndarray, max_area: float,
             keep: np.ndarray | None = None) -> np.ndarray:
     """Relabel small same-label blobs with the label most of their pixels are nearest to
@@ -439,8 +473,9 @@ def pixel_groups(p: Prepared, max_groups: int = 6,
     labels = np.full(mask.shape, -1, np.int32)
     labels[mask] = _nearest_chunked(feat, centers)
     _split_glitter(labels, mask, feat_img[..., 3] / GRAIN_WEIGHT, max_groups)
-    absorbed = _absorb(labels, mask, MOTIF_MAX_UNITS2 * p.scale * p.scale,
-                       keep=_ring_blobs(labels, mask, p.head, p.scale))
+    motif = MOTIF_MAX_UNITS2 * p.scale * p.scale
+    absorbed = _absorb(labels, mask, motif, keep=_ring_blobs(labels, mask, p.head, p.scale)
+                       | _rim_blobs(labels, mask, p.tails_top_y, p.scale, motif))
     printed = _absorb_prints(labels, mask, p.tails_top_y, PRINT_MAX_FRAC * mask.sum(),
                              max(1, int(round(PRINT_RING_UNITS * p.scale))))
     absorbed |= printed

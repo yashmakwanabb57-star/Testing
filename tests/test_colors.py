@@ -440,3 +440,46 @@ def test_solid_center_disc_with_print_holes_survives():
     gold = _group_near(groups, GOLD)
     assert len(gold) == 1 and merged == []
     assert [(g, e >= BADGE_ENCLOSED) for g, _, e in _badge_prints(p, labels, groups)] == [(gold[0].id, True)]
+
+
+def _rim_rosette(piece_at: str) -> Prepared:
+    """White head disc over a blue tail; a small blue piece (under a motif blob's size)
+    sits at the head's rim (`piece_at` 'rim'), inside the disc ('inside') or as a thin
+    sliver along the rim ('sliver')."""
+    h, w = 800, 600
+    rgb = np.full((h, w, 3), 255, np.uint8)
+    yy, xx = np.mgrid[:h, :w]
+    head = (xx - 300) ** 2 + (yy - 200) ** 2 <= 150 ** 2
+    tail = (yy >= 330) & (yy < 780) & (np.abs(xx - 300) < 80)
+    mask = head | tail
+    rgb[mask] = (232, 228, 225)
+    rgb[tail] = (30, 40, 110)
+    r = np.hypot(xx - 300, yy - 200)
+    th = np.degrees(np.arctan2(yy - 200, xx - 300))
+    if piece_at == "rim":  # an arm tip: 20 units deep, 30 wide, at the top of the head
+        piece = head & (r >= 130) & (np.abs(th + 90) < 6)
+    elif piece_at == "sliver":
+        piece = head & (r >= 146) & (np.abs(th + 90) < 25)
+    else:
+        piece = (np.abs(xx - 300) < 12) & (np.abs(yy - 150) < 10)
+    rgb[piece] = (30, 40, 110)
+    return Prepared(rgb=rgb, mask=mask, axis_x=300.0, head=(300.0, 200.0, 150.0),
+                    tails_top_y=330.0, bottom_y=779.0, scale=1.0), piece
+
+
+def test_a_small_ribbon_piece_at_the_head_rim_is_not_absorbed_as_a_motif():
+    # S53-19: the plain arms of the blue base star, cut off from the rest of the blue by
+    # the white ring and smaller than a motif blob, were absorbed into the white ring.
+    p, piece = _rim_rosette("rim")
+    assert 300 < piece.sum() < 900  # smaller than a motif blob (MOTIF_MAX_UNITS2)
+    labels, groups = pixel_groups(p)
+    tail = _label_at(labels, 300, 600)
+    assert (labels[piece] == tail).mean() > 0.9
+
+
+def test_a_small_piece_inside_the_head_or_a_rim_sliver_is_still_a_motif():
+    for where in ("inside", "sliver"):
+        p, piece = _rim_rosette(where)
+        labels, groups = pixel_groups(p)
+        tail = _label_at(labels, 300, 600)
+        assert (labels[piece] == tail).mean() < 0.1, where
