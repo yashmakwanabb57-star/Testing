@@ -189,6 +189,24 @@ STACK_SHARE, STACK_MIN_UNITS2 = 0.65, 200.0
 # such pairs; the photo decides 6, agreeing with the rule on 5 (S47-15, S58-17, S59-17,
 # S61-19, S69-19; A15-17 disagrees and the photo wins); the rule decides S29-15.
 NEST_AXIS_DEG, NEST_UNITS = 6.0, 3.0
+# H13: a head without a round outline (no head disc, HEAD_ROUND) whose silhouette above the
+# tails has an n-fold lobed outline (n >= STAR_MIN_ORDER by the outline's turned
+# self-correlation, SYM_T) stands on a star when the label just inside its tips (the
+# BASE_TIP_UNITS under each visible tip) is one color group on >= BASE_TIP_SHARE of them:
+# the base, a star of that color drawn below every other head part (BASE_Z; the head disc
+# has z 10, points layers 20-29). Its tips are the outline's tips; its valleys are those of
+# the straight-sided star that fits the outline's flanks outside the covering layers best
+# (the outline lying more than BASE_FLANK_UNITS outside the largest ring or center and
+# inside BASE_FLANK_TIP of the tips), confidence the outline's symmetry score (at most the
+# tip share). No base when a points layer reaching within BASE_REACH of the tips already
+# draws them: one of that color (a trim too: S80-22's backing), or one of another color on
+# every tip axis (its count a multiple of n: S29-15's loops, whose edge strips hold the tip
+# color). A layer of that color drawing only some of them (a proper divisor of n, its axes
+# on tips, not a trim) is the base read in part (the other arms carry another color:
+# S53-19's glitter triangles) and gives way to the base.
+BASE_TIP_UNITS, BASE_TIP_SHARE = 6.0, 0.75
+BASE_FLANK_UNITS, BASE_FLANK_TIP, BASE_REACH = 2.0, 0.95, 0.1
+BASE_Z = 15
 # Center search: +- units along the axis, over radii RECENTER_FROM..RECENTER_TO head
 # radii sampled every RECENTER_RADIAL_STEP units.
 RECENTER_UNITS = 12.0
@@ -587,7 +605,106 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             rp["pinked"], rp["pleats"] = 1, int(pinked)
         parts.append(Part(f"ring-{depth}", "ring", rp, label, min(49, 30 + depth), r3(conf)))
     _finish_points(parts, labels, p, fr, pol, radii, win, head["label"] if head else -2, trims)
+    if head is None:
+        _base_star(parts, p, labels, fr, win, trims)
     return parts
+
+
+def _head_outline(p: Prepared, fr: Frame) -> np.ndarray:
+    """Outline radius (px) per angle (RING_THETA angles, theta from +x clockwise on screen)
+    of the head silhouette: the mask above the tails, followed out from RIM_START head
+    radii to the first radius off it; NaN where the mask is off already at RIM_START or
+    still on at RIM_MAX."""
+    cx, cy, r = p.head
+    step = max(0.5, fr.scale * RADIAL_STEP_UNITS / 2)
+    radii = np.arange(RIM_START * r, RIM_MAX * r, step)
+    sil = p.mask.copy()
+    sil[int(np.ceil(p.tails_top_y)):] = False
+    pol = polar_sample(sil.astype(np.int8), cx, cy, radii, RING_THETA, fill=0) > 0
+    first_off = np.where(~pol, np.arange(len(radii))[:, None], len(radii)).min(axis=0)
+    out = radii[np.clip(first_off - 1, 0, len(radii) - 1)].astype(np.float64)
+    out[(first_off == 0) | (first_off == len(radii))] = np.nan
+    return out
+
+
+def _star_side(phi: np.ndarray, r_tip: float, r_valley: float, n: int) -> np.ndarray:
+    """Radius at angle phi (radians from a tip axis, 0..pi/n) of the straight side of an
+    n-point star with tips at r_tip and valleys at r_valley."""
+    a = np.pi / n
+    return r_tip * r_valley * np.sin(a) / (r_valley * np.sin(a - phi) + r_tip * np.sin(phi))
+
+
+def _base_star(parts: list[Part], p: Prepared, labels: np.ndarray, fr: Frame, win: np.ndarray,
+               trims: set[int]) -> None:
+    """H13: the star the head stands on (BASE_*), appended to `parts` as part 'base'."""
+    cx, cy, _ = p.head
+    out = _head_outline(p, fr)
+    valid = win & np.isfinite(out)
+    if valid.sum() < 16:
+        return
+    x = np.where(valid, out, 0.0)
+    n, score, rot = _outline_symmetry(x, valid)
+    if n < STAR_MIN_ORDER:
+        return
+    t = len(out)
+    deg = np.degrees(np.linspace(0, 2 * np.pi, t, endpoint=False))
+    half = max(1, int(round(t / n / 4)))  # a tip is the outline's maximum within a quarter spacing
+    tips, groups = [], []
+    for k in range(n):
+        c = int(round((rot + 360.0 * k / n) / 360.0 * t)) % t
+        cols = [(c + d) % t for d in range(-half, half + 1)]
+        if not win[c] or not all(valid[j] for j in cols):
+            continue
+        j = max(cols, key=lambda i: out[i])
+        tip = float(out[j])
+        rr = tip - fr.scale * np.arange(1.0, BASE_TIP_UNITS + 0.5, 1.0)
+        a = np.radians(deg[j])
+        xs = np.rint(cx + rr * np.cos(a)).astype(int)
+        ys = np.rint(cy + rr * np.sin(a)).astype(int)
+        ok = (xs >= 0) & (xs < labels.shape[1]) & (ys >= 0) & (ys < labels.shape[0])
+        g, _ = majority(labels[ys[ok], xs[ok]])
+        tips.append(tip)
+        groups.append(g)
+    if len(tips) < STAR_MIN_ORDER:
+        return
+    vals, counts = np.unique(np.array(groups), return_counts=True)
+    g, share = int(vals[np.argmax(counts)]), float(counts.max() / len(groups))
+    if g < 0 or share < BASE_TIP_SHARE - 1e-9:
+        return
+    r_tip = fr.d(float(np.median(tips)))
+    cover = max([float(q.params["r" if q.role == "center" else "r_outer"])
+                 for q in parts if q.role in ("ring", "center")], default=0.0)
+    if r_tip - cover < MIN_ZONE_UNITS:
+        return
+    partial = []
+    for k, q in enumerate(parts):
+        if q.role != "points" or float(q.params["r_outer"]) < (1 - BASE_REACH) * r_tip:
+            continue
+        m = int(q.params["count"])
+        d = (float(q.params["rotation_deg"]) - rot) % (360.0 / n)
+        on_tips = min(d, 360.0 / n - d) <= NEST_AXIS_DEG
+        if q.color_group == g and id(q) not in trims and m < n and n % m == 0 and on_tips:
+            partial.append(k)
+        elif q.color_group == g or (m % n == 0 and on_tips):
+            return  # a layer (or a trim) of this color, or another color's on every tip, draws them
+    # the valleys: the straight-sided star fitting the outline's flanks outside the cover
+    phi = (np.radians(deg) - np.radians(rot)) % (2 * np.pi / n)
+    phi = np.minimum(phi, 2 * np.pi / n - phi)
+    xu = np.array([fr.d(v) for v in np.where(valid, out, 0.0)])
+    flank = valid & (xu > cover + BASE_FLANK_UNITS) & (xu < BASE_FLANK_TIP * r_tip)
+    limit = STAR_HIDDEN_DEPTH * r_tip * np.cos(np.pi / n)  # notched, never a polygon
+    if flank.sum() < 8 or limit <= 1.0:
+        return
+    cands = np.arange(1.0, limit, 0.5)
+    errs = [float(np.median(np.abs(xu[flank] - _star_side(phi[flank], r_tip, v, n)))) for v in cands]
+    r_in = float(cands[int(np.argmin(errs))])
+    for k in sorted(partial, reverse=True):
+        del parts[k]
+    chord = 2 * r_in * np.sin(np.pi / n)  # the widest lobe width, at the valleys
+    parts.append(Part("base", "points", {
+        "cx": r3(fr.x(cx)), "cy": r3(fr.y(cy)), "kind": "star", "count": int(n), "r_inner": r3(r_in),
+        "r_outer": r3(r_tip), "rotation_deg": r3(rot),
+        "width_ratio": r3(chord / max(r_tip - r_in, 1e-6))}, g, BASE_Z, r3(min(score, share, 1.0))))
 
 
 def _finish_points(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame, pol: np.ndarray,
@@ -703,10 +820,16 @@ def _outline_order(ind: np.ndarray, win: np.ndarray) -> tuple[int, float, float,
     """(order n, score, rotation deg, outline row per angle; -1 where empty) of a layer's
     outline: the outermost row of the (radii, theta) indicator per angle. The order is
     the largest n whose turned self-correlation over the visible angles reaches SYM_T."""
-    t = ind.shape[1]
     rows = np.where(ind, np.arange(ind.shape[0])[:, None], -1).max(axis=0)
-    valid = win & (rows >= 0)
-    x = rows.astype(np.float64)
+    n, sc, rot = _outline_symmetry(rows.astype(np.float64), win & (rows >= 0))
+    return n, sc, rot, rows
+
+
+def _outline_symmetry(x: np.ndarray, valid: np.ndarray) -> tuple[int, float, float]:
+    """(order n, score, rotation deg) of an outline radius per angle `x` over the angles
+    `valid`: the largest n whose turned self-correlation reaches SYM_T; the rotation is
+    the direction of the first tip (the phase of the n-th harmonic)."""
+    t = len(x)
     best: tuple[int, float] = (0, 0.0)
     for n in range(2, MAX_COUNT + 1):
         cs = []
@@ -721,10 +844,10 @@ def _outline_order(ind: np.ndarray, win: np.ndarray) -> tuple[int, float, float,
             best = (n, sc)
     n, sc = best
     if n == 0:
-        return 0, 0.0, 0.0, rows
+        return 0, 0.0, 0.0
     th = np.linspace(0, 2 * np.pi, t, endpoint=False)
     c = ((x[valid] - x[valid].mean()) * np.exp(-1j * n * th[valid])).sum()
-    return n, sc, float((-np.degrees(np.angle(c)) / n) % (360.0 / n)), rows
+    return n, sc, float((-np.degrees(np.angle(c)) / n) % (360.0 / n))
 
 
 def _star_from_outline(layers: list, meta: list[dict], pol: np.ndarray, radii: np.ndarray, win: np.ndarray,
