@@ -43,8 +43,9 @@ from rosette.geometry.common import TOOTH
 from rosette.geometry.clip import to_geom
 from rosette.model import Part
 from rosette.vision.parts_common import Frame, blob_rings, majority, polar_sample, r3
-from rosette.vision.parts_trims import (BACK_MIN_UNITS, BORDER_MIN_SIDES, _backing_tips, _band_units,
-                                       _border_bands, explain_trims, fold_specks, split_borders)
+from rosette.vision.parts_trims import (BACK_GAP_UNITS, BACK_MIN_UNITS, BORDER_MIN_SIDES, _axis_cols,
+                                       _backing_tips, _band_units, _border_bands, _rows, explain_trims,
+                                       fold_specks, split_borders)
 from rosette.vision.prepare import Prepared
 
 # ML-1 pleated rings: a ring band whose `pleat_texture` is at least PLEAT_TEXTURE is drawn
@@ -61,6 +62,10 @@ PLEAT_TEXTURE = 0.035
 # (`pleat_warnings`); none of the 38 labelled rings falls inside it.
 PLEAT_UNSURE = (0.03, 0.05)
 PLEAT_WARNING = "The ring's pleating is uncertain - check the ring edge against the photo."
+# A16 (C6): information line of a two-tone pleated edge drawn as one ring (`alt_ring_info`); its prefix
+# lets pipeline.use_head replace it for the drawn head.
+ALT_INFO_PREFIX = "Two-tone pleated edge:"
+ALT_INFO = ALT_INFO_PREFIX + " {part} is drawn in one color; the other color (group {group}) is left out."
 PLEAT_ROWS, PLEAT_INSET, PLEAT_THETA, PLEAT_WINDOW_DEG, PLEAT_SECTOR_DEG, PLEAT_MIN_SAMPLES = 8, 0.2, 1440, 10.0, 45.0, 100
 # Radial sampling step (canvas units) and angular samples per circle.
 RADIAL_STEP_UNITS = 1.0
@@ -128,6 +133,12 @@ PETAL_FULLNESS = 0.6
 # S46-15, S56-17, S70-19) have plateau 5-6 of 9 and share 0.52-0.71; of the 21 other
 # petal layers one passes (s39-15, a designer kite: 5 of 9, share 0.59).
 LOOP_KEEP, LOOP_PLATEAU, LOOP_SHARE = 0.85, 5 / 9, 0.45
+# A16 (C1): runs of a layer's color outside its full rows (`_runs_beyond_band`): RUNS_MIN..RUNS_MAX
+# per circle (more are a pleated edge's teeth) over at least RUNS_SPAN head radii.
+RUNS_MIN, RUNS_MAX, RUNS_SPAN = 3, 12, 0.15
+# A16 (C8): a layer whose runs (scaled from the visible arc to the circle) stay within RUNCOUNT_TOL
+# of a multiple of its order on RUNCOUNT_ROWS consecutive circles has that many lobes (`_run_count`).
+RUNCOUNT_TOL, RUNCOUNT_ROWS = 1.0, 3
 # A points layer (not a loop or star) whose inner end lies within COVER_GAP_UNITS outside
 # a ring or the center started under it (one pleat depth, RING_MAX_GROWTH_UNITS).
 COVER_GAP_UNITS = 8.0
@@ -167,6 +178,10 @@ STAR_MIN_ORDER, STAR_INSIDE_TOL = 3, 0.05
 # valleys to its tips instead (a ring, flagged).
 STAR_CONVEX = 0.95
 STAR_HIDDEN_DEPTH = 0.85
+# A16 (C4): stars of STAR_FEW or fewer points (S3-15, S18-15, S18-15B, S32-15: 4-point stars drawn as
+# near-squares at 0.85-0.93 of the limit) use STAR_CONVEX_FEW and STAR_HIDDEN_FEW (under it, so a
+# moved star has notches by the same bar).
+STAR_FEW, STAR_CONVEX_FEW, STAR_HIDDEN_FEW = 4, 0.84, 0.8
 # H11 (Task 4): a points layer of PLEAT_MIN_COUNT or more lobes that fill
 # >= PLEAT_FILL of their angular spacing where they are widest, in a zone closed by
 # bands on both sides, is the pleated edge of a ring: drawn as a ring with a pinked edge.
@@ -426,6 +441,82 @@ def _kind(w: np.ndarray, spacing: np.ndarray | None = None) -> str:
     return "petal"
 
 
+def _harmonic_rotation(ind: np.ndarray, win: np.ndarray, n: int) -> float:
+    """Rotation (deg) of an n-fold (radii, theta) indicator: the phase of its n-th harmonic."""
+    x = ind.astype(np.float32)
+    th = np.linspace(0, 2 * np.pi, x.shape[1], endpoint=False)
+    c = (x[:, win] * np.exp(-1j * n * th[win])[None]).sum()
+    return float((-np.degrees(np.angle(c)) / n) % (360.0 / n))
+
+
+def _runs_beyond_band(ind: np.ndarray, win: np.ndarray, cov: np.ndarray, rr: np.ndarray, fr: Frame,
+                      r_units: float) -> tuple[int, int, float, float] | None:
+    """A16 (C1): a layer whose rows have no rotational symmetry as a whole (its lobes overlap into
+    a full band near their base, S55-15's loops) is still a points layer when, outside its full
+    rows, its color forms RUNS_MIN..RUNS_MAX separate runs on the visible arc of every circle over
+    a stretch of at least RUNS_SPAN head radii (and 3 circles), whose turned self-correlation
+    reaches SYM_T at an order n in that range. Returns (end row offset of the stretch, n, score,
+    rotation deg) or None."""
+    vis = np.flatnonzero(win)
+    x = ind[:, vis].astype(np.int8)
+    runs = (np.diff(x, axis=1) == 1).sum(axis=1) + x[:, 0]
+    good = (runs >= RUNS_MIN) & (runs <= RUNS_MAX) & (cov < FULL_COV) & (cov > EXTENT_COV)
+    full = np.flatnonzero(cov >= FULL_COV)
+    if full.size:
+        good[:full[-1] + 1] = False  # beyond the band: outside its last full row
+    best, i = None, 0
+    while i < len(good):
+        if not good[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(good) and good[j]:
+            j += 1
+        if best is None or j - i > best[1] - best[0]:
+            best = (i, j)
+        i = j
+    if best is None:
+        return None
+    i, j = best
+    if j - i < 3 or fr.d(rr[j - 1] - rr[i]) < RUNS_SPAN * r_units:
+        return None
+    n, sc, rot = _symmetry(ind[i:j], win)
+    if not (RUNS_MIN <= n <= RUNS_MAX and sc >= SYM_T):
+        return None
+    return j, n, sc, rot
+
+
+def _run_count(ind: np.ndarray, win: np.ndarray, n: int, rot: float) -> tuple[int, float]:
+    """A16 (C8): (count, rotation) of a points layer of order n whose color forms, on at least
+    RUNCOUNT_ROWS consecutive circles, a number of runs that stays within RUNCOUNT_TOL of k n lobes
+    (k >= 2, under PLEAT_MIN_COUNT; the runs counted on the visible arc and scaled to the circle)
+    and whose turned self-correlation at k n (over the whole layer) reaches SPLIT_FLOOR and lies
+    within SPLIT_MARGIN of the one at n (a true k n-fold layer scores as high at its divisor n;
+    loops' edges and stripes that double the runs do not): the lower star of layered stars
+    shows all its points where the upper one's order (a divisor) won the symmetry (S49-17's 12-point
+    star read as 4). The largest such multiple wins; else (n, rot)."""
+    vis = np.flatnonzero(win)
+    x = ind[:, vis].astype(np.int8)
+    runs = (np.diff(x, axis=1) == 1).sum(axis=1) + x[:, 0]
+    est = runs * ind.shape[1] / max(len(vis), 1)  # lobes on the whole circle
+    x32 = ind.astype(np.float32)
+    sn = _score_at(x32, win, n)
+    for m in sorted((k * n for k in range(2, PLEAT_MIN_COUNT) if k * n < PLEAT_MIN_COUNT), reverse=True):
+        near = np.abs(est - m) <= RUNCOUNT_TOL
+        best, i = 0, 0
+        while i < len(near):
+            j = i
+            while j < len(near) and near[j]:
+                j += 1
+            best = max(best, j - i)
+            i = j + 1
+        if best >= RUNCOUNT_ROWS:
+            sm = _score_at(x32, win, m)
+            if sm >= SPLIT_FLOOR and sm >= sn - SPLIT_MARGIN:
+                return m, _harmonic_rotation(ind, win, m)
+    return n, rot
+
+
 def _ring_outer(bd: _Band, bands: list[_Band], dom: np.ndarray, cov: np.ndarray, radii: np.ndarray,
                 fr: Frame, layers: list[tuple[float, int]]) -> int:
     """Outer radius index of a ring band grown while its label is dominant with
@@ -540,6 +631,15 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             ind = pol[ra:rb] == g
             area = float((cov[ra:rb, g] * 2 * np.pi * radii[ra:rb]).sum() * step)
             n, share, rot = _symmetry(ind, win)
+            if share < LOW_SYM:  # A16 (C1): lobes overlapping into a full band, symmetric beyond it
+                lobed = _runs_beyond_band(ind, win, cov[ra:rb, g], radii[ra:rb], fr, fr.d(r))
+                if lobed is not None:
+                    end, n, share, rot = lobed
+                    rb = ra + end
+                    ind = pol[ra:rb] == g
+                    area = float((cov[ra:rb, g] * 2 * np.pi * radii[ra:rb]).sum() * step)
+            if share >= LOW_SYM:  # A16 (C8): layered stars: the runs show a multiple of the order
+                n, rot = _run_count(ind, win, n, rot)
             if share < LOW_SYM:
                 found = _blob_layer(p, labels, fr, g, radii[a], radii[b - 1] + step, step, ind, win)
                 if found is not None:
@@ -576,6 +676,9 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             params = {"cx": r3(ccx), "cy": r3(ccy), "kind": kind, "count": int(n),
                       "r_inner": r3(r_in), "r_outer": r3(r_out), "rotation_deg": r3(rot),
                       "width_ratio": r3(fr.d(wide) / max(r_out - r_in, 1e-6))}
+            if (has_core and _convex_star(params)
+                    and pleat_texture(p, labels == g, radii[inner.i0], radii[inner.i1 - 1]) >= PLEAT_TEXTURE):
+                has_core = False  # A16 (C4): a pleated band of its color over the hidden valleys: a ring on top
             layers.append(("points", g, share, params, area, rb))
             # a star with a core: the band is this layer's body, the star polygon covers it
             meta.append(dict(zone=(a, b), rows=(ra, rb), eats=inner if has_core else None, inner=inner))
@@ -586,24 +689,42 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
     layers, meta = split_borders(layers, meta, pol, radii, win, fr)
     layers, meta = fold_specks(layers, meta, bands, head_band, pleated, radii, fr, RING_MAX_GROWTH_UNITS)
     # H11: convex "stars" and pleated edges are rings (annuli), flagged / pinked
-    keep = []
+    keep, paired = [], set()
     for k, lay in enumerate(layers):
         role, g, share, params = lay[:4]
+        if k in paired:
+            continue  # A16 (C6): the other color of a two-tone pleated edge drawn as one ring
         if role == "points" and not meta[k].get("trim"):
             convex = _convex_star(params)
             if convex:  # its valleys are hidden under the layers inside its zone
                 deeper = _hidden_valleys(params, unit(meta[k]["zone"][0]))
                 if deeper is not None:
                     layers[k] = (role, g, share, deeper) + tuple(lay[4:])
+                    for j, (lay2, m2) in enumerate(zip(layers, meta)):  # A16: its backing follows it
+                        q2 = lay2[3]
+                        if (m2.get("trim") and lay2[0] == "points" and int(q2.get("count", 0)) == int(params["count"])
+                                and q2.get("r_inner") == params["r_inner"]
+                                and abs(float(q2["rotation_deg"]) - float(params["rotation_deg"])) < 1e-6):
+                            q2 = dict(q2, r_inner=deeper["r_inner"])  # the same width ratio as its host
+                            layers[j] = (lay2[0], lay2[1], lay2[2], q2) + tuple(lay2[4:])
                     keep.append(k)
                     continue
-            if convex or (_pleat_layer(params, meta[k]["zone"], bands)
-                          and not _alternating(k, layers, meta)):
+            pleat = not convex and _pleat_layer(params, meta[k]["zone"], bands)
+            j = _alternate_partner(k, layers, meta) if pleat else None
+            alt = None
+            if j is not None:  # A16 (C6, ruling: follow the reference look): one pinked ring in the
+                paired.add(j)  # color holding more of the edge; the other is named on it (alt_group)
+                if j in keep:
+                    keep.remove(j)
+                alt = layers[j][1]
+                if layers[j][4] > lay[4]:
+                    alt, (g, share) = g, (layers[j][1], layers[j][2])
+            if convex or pleat:
                 i0 = int(np.searchsorted(radii, float(params["r_inner"]) * fr.scale))
                 i1 = min(len(radii), int(np.searchsorted(radii, float(params["r_outer"]) * fr.scale)) + 1)
                 if i1 > i0:
                     conf = min(share, BLOB_UNCONFIRMED_CONF) if convex else share
-                    pleated.append((i0, i1, g, conf, 0 if convex else int(params["count"])))
+                    pleated.append((i0, i1, g, conf, 0 if convex else int(params["count"]), alt))
                     continue
         keep.append(k)
     layers, meta = [layers[k] for k in keep], [meta[k] for k in keep]
@@ -625,19 +746,21 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
                           center_band.label, 50, r3(center_band.cov)))
     # by outer edge (H11: a pleated annulus can enclose a narrower ring, which lies on it)
     starts = [(float(q.params["r_inner"]), q.color_group) for q in parts if q.role == "points" and id(q) not in trims]
-    found = []  # [sort key, i0, i1, label, confidence, pleats]
+    found = []  # [sort key, i0, i1, label, confidence, pleats, dropped color of a two-tone edge]
     for bd in bands:
         if bd is not head_band and bd is not center_band and id(bd) not in eaten:
-            found.append([bd.i1, bd.i0, _ring_outer(bd, bands, dom, cov, radii, fr, starts), bd.label, bd.cov, 0])
+            found.append([bd.i1, bd.i0, _ring_outer(bd, bands, dom, cov, radii, fr, starts), bd.label, bd.cov, 0, None])
     for ring in pleated:  # a pleated layer, already measured
-        i0, i1, label, conf, pinked = tuple(ring) + (0,) * (5 - len(ring))
-        found.append([i1, i0, i1, label, conf, pinked])
+        i0, i1, label, conf, pinked, alt = tuple(ring) + (0, None)[len(ring) - 4:]
+        found.append([i1, i0, i1, label, conf, pinked, alt])
     _rings_by_dominance(found, dom, domc, fr, radii, center_band)
     found.sort(key=lambda t: t[0])
-    for depth, (_, i0, i1, label, conf, pinked) in enumerate(reversed(found)):  # outermost first, inner on top
+    for depth, (_, i0, i1, label, conf, pinked, alt) in enumerate(reversed(found)):  # outermost first, inner on top
         rp = {"cx": r3(ccx), "cy": r3(ccy), "r_outer": r3(unit(i1)), "r_inner": r3(unit(i0))}
         if pinked:  # a pleated edge (H11): pinked, with its pleat count (re-centering)
             rp["pinked"], rp["pleats"] = 1, int(pinked)
+        if alt is not None:  # A16 (C6): the color the one-color ring leaves out (alt_ring_info)
+            rp["alt_group"] = int(alt)
         elif pleat_texture(p, labels == label, unit(i0) * fr.scale, unit(i1) * fr.scale) >= PLEAT_TEXTURE:
             rp["pinked"] = 1  # ML-1: a pleated ribbon band (the files draw these pinked)
         parts.append(Part(f"ring-{depth}", "ring", rp, label, min(49, 30 + depth), r3(conf)))
@@ -672,6 +795,13 @@ def pleat_texture(p: Prepared, member: np.ndarray, r0: float, r1: float,
         hp = x - ndimage.median_filter(x, size=size, mode="wrap")
         out.append(float(np.std(hp[sel]) / max(float(np.mean(x[sel])), 1.0)))
     return float(np.median(out)) if out else 0.0
+
+
+def alt_ring_info(parts: list[Part]) -> list[str]:
+    """A16 (C6): an information line (not a flag) for each ring drawn in one color from a
+    two-tone pleated edge, naming the color left out (its `alt_group`)."""
+    return [ALT_INFO.format(part=q.id, group=int(q.params["alt_group"]))
+            for q in parts if q.role == "ring" and q.params.get("alt_group") is not None]
 
 
 def pleat_warnings(parts: list[Part], p: Prepared, labels: np.ndarray) -> list[str]:
@@ -757,6 +887,109 @@ def _rings_by_dominance(found: list[list], dom: np.ndarray, domc: np.ndarray, fr
             row[1] = max(0, row[1] - teeth)
 
 
+def _axis_halfwidth(row: np.ndarray, c: int, h: int, reach: int) -> int:
+    """Columns of label h on either side of column c along one polar row, through c (0 when the
+    axis holds another label): the lobe's angular width there, in columns."""
+    t = row.shape[0]
+    if row[c] != h:
+        return 0
+    n = 1
+    for d in (1, -1):
+        k = 1
+        while k <= reach and row[(c + d * k) % t] == h:
+            k += 1
+        n += k - 1
+    return n
+
+
+def _straight_valley(pol: np.ndarray, radii: np.ndarray, rows: range, h: int, params: dict,
+                     win: np.ndarray, limit: np.ndarray | None = None) -> float | None:
+    """H16: valley radius (px) of the straight-sided star of `params`' count and axes whose sides
+    best fit the edge of h seen on `rows`: h's run through each visible axis gives the side's
+    lateral offset y = r sin(phi) at x = r cos(phi) along the axis (`limit` caps phi per row,
+    radians: the footprint h is seen in); the least-squares line y = p - m x (m > 0: the side
+    closes outward) meets the valley ray (180 deg / count off the axis) at the valley. None
+    without such a line."""
+    t, n = pol.shape[1], int(params["count"])
+    a = np.pi / n
+    reach = t // (2 * n)
+    xs, ys = [], []
+    for c in _axis_cols(params, t):
+        if not win[c]:
+            continue
+        for i in rows:
+            cols = _axis_halfwidth(pol[i], c, h, reach)
+            if cols == 0:
+                continue
+            phi = min(cols / 2 * 2 * np.pi / t, a)
+            if limit is not None:
+                phi = min(phi, float(limit[i - rows.start]))
+            xs.append(radii[i] * np.cos(phi))
+            ys.append(radii[i] * np.sin(phi))
+    if len(xs) < 3 or np.ptp(xs) <= 0:
+        return None
+    slope, p = np.polyfit(np.asarray(xs), np.asarray(ys), 1)
+    m = -float(slope)
+    if m <= 0:
+        return None
+    x = p / (np.tan(a) + m)
+    return float(x / np.cos(a))
+
+
+def _star_halfangle(r: np.ndarray, r_tip: float, r_valley: float, n: int) -> np.ndarray:
+    """Half-angle (radians) of a straight-sided n-point star (tips r_tip, valleys r_valley) at
+    radii r: the angle off a tip's axis where its side crosses each radius."""
+    a = np.pi / n
+    phi = np.linspace(0.0, a, 361)
+    rad = r_tip * r_valley * np.sin(a) / (r_valley * np.sin(a - phi) + r_tip * np.sin(phi))
+    return np.interp(np.clip(r, r_valley, r_tip), rad[::-1], phi[::-1])
+
+
+def _inner_star(pol: np.ndarray, radii: np.ndarray, a: int, tip: int, h: int, front: dict, win: np.ndarray,
+                fr: Frame) -> tuple[dict, float, int] | None:
+    """H16: an inner star of the backing color h on the front star (S70-19: white under red under
+    white, nested chevrons at each tip). On the front star's axes h shows from the zone start (within
+    a pleat's depth, RING_MAX_GROWTH_UNITS: the ring's pleated edge lies over its base) outward to
+    a radius t_in at least BACK_MIN_UNITS inside the front's tips (the gaps of BACK_GAP_UNITS in it
+    bridged), on >= BORDER_MIN_SIDES of the visible axes; h over the rows to t_in is n-fold
+    (turned self-correlation >= SPLIT_FLOOR). Then (params, confidence, outer row): a star of
+    the front's count and axes from its r_inner to t_in (median over those axes), its width that
+    of the straight-sided star through h's edge inside the front's footprint; confidence
+    min(axis share, symmetry)."""
+    t, n = pol.shape[1], int(front["count"])
+    slack, gap = _rows(RING_MAX_GROWTH_UNITS, radii, fr), _rows(BACK_GAP_UNITS, radii, fr)
+    ends, seen = [], 0
+    for c in _axis_cols(front, t):
+        if not win[c]:
+            continue
+        seen += 1
+        has = pol[a:tip, c] == h
+        first = np.flatnonzero(has[:slack + 1])
+        if first.size == 0:
+            continue
+        i = int(first[0])
+        while i + 1 < len(has) and has[i + 1:i + 1 + gap].any():
+            i += 1
+        if fr.d(radii[tip - 1] - radii[a + i]) >= BACK_MIN_UNITS:
+            ends.append(a + i)
+    share = len(ends) / seen if seen else 0.0
+    if share < BORDER_MIN_SIDES:
+        return None
+    end = int(np.median(ends))
+    sym = _score_at((pol[a:end + 1] == h).astype(np.float32), win, n)
+    if sym < SPLIT_FLOOR:
+        return None
+    r_in, r_out = float(front["r_inner"]), fr.d(radii[end])
+    if r_out - r_in < MIN_ZONE_UNITS:
+        return None
+    rows = range(a, end + 1)
+    cap = _star_halfangle(radii[a:end + 1], float(radii[tip - 1]), r_in * fr.scale, n)
+    v = _straight_valley(pol, radii, rows, h, front, win, cap)
+    v = r_in if v is None else max(r_in, fr.d(v))
+    params = dict(front, r_outer=r3(r_out), width_ratio=r3(2 * np.pi * v / n / max(r_out - r_in, 1e-6)))
+    return params, min(share, sym), end + 1
+
+
 def _front_in_base(layers: list, meta: list[dict], zones: list[tuple[int, int]], pol: np.ndarray,
                    cov: np.ndarray, radii: np.ndarray, win: np.ndarray, fr: Frame, base: int,
                    ccx: float, ccy: float) -> None:
@@ -817,6 +1050,11 @@ def _front_in_base(layers: list, meta: list[dict], zones: list[tuple[int, int]],
         lobes = max(1, sum(bool(win[int(round((rot + 360.0 * k / n) % 360 * t / 360)) % t]) for k in range(n)))
         side = _band_units(mark, radii, range(a, tip), lobes, fr)
         wide = float(front["width_ratio"]) * (r_out - r_in) + 2 * side
+        # H16: the backing's width from its own tips beyond the front's (the white read over the
+        # front's rows also holds an inner star and the border: S70-19 1.326)
+        v = _straight_valley(pol, radii, range(tip, max(back_tip, tip - 1) + 1), h, front, win)
+        if v is not None:
+            wide = 2 * np.pi * max(r_in, fr.d(v)) / n
         back = dict(front, r_outer=r3(ro2), width_ratio=r3(wide / max(ro2 - r_in, 1e-6)))
         zone_meta = dict(zone=(a, b), rows=(a, tip), eats=None, inner=None)
         drop = []
@@ -834,6 +1072,11 @@ def _front_in_base(layers: list, meta: list[dict], zones: list[tuple[int, int]],
         meta.append(dict(zone_meta, front=True))
         layers.append(("points", h, min(share, frac), back, 0.0, max(back_tip, tip - 1) + 1))
         meta.append(dict(zone_meta, rows=(a, max(back_tip, tip - 1) + 1), trim=True, front=True))
+        inner = _inner_star(pol, radii, a, tip, h, front, win, fr)
+        if inner is not None:  # H16: an inner star of the backing's color on the front star
+            q, conf, end = inner
+            layers.append(("points", h, conf, q, 0.0, end))
+            meta.append(dict(zone_meta, rows=(a, end), front=True))
 
 
 def _head_outline(p: Prepared, fr: Frame) -> np.ndarray:
@@ -918,7 +1161,8 @@ def _base_star(parts: list[Part], p: Prepared, labels: np.ndarray, fr: Frame, wi
     phi = np.minimum(phi, 2 * np.pi / n - phi)
     xu = np.array([fr.d(v) for v in np.where(valid, out, 0.0)])
     flank = valid & (xu > cover + BASE_FLANK_UNITS) & (xu < BASE_FLANK_TIP * r_tip)
-    limit = STAR_HIDDEN_DEPTH * r_tip * np.cos(np.pi / n)  # notched, never a polygon
+    depth = STAR_HIDDEN_FEW if n <= STAR_FEW else STAR_HIDDEN_DEPTH  # A16: under the bar for its count
+    limit = depth * r_tip * np.cos(np.pi / n)  # notched, never a polygon
     if flank.sum() < 8 or limit <= 1.0:
         return
     cands = np.arange(1.0, limit, 0.5)
@@ -1297,8 +1541,9 @@ def _split_and_explain(layers: list, meta: list[dict], pol: np.ndarray, radii: n
 def _convex_star(params: dict) -> bool:
     """H11: a star without concave notches (STAR_CONVEX): drawn it would be a polygon."""
     n = int(params["count"])
+    bar = STAR_CONVEX_FEW if n <= STAR_FEW else STAR_CONVEX
     return (params.get("kind") == "star" and n >= 2
-            and float(params["r_inner"]) >= STAR_CONVEX * float(params["r_outer"]) * np.cos(np.pi / n))
+            and float(params["r_inner"]) >= bar * float(params["r_outer"]) * np.cos(np.pi / n))
 
 
 def _hidden_valleys(params: dict, zone_start: float) -> dict | None:
@@ -1310,14 +1555,22 @@ def _hidden_valleys(params: dict, zone_start: float) -> dict | None:
     if not _convex_star(deeper):
         return deeper
     n = int(params["count"])
-    r_in = STAR_HIDDEN_DEPTH * float(params["r_outer"]) * float(np.cos(np.pi / n))
+    depth = STAR_HIDDEN_FEW if n <= STAR_FEW else STAR_HIDDEN_DEPTH
+    r_in = depth * float(params["r_outer"]) * float(np.cos(np.pi / n))
     return dict(params, r_inner=r3(r_in)) if r_in < zone_start else None
 
 
 def _alternating(k: int, layers: list, meta: list[dict]) -> bool:
     """H11: layer k and another points layer of the same zone, count and radii (within
     ALT_RADIUS_UNITS) whose lobes sit between each other's: a two-tone pleated edge whose
-    colors alternate, kept as points (as rings one color would hide the other)."""
+    colors alternate. A16 (C6, ruling): drawn as one pinked ring in the color holding more of
+    it (`_alternate_partner`); a one-color pleated ring's highlights or shadows read as a
+    second color (S6-15, S69-19)."""
+    return _alternate_partner(k, layers, meta) is not None
+
+
+def _alternate_partner(k: int, layers: list, meta: list[dict]) -> int | None:
+    """Index of the points layer alternating with layer k (`_alternating`), or None."""
     q = layers[k][3]
     n = int(q["count"])
     for j, lay in enumerate(layers):
@@ -1328,8 +1581,8 @@ def _alternating(k: int, layers: list, meta: list[dict]) -> bool:
             continue
         off = (float(p2["rotation_deg"]) - float(q["rotation_deg"])) % (360.0 / n) / (360.0 / n)
         if abs(off - 0.5) <= ALT_OFFSET:
-            return True
-    return False
+            return j
+    return None
 
 
 def _pleat_layer(params: dict, zone: tuple[int, int], bands: list[_Band]) -> bool:
@@ -1397,12 +1650,27 @@ def _part_geom(q: Part):
     return unary_union([to_geom(sh) for sh in shapes])
 
 
+def _front_roles(parts: list[Part], trims: set[int]) -> tuple[set[int], set[int]]:
+    """H16: (indices of the front layers in the head disc's color, of their backings). A front
+    layer cannot be told from the disc behind it, so it casts no stacking vote; its backing (a trim
+    of another color, a star of its own under it) votes in its place."""
+    base = next((q.color_group for q in parts if q.role == "head"), None)
+    front = {k for k, q in enumerate(parts) if q.role == "points" and q.id.startswith(FRONT_ID)}
+    void = {k for k in front if parts[k].color_group == base and id(parts[k]) not in trims}
+    backs = {k for k in front if id(parts[k]) in trims}
+    return void, backs
+
+
 def stack_votes(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame,
                 trims: set[int]) -> list[tuple[int, int, int, int]]:
     """H12: (index a, index b, samples of a's label, samples of b's label) over the drawn
-    overlap of every pair of non-trim points parts of different colors (STACK_*)."""
+    overlap of every pair of non-trim points parts of different colors (STACK_*). A front layer
+    in the disc's color does not vote; its backing does (H16, `_front_roles`)."""
     geoms = {k: _part_geom(q) for k, q in enumerate(parts) if q.role in ("points", "ring", "center", "unknown")}
-    pts = [k for k, q in enumerate(parts) if q.role == "points" and id(q) not in trims]
+    void, backs = _front_roles(parts, trims)
+    pts = [k for k, q in enumerate(parts)
+           if q.role == "points" and (id(q) not in trims or k in backs) and k not in void]
+    front = {k for k, q in enumerate(parts) if q.role == "points" and q.id.startswith(FRONT_ID)}
     cover = [geoms[k] for k, q in enumerate(parts) if q.role in ("ring", "center", "unknown") and geoms.get(k)]
     cover = unary_union(cover) if cover else None
     cx, cy, _ = p.head
@@ -1417,7 +1685,8 @@ def stack_votes(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame,
             if o.is_empty:
                 continue
             others = [geoms[k] for k, q in enumerate(parts)
-                      if k not in (a, b) and q.role == "points" and q.color_group in (ga, gb)]
+                      if k not in (a, b) and q.role == "points" and q.color_group in (ga, gb)
+                      and not (k in front and (a in front or b in front))]
             cut = [g for g in [cover, *others] if g is not None]
             if cut:
                 o = o.difference(unary_union(cut))
@@ -1456,12 +1725,29 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
         else:
             continue
         decided.add(frozenset((a, b)))
-    hosts = [k for k in pts if id(parts[k]) not in trims]
+    void, backs = _front_roles(parts, trims)
+    hosts = [k for k in pts if (id(parts[k]) not in trims or k in backs) and k not in void]
     nested = [(b, a) for a, b in nested_pairs(parts, hosts) if frozenset((a, b)) not in decided]
     edges += [(STACK_SHARE / 2, lo, up) for lo, up in nested]  # after every photo decision
-    if not edges:
+    # H16: a front layer lies just on its backing (`full` below); a front layer of the backing's
+    # color on the same axes (the inner star) lies on the front, so above the backing, first of all
+    front_of = {}
+    for f in void:
+        qf = parts[f].params
+        same = [b for b in backs if parts[b].params.get("count") == qf.get("count")
+                and parts[b].params.get("rotation_deg") == qf.get("rotation_deg")]
+        if same:
+            front_of[f] = min(same, key=lambda b: abs(parts[b].z - parts[f].z))
+            for k in hosts:
+                qk = parts[k].params
+                if (k not in backs and parts[k].id.startswith(FRONT_ID) and qk.get("count") == qf.get("count")
+                        and qk.get("rotation_deg") == qf.get("rotation_deg")):
+                    edges.append((2.0, front_of[f], k))
+    if not edges and not front_of:
         return
-    prior = {k: i for i, k in enumerate(sorted(hosts, key=lambda k: (parts[k].z, k)))}
+    # a backing keeps its front's place in the prior (before H16 it was a trim placed with it)
+    zkey = {k: max([parts[k].z] + [parts[f].z for f, b in front_of.items() if b == k]) for k in hosts}
+    prior = {k: i for i, k in enumerate(sorted(hosts, key=lambda k: (zkey[k], k)))}
     above: dict[int, set[int]] = {k: set() for k in hosts}  # lower -> uppers
 
     def reaches(x: int, y: int) -> bool:
@@ -1491,7 +1777,7 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
     # trims next to their host (under it when they were under it)
     host_of = {}
     for t in pts:
-        if id(parts[t]) in trims:
+        if id(parts[t]) in trims and t not in backs:
             q = parts[t]
             host_of[t] = min(hosts, key=lambda k: (parts[k].params.get("count") != q.params.get("count"),
                                                    parts[k].params.get("rotation_deg") != q.params.get("rotation_deg"),
@@ -1500,7 +1786,9 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
     for k in order:
         full += [t for t in pts if host_of.get(t) == k and parts[t].z < parts[k].z]
         full.append(k)
+        full += [f for f, b in front_of.items() if b == k]  # H16: the front just on its backing
         full += [t for t in pts if host_of.get(t) == k and parts[t].z >= parts[k].z]
+    full += [k for k in pts if k not in full]  # a front layer without its backing keeps the top
     zs = sorted(parts[k].z for k in pts)
     for k, z in zip(full, zs):
         parts[k].z = z

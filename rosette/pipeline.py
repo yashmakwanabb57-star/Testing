@@ -39,7 +39,7 @@ from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_group
 from .vision.layer_classify import classify_head_layers
 from .vision.parts import detect_parts
 from .vision.parts_common import Frame
-from .vision.parts_head import pleat_warnings
+from .vision.parts_head import ALT_INFO_PREFIX, alt_ring_info, pleat_warnings
 from .vision.prepare import Prepared, prepare
 from .vision.templates import (Pose, describe, load_library, photo_grid, rank, relabel_map, score_template,
                                template_by_id)
@@ -135,6 +135,16 @@ FREE_COLORS_WARNING = "Library head colors are not anchored to the tails - check
 # loss over 0.01 (0.08 and below also draw S6-15's own head, -0.018). It switches S3-15
 # (LOO and known) and S32-15 (known): color 0.844 -> 0.946 / 1.000 and 0.858 -> 1.000.
 TEMPLATE_AGREE_GAIN, TEMPLATE_AGREE_SIL_LOSS = 0.10, 0.02
+# B16 (diag52 C7): the outline path also needs the library head's layer agreement to be at
+# most TEMPLATE_SIL_AGREE_LOSS below the rule-based head's (the mirror of
+# TEMPLATE_AGREE_SIL_LOSS), so an outline that fits better does not replace layers that were
+# right (S27-15, S31-15). The override (a grossly failed rule-based head, override_allowed)
+# keeps its own conditions. On the 76 photos (new image, docs/pipeline.md B16) every bar
+# from 0 to 0.04 sends S2-15B, S27-15, S31-15 and S56-17 to their rule-based heads and keeps
+# the library heads that win on both measures (S11a-15, S40-15, S36-15B, S65-18); from
+# 0.05 S31-15 keeps its library head. Layer IoU 0.2313 -> 0.2378, color 0.8444 -> 0.8461,
+# head IoU 0.8511 -> 0.8494 (S27-15 and S31-15 lose outline), color OK 47 held.
+TEMPLATE_SIL_AGREE_LOSS = 0.03
 # H11 ruling: a rule-based head drawn while the closest library design agrees in colors but
 # has another points count (POINTS_COUNT_MIN or more points, none of the rule-based points
 # layers has that count) is flagged with this warning. On the 76 photos it fires on S10-19,
@@ -264,13 +274,17 @@ def _check_head(model: RosetteModel, fit: HeadFit | None) -> RosetteModel:
 
 
 def prefer_template(rules: HeadFit | None, library: HeadFit | None) -> bool:
-    """Draw the library head: its silhouette beats the detected head's by TEMPLATE_MIN_GAIN,
-    or (H11) its layer agreement beats the detected head's by TEMPLATE_AGREE_GAIN while its
-    silhouette is at most TEMPLATE_AGREE_SIL_LOSS worse (or the detected model has no head
-    parts to measure)."""
+    """Draw the library head: its silhouette beats the detected head's by TEMPLATE_MIN_GAIN
+    while its layer agreement is at most TEMPLATE_SIL_AGREE_LOSS lower (B16), or (H11) its
+    layer agreement beats the detected head's by TEMPLATE_AGREE_GAIN while its silhouette is
+    at most TEMPLATE_AGREE_SIL_LOSS worse (or the detected model has no head parts to
+    measure)."""
     if library is None:
         return False
-    if rules is None or library.silhouette >= rules.silhouette + TEMPLATE_MIN_GAIN - 1e-9:
+    if rules is None:
+        return True
+    if (library.silhouette >= rules.silhouette + TEMPLATE_MIN_GAIN - 1e-9
+            and library.agreement >= rules.agreement - TEMPLATE_SIL_AGREE_LOSS - 1e-9):
         return True
     return (library.agreement >= rules.agreement + TEMPLATE_AGREE_GAIN - 1e-9
             and library.silhouette >= rules.silhouette - TEMPLATE_AGREE_SIL_LOSS - 1e-9)
@@ -306,8 +320,10 @@ def library_head_path(rules: HeadFit | None, library: HeadFit | None, partition:
     """How the best library head is used: None (it does not fit better, prefer_template),
     "floor" (its colors agree, colors_agree), "override" (the rule-based head failed,
     override_allowed: drawn flagged) or "colors" (the rule-based head is drawn with the
-    colors warning, the library head waits on the head card)."""
-    if not prefer_template(rules, library):
+    colors warning, the library head waits on the head card). The override keeps its own
+    conditions (B16): when override_allowed holds, the agreement bar of prefer_template's
+    outline path does not apply (a failed rule-based head has no layers worth keeping)."""
+    if not prefer_template(rules, library) and not override_allowed(rules, library, partition, head_layer):
         return None
     if colors_agree(partition):
         return "floor"
@@ -426,7 +442,8 @@ def use_head(model: RosetteModel, choice: str) -> RosetteModel:
         out.warnings = [w for w in out.warnings if w not in old] + [
             w for w in out.head_states.get(choice, {}).get("warnings", [])]
     _split_groups(out)
-    out.info = [x for x in out.info if not x.startswith(RECENTER_PREFIX)] + _recenter_info(out)
+    out.info = ([x for x in out.info if not x.startswith((RECENTER_PREFIX, ALT_INFO_PREFIX))]
+                + _recenter_info(out) + alt_ring_info(out.parts))  # A16: a one-color two-tone edge
     return out
 
 
@@ -665,7 +682,8 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     tidy.warnings.extend(pleat_warnings(parts, p, labels))  # ML-1: rings near the pleat bar
     used = {q.color_group for q in parts}
     model = RosetteModel(parts=parts, groups=[g for g in groups if g.id in used],
-                         rose=any(q.role == "center" for q in parts), warnings=tidy.warnings)
+                         rose=any(q.role == "center" for q in parts), warnings=tidy.warnings,
+                         info=list(tidy.info) + alt_ring_info(parts))  # A16: a one-color two-tone edge
     out = assign(model)
     # assign keeps the parts (same order and ids) and only relabels merged groups
     assert [q.id for q in model.parts] == [q.id for q in out.parts]

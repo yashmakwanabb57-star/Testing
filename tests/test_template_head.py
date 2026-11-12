@@ -173,7 +173,7 @@ def test_a_piece_repeated_later_is_drawn_once(monkeypatch):
 def test_the_library_head_is_drawn_only_when_its_outline_fits_better():
     from rosette.pipeline import TEMPLATE_MIN_GAIN, HeadFit, prefer_template
     rules = HeadFit(agreement=0.8, silhouette=0.80)
-    assert prefer_template(rules, HeadFit(0.5, 0.80 + TEMPLATE_MIN_GAIN))
+    assert prefer_template(rules, HeadFit(0.8, 0.80 + TEMPLATE_MIN_GAIN))
     assert not prefer_template(rules, HeadFit(0.85, 0.80 + TEMPLATE_MIN_GAIN / 2))
     assert prefer_template(None, HeadFit(0.5, 0.5))
     assert not prefer_template(rules, None)
@@ -341,7 +341,10 @@ def test_without_a_head_layer_the_override_skips_the_partition_bar():
     # the same with a head part present: the partition bar holds
     assert has_head_layer(_detected())
     assert not override_allowed(failed, big, low, head_layer=True)
-    assert library_head_path(failed, big, low, head_layer=True) == "colors"
+    # B16: big agrees 0.22 less, so it does not fit better at all: the rules head, no colors warning
+    assert library_head_path(failed, big, low, head_layer=True) is None
+    as_good = HeadFit(0.42, 0.60 + TEMPLATE_OVERRIDE_GAIN)
+    assert library_head_path(failed, as_good, low, head_layer=True) == "colors"
     # the gain bar holds either way
     assert not override_allowed(failed, HeadFit(0.2, 0.60 + TEMPLATE_OVERRIDE_GAIN - 0.01), low, head_layer=False)
 
@@ -695,3 +698,42 @@ def test_no_point_count_warning_for_a_library_design_colored_freely(three):
     assert points_count_warnings(rules, first) == [POINTS_COUNT_WARNING]
     first.params["free_colors"] = 1  # its colors do not follow the tails: no agreement to lean on
     assert points_count_warnings(rules, first) == []
+
+
+# ---------------------------------------------------------------- B16: outline gain must not lose layers
+
+
+def test_outline_gain_alone_does_not_draw_a_library_head_that_loses_layer_agreement():
+    from rosette.pipeline import TEMPLATE_MIN_GAIN, TEMPLATE_SIL_AGREE_LOSS, HeadFit, library_head_path, \
+        prefer_template
+    rules = HeadFit(agreement=0.75, silhouette=0.84)  # a close rule-based head with a weaker outline
+    # S27-15's shape: a plain disc whose outline fits much better, but with much lower agreement
+    assert not prefer_template(rules, HeadFit(0.66, 0.95))
+    assert library_head_path(rules, HeadFit(0.66, 0.95), 0.9) is None
+    # within the margin the outline gain still decides
+    assert prefer_template(rules, HeadFit(0.75 - TEMPLATE_SIL_AGREE_LOSS, 0.84 + TEMPLATE_MIN_GAIN))
+    assert not prefer_template(rules, HeadFit(0.75 - TEMPLATE_SIL_AGREE_LOSS - 0.01, 0.84 + TEMPLATE_MIN_GAIN))
+    # a library head better on both measures is drawn as before
+    assert library_head_path(rules, HeadFit(0.85, 0.90), 0.9) == "floor"
+    # no rule-based head fit: nothing to lose
+    assert prefer_template(None, HeadFit(0.3, 0.5))
+
+
+def test_the_override_keeps_its_own_conditions_when_the_library_head_agrees_less():
+    from rosette.pipeline import TEMPLATE_OVERRIDE_GAIN, HeadFit, library_head_path
+    failed = HeadFit(0.42, 0.60)  # gross failure
+    worse = HeadFit(0.30, 0.60 + TEMPLATE_OVERRIDE_GAIN)  # lower agreement, outline wins by the override gain
+    assert library_head_path(failed, worse, 0.40) == "override"
+    assert library_head_path(failed, worse, 0.40, head_layer=False) == "override"
+    assert library_head_path(failed, worse, 0.20, head_layer=True) is None  # partition under the override bar
+    assert library_head_path(failed, HeadFit(0.30, 0.65), 0.40) is None  # gain under the override bar
+
+
+def test_choose_head_keeps_the_rules_head_when_the_outline_winner_loses_layers(three):
+    from rosette.pipeline import RULES_HEAD, choose_head, drawn_head
+    fits = _fits(rules=(0.75, 0.84), T1_15=(0.66, 0.95), T7_15=(0.6, 0.9), T8_15=(0.6, 0.9))
+    m, fit = choose_head(_detected(), _lib_model(0.9), fits, lambda a, b: 0.85)
+    assert drawn_head(m) == RULES_HEAD and fit.agreement == 0.75
+    assert _template_warnings(m) == []  # no colors warning: the library head does not fit better
+    assert sorted(q.params["template_id"] for q in m.alternatives if q.role == "template") == [
+        "T1-15", "T7-15", "T8-15"]
