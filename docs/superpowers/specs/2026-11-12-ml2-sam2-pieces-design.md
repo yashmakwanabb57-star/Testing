@@ -72,6 +72,17 @@ the detector is weakest: layers in the disc's color and the stacking order.
 - **Cache:** pieces per photo in `.cache/pieces/<sha256 of the file bytes>.npz` (masks packed as
   bits, scores, model id); the cache folder is git-ignored. The comparison pages and the scorer
   never re-run the model for an unchanged photo.
+- **Completion pass and the repeat bars (ruling, Task 3b fix round 1):** after the grid pass, one
+  extra decoder pass prompts the missing steps of repeated head pieces and the borders just
+  outside each head piece. Its candidates pass the 0.80 / 0.90 bars as above. A candidate of this
+  pass only (never the grid pass) that fails those bars but passes `REPEAT_IOU_MIN` 0.70 and
+  `REPEAT_STABILITY_MIN` 0.75 is "weak". Weak candidates are kept only as a set that shows the
+  repetition by itself:
+  - NMS-deduplicated against the kept pieces and each other
+  - at least 3 distinct steps of a robust equal-step fit (n <= 2 m, outliers dropped)
+  - area within 35 %, centroid radius within 0.15 R and Lab median colors within 15 of each other
+  Membership in a group of high-bar pieces does not count. Every inlier of such a set is kept, or
+  none. A mask with more than one connected part over 10 % of its area is dropped in both passes.
 - **Piece record:** `Piece(mask: np.ndarray[bool], score: float, stability: float, area: int,
   bbox: (x0, y0, x1, y1), color_group: int | None, in_head: bool)`. `color_group` is the majority
   `labels` value inside the mask (set by the pipeline, not the segmenter).

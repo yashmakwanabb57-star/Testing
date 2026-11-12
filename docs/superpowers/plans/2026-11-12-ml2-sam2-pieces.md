@@ -170,6 +170,15 @@ def test_s70_19_pieces_include_the_blocks_and_stars():
 - [ ] **Step 5: S70-19 (slow test, weights):** at least 6 outer white chevron pieces, 6 inner white arm pieces, 6 blue blocks, and either 6 red border pieces around the blocks or one red star piece; record the pieces and the two-pass time. Render the overlay (photo | pieces outlined and numbered, as the controller's script in the Task 3 report folder does) into the plan workspace as `s70-19-pieces-v2.png`.
 - [ ] **Step 6: Commit** `feat: ML-2 - piece completion: all three mask hypotheses as candidates, symmetric re-prompting at the missing steps of a repeated piece, edge prompts for same-color borders kept only when they repeat; cache key carries the pieces version`.
 
+**Fix round 1 (review):**
+- `_fit_steps` fits groups of 3 or more only, with n <= 2 m. Outliers leave the group, and the best n scores inliers minus outliers minus empty steps (smallest n on a tie).
+- Thin means narrower than 8 units, or bbox fill < 0.35. A centred annulus is never thin.
+- The repeat gate counts distinct steps among the new edge pieces only.
+- Registration falls back to the geometric point when the piece has the disc's color.
+- Multi-part masks are dropped.
+- Ruling: completion-pass candidates under the 0.80 / 0.90 bars but over `REPEAT_IOU_MIN` 0.70 / `REPEAT_STABILITY_MIN` 0.75 are kept only as a set that repeats by itself (3+ distinct steps, robust fit, area 35 %, radius 0.15 R, Lab color 15; all inliers or none). This is recorded in the spec's Decisions and mined on the 76 photos (Task 3b report).
+- `PIECES_VERSION` = 3.
+
 ### Task 4: evaluation tool and overlays on the 76 photos
 
 **Files:**
