@@ -128,6 +128,9 @@ PETAL_FULLNESS = 0.6
 # S46-15, S56-17, S70-19) have plateau 5-6 of 9 and share 0.52-0.71; of the 21 other
 # petal layers one passes (s39-15, a designer kite: 5 of 9, share 0.59).
 LOOP_KEEP, LOOP_PLATEAU, LOOP_SHARE = 0.85, 5 / 9, 0.45
+# A16 (C1): runs of a layer's color outside its full rows (`_runs_beyond_band`): RUNS_MIN..RUNS_MAX
+# per circle (more are a pleated edge's teeth) over at least RUNS_SPAN head radii.
+RUNS_MIN, RUNS_MAX, RUNS_SPAN = 3, 12, 0.15
 # A points layer (not a loop or star) whose inner end lies within COVER_GAP_UNITS outside
 # a ring or the center started under it (one pleat depth, RING_MAX_GROWTH_UNITS).
 COVER_GAP_UNITS = 8.0
@@ -430,6 +433,40 @@ def _kind(w: np.ndarray, spacing: np.ndarray | None = None) -> str:
     return "petal"
 
 
+def _runs_beyond_band(ind: np.ndarray, win: np.ndarray, cov: np.ndarray, rr: np.ndarray, fr: Frame,
+                      r_units: float) -> tuple[int, int, float, float] | None:
+    """A16 (C1): a layer whose rows have no rotational symmetry as a whole (its lobes overlap into
+    a full band near their base, S55-15's loops) is still a points layer when, outside its full
+    rows, its color forms RUNS_MIN..RUNS_MAX separate runs on the visible arc of every circle over
+    a stretch of at least RUNS_SPAN head radii (and 3 circles), whose turned self-correlation
+    reaches SYM_T at an order n in that range. Returns (end row offset of the stretch, n, score,
+    rotation deg) or None."""
+    vis = np.flatnonzero(win)
+    x = ind[:, vis].astype(np.int8)
+    runs = (np.diff(x, axis=1) == 1).sum(axis=1) + x[:, 0]
+    good = (runs >= RUNS_MIN) & (runs <= RUNS_MAX) & (cov < FULL_COV) & (cov > EXTENT_COV)
+    best, i = None, 0
+    while i < len(good):
+        if not good[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(good) and good[j]:
+            j += 1
+        if best is None or j - i > best[1] - best[0]:
+            best = (i, j)
+        i = j
+    if best is None:
+        return None
+    i, j = best
+    if j - i < 3 or fr.d(rr[j - 1] - rr[i]) < RUNS_SPAN * r_units:
+        return None
+    n, sc, rot = _symmetry(ind[i:j], win)
+    if not (RUNS_MIN <= n <= RUNS_MAX and sc >= SYM_T):
+        return None
+    return j, n, sc, rot
+
+
 def _ring_outer(bd: _Band, bands: list[_Band], dom: np.ndarray, cov: np.ndarray, radii: np.ndarray,
                 fr: Frame, layers: list[tuple[float, int]]) -> int:
     """Outer radius index of a ring band grown while its label is dominant with
@@ -544,6 +581,13 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             ind = pol[ra:rb] == g
             area = float((cov[ra:rb, g] * 2 * np.pi * radii[ra:rb]).sum() * step)
             n, share, rot = _symmetry(ind, win)
+            if share < LOW_SYM:  # A16 (C1): lobes overlapping into a full band, symmetric beyond it
+                lobed = _runs_beyond_band(ind, win, cov[ra:rb, g], radii[ra:rb], fr, fr.d(r))
+                if lobed is not None:
+                    end, n, share, rot = lobed
+                    rb = ra + end
+                    ind = pol[ra:rb] == g
+                    area = float((cov[ra:rb, g] * 2 * np.pi * radii[ra:rb]).sum() * step)
             if share < LOW_SYM:
                 found = _blob_layer(p, labels, fr, g, radii[a], radii[b - 1] + step, step, ind, win)
                 if found is not None:
