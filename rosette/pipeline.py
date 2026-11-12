@@ -18,6 +18,11 @@ silhouette IoU below HEAD_SILHOUETTE_MIN. Shape errors on a head whose layers ov
 the photo well (petals or loops drawn as blocks) are not caught; the UI always asks the
 user to compare the head with the photo.
 
+Pieces (ML-2): with ROSETTE_SAM2 not off, detect also runs SAM 2.1 (rosette.perception.pieces,
+cached per photo) and hands the pieces, each colored by its majority label, to detect_parts.
+Pieces off, a missing model or a failed run leave the rules path exactly as without pieces;
+`perception` (Detection, PhotoContext; the API sends it) says which.
+
 render(model): build -> write_svg -> validate. build may add warnings to the model
 (unrecognised shapes drawn as placeholders).
 """
@@ -32,13 +37,16 @@ import numpy as np
 from .assign import FLAG_BELOW, FLAGGED_CONF, assign, hex_rgb
 from .build import build
 from .model import Part, RosetteModel
+from .perception import settings as perception_settings
+from .perception.pieces import DEFAULT_CACHE_DIR, segment
+from .perception.sam2 import MissingModel
 from .roles import PAD_FRAC, render_categories
 from .tidy import drop_specks, drop_two_point_layers, merge_tail_slivers
 from .validate import Issue, validate
 from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_groups
 from .vision.layer_classify import classify_head_layers
 from .vision.parts import detect_parts
-from .vision.parts_common import Frame
+from .vision.parts_common import Frame, majority
 from .vision.parts_head import ALT_INFO_PREFIX, alt_ring_info, pleat_warnings
 from .vision.prepare import Prepared, prepare
 from .vision.templates import (Pose, describe, load_library, photo_grid, rank, relabel_map, score_template,
@@ -594,6 +602,8 @@ class PhotoContext:
     # The rule-based head before the learned classifier (ML-1): the layers a confirmed
     # download is logged against (rosette.confirmed).
     detected: RosetteModel | None = None
+    # ML-2: the SAM 2 pieces' status (`perception`), sent by the API.
+    perception: dict | None = None
 
 
 def add_library_head(model: RosetteModel, tid: str, ctx: PhotoContext) -> RosetteModel:
@@ -666,6 +676,39 @@ class Detection:
     merged: dict[int, int]
     merged_print: list
     rules_model: RosetteModel | None = None  # before the learned classifier (ML-1)
+    perception: dict | None = None  # ML-2: the SAM 2 pieces' status (`perception`)
+
+
+PIECES_OFF = "SAM 2 pieces are off (ROSETTE_SAM2=off): the rules alone read the head."
+# Where the pieces of each photo are cached (rosette.perception.pieces; git-ignored).
+PIECES_CACHE_DIR = DEFAULT_CACHE_DIR
+
+
+def perception(p: Prepared, labels: np.ndarray, env=None) -> tuple[list | None, dict]:
+    """ML-2: (pieces or None, status) of the prepared photo. The pieces come from
+    rosette.perception.pieces.segment (cached per photo), each with its color_group set to the
+    majority label inside its mask (label -1 ignored; None when the mask holds no label).
+    status: {"device", "model", "pieces", "seconds", "cached", "status", "message"} with status "on",
+    "off" (ROSETTE_SAM2=off), "missing" (no weights; the message holds the fetch command) or
+    "failed" (the error text). Never raises: without pieces the rules path runs alone."""
+    out = {"device": None, "model": None, "pieces": 0, "seconds": 0.0, "cached": False, "status": "off",
+           "message": PIECES_OFF}
+    try:
+        settings = perception_settings.load(env)
+        if settings.model == "off":
+            return None, out
+        result = segment(p, settings, cache_dir=PIECES_CACHE_DIR)
+    except MissingModel as exc:
+        return None, dict(out, status="missing", message=str(exc))
+    except Exception as exc:  # noqa: BLE001 - pieces are optional: the rules path runs without them
+        return None, dict(out, status="failed", message=f"SAM 2 pieces failed - {type(exc).__name__}: {exc}")
+    for pc in result.pieces:
+        g, _ = majority(labels[pc.mask])
+        pc.color_group = g if g >= 0 else None
+    message = "cached pieces" if result.cached else "pieces computed"
+    return result.pieces, {"device": result.device, "model": result.model_id, "pieces": len(result.pieces),
+                           "seconds": round(float(result.seconds), 2), "cached": bool(result.cached), "status": "on",
+                           "message": message}
 
 
 def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -> Detection:
@@ -676,8 +719,16 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     p = prepare(data)
     merged_print: list = []
     labels, groups = pixel_groups(p, merged=merged_print)
-    tidy = merge_tail_slivers(drop_two_point_layers(drop_specks(RosetteModel(parts=detect_parts(p, labels, groups)),
-                                                                head_r=Frame.of(p).d(p.head[2]))))
+    pieces, seen = perception(p, labels)
+    try:
+        found = detect_parts(p, labels, groups, pieces)
+    except Exception as exc:  # noqa: BLE001 - a fault in the piece path: the rules read the head alone
+        if pieces is None:
+            raise
+        seen = dict(seen, status="failed", message=f"SAM 2 pieces failed in the detector - {type(exc).__name__}: {exc}")
+        found = detect_parts(p, labels, groups)
+    tidy = merge_tail_slivers(drop_two_point_layers(drop_specks(
+        RosetteModel(parts=found), head_r=Frame.of(p).d(p.head[2]))))
     parts = tidy.parts
     tidy.warnings.extend(pleat_warnings(parts, p, labels))  # ML-1: rings near the pleat bar
     used = {q.color_group for q in parts}
@@ -693,7 +744,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     rules_model = copy.deepcopy(out)
     if classify:
         out.warnings.extend(classify_head_layers(p, labels, out, merged, exclude_key=exclude_key))
-    return Detection(p, labels, groups, out, merged, merged_print, rules_model)
+    return Detection(p, labels, groups, out, merged, merged_print, rules_model, seen)
 
 
 def analyze_with_fit(data: bytes, template: bool = True,
@@ -709,7 +760,7 @@ def analyze_with_context(data: bytes, template: bool = True,
     """analyze_with_fit, plus the PhotoContext add_library_head needs later."""
     d = detect(data, exclude_key=exclude_key)
     p, labels, groups, out, merged, merged_print = d.prepared, d.labels, d.groups, d.model, d.merged, d.merged_print
-    ctx = PhotoContext(p, labels, groups, merged, copy.deepcopy(out), d.rules_model)
+    ctx = PhotoContext(p, labels, groups, merged, copy.deepcopy(out), d.rules_model, d.perception)
     used = {q.color_group for q in out.parts} | set(merged)
     lib = None
     if template:

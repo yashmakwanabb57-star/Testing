@@ -59,17 +59,20 @@ def _leftovers(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
     return parts
 
 
-def detect_parts(p: Prepared, labels: np.ndarray, groups: list[ColorGroup] | None = None) -> list[Part]:
+def detect_parts(p: Prepared, labels: np.ndarray, groups: list[ColorGroup] | None = None,
+                 pieces: list | None = None) -> list[Part]:
     """Parts of the rosette: head-side parts, tail stripes, then unexplained regions.
     With the color groups given, a glitter group found on the tails (parts_tails, H6) is
-    added to them once (detect_tails gives it the same id on every call)."""
+    added to them once (detect_tails gives it the same id on every call). With SAM 2 pieces
+    (ML-2: rosette.perception.pieces, each with its color_group set) the head reads front
+    layers from piece outlines and stacks layers by their visible pieces (parts_head)."""
     fr = Frame.of(p)
-    head = detect_head(p, labels, fr)
+    head = detect_head(p, labels, fr, pieces)
     pts = [int(q.params["count"]) for q in head if q.role == "points" and not q.id.startswith(FRONT_ID)]
     pts += [int(q.params["pleats"]) for q in head if q.role == "ring" and q.params.get("pleats")]
     if pts:  # re-center on the points' (or pleats', H11) symmetry and measure again
         p = refine_center(p, labels, fr, pts[0])
-        head = detect_head(p, labels, fr)
+        head = detect_head(p, labels, fr, pieces)
     tails, glitter = detect_tails(p, labels, fr, groups)
     if glitter is not None and groups is not None and all(g.id != glitter.id for g in groups):
         groups.append(glitter)

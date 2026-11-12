@@ -5,3 +5,5 @@ __pycache__/
 .superpowers/
 .claude/worktrees/
 rosette/data/confirmed_layers.csv
+models/
+.cache/
