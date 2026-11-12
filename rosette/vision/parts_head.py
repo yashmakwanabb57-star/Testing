@@ -43,8 +43,9 @@ from rosette.geometry.common import TOOTH
 from rosette.geometry.clip import to_geom
 from rosette.model import Part
 from rosette.vision.parts_common import Frame, blob_rings, majority, polar_sample, r3
-from rosette.vision.parts_trims import (BACK_MIN_UNITS, BORDER_MIN_SIDES, _backing_tips, _band_units,
-                                       _border_bands, explain_trims, fold_specks, split_borders)
+from rosette.vision.parts_trims import (BACK_GAP_UNITS, BACK_MIN_UNITS, BORDER_MIN_SIDES, _axis_cols,
+                                       _backing_tips, _band_units, _border_bands, _rows, explain_trims,
+                                       fold_specks, split_borders)
 from rosette.vision.prepare import Prepared
 
 # ML-1 pleated rings: a ring band whose `pleat_texture` is at least PLEAT_TEXTURE is drawn
@@ -886,6 +887,109 @@ def _rings_by_dominance(found: list[list], dom: np.ndarray, domc: np.ndarray, fr
             row[1] = max(0, row[1] - teeth)
 
 
+def _axis_halfwidth(row: np.ndarray, c: int, h: int, reach: int) -> int:
+    """Columns of label h on either side of column c along one polar row, through c (0 when the
+    axis holds another label): the lobe's angular width there, in columns."""
+    t = row.shape[0]
+    if row[c] != h:
+        return 0
+    n = 1
+    for d in (1, -1):
+        k = 1
+        while k <= reach and row[(c + d * k) % t] == h:
+            k += 1
+        n += k - 1
+    return n
+
+
+def _straight_valley(pol: np.ndarray, radii: np.ndarray, rows: range, h: int, params: dict,
+                     win: np.ndarray, limit: np.ndarray | None = None) -> float | None:
+    """H16: valley radius (px) of the straight-sided star of `params`' count and axes whose sides
+    best fit the edge of h seen on `rows`: h's run through each visible axis gives the side's
+    lateral offset y = r sin(phi) at x = r cos(phi) along the axis (`limit` caps phi per row,
+    radians: the footprint h is seen in); the least-squares line y = p - m x (m > 0: the side
+    closes outward) meets the valley ray (180 deg / count off the axis) at the valley. None
+    without such a line."""
+    t, n = pol.shape[1], int(params["count"])
+    a = np.pi / n
+    reach = t // (2 * n)
+    xs, ys = [], []
+    for c in _axis_cols(params, t):
+        if not win[c]:
+            continue
+        for i in rows:
+            cols = _axis_halfwidth(pol[i], c, h, reach)
+            if cols == 0:
+                continue
+            phi = min(cols / 2 * 2 * np.pi / t, a)
+            if limit is not None:
+                phi = min(phi, float(limit[i - rows.start]))
+            xs.append(radii[i] * np.cos(phi))
+            ys.append(radii[i] * np.sin(phi))
+    if len(xs) < 3 or np.ptp(xs) <= 0:
+        return None
+    slope, p = np.polyfit(np.asarray(xs), np.asarray(ys), 1)
+    m = -float(slope)
+    if m <= 0:
+        return None
+    x = p / (np.tan(a) + m)
+    return float(x / np.cos(a))
+
+
+def _star_halfangle(r: np.ndarray, r_tip: float, r_valley: float, n: int) -> np.ndarray:
+    """Half-angle (radians) of a straight-sided n-point star (tips r_tip, valleys r_valley) at
+    radii r: the angle off a tip's axis where its side crosses each radius."""
+    a = np.pi / n
+    phi = np.linspace(0.0, a, 361)
+    rad = r_tip * r_valley * np.sin(a) / (r_valley * np.sin(a - phi) + r_tip * np.sin(phi))
+    return np.interp(np.clip(r, r_valley, r_tip), rad[::-1], phi[::-1])
+
+
+def _inner_star(pol: np.ndarray, radii: np.ndarray, a: int, tip: int, h: int, front: dict, win: np.ndarray,
+                fr: Frame) -> tuple[dict, float, int] | None:
+    """H16: an inner star of the backing color h on the front star (S70-19: white under red under
+    white, nested chevrons at each tip). On the front star's axes h shows from the zone start (within
+    a pleat's depth, RING_MAX_GROWTH_UNITS: the ring's pleated edge lies over its base) outward to
+    a radius t_in at least BACK_MIN_UNITS inside the front's tips (the gaps of BACK_GAP_UNITS in it
+    bridged), on >= BORDER_MIN_SIDES of the visible axes; h over the rows to t_in is n-fold
+    (turned self-correlation >= SPLIT_FLOOR). Then (params, confidence, outer row): a star of
+    the front's count and axes from its r_inner to t_in (median over those axes), its width that
+    of the straight-sided star through h's edge inside the front's footprint; confidence
+    min(axis share, symmetry)."""
+    t, n = pol.shape[1], int(front["count"])
+    slack, gap = _rows(RING_MAX_GROWTH_UNITS, radii, fr), _rows(BACK_GAP_UNITS, radii, fr)
+    ends, seen = [], 0
+    for c in _axis_cols(front, t):
+        if not win[c]:
+            continue
+        seen += 1
+        has = pol[a:tip, c] == h
+        first = np.flatnonzero(has[:slack + 1])
+        if first.size == 0:
+            continue
+        i = int(first[0])
+        while i + 1 < len(has) and has[i + 1:i + 1 + gap].any():
+            i += 1
+        if fr.d(radii[tip - 1] - radii[a + i]) >= BACK_MIN_UNITS:
+            ends.append(a + i)
+    share = len(ends) / seen if seen else 0.0
+    if share < BORDER_MIN_SIDES:
+        return None
+    end = int(np.median(ends))
+    sym = _score_at((pol[a:end + 1] == h).astype(np.float32), win, n)
+    if sym < SPLIT_FLOOR:
+        return None
+    r_in, r_out = float(front["r_inner"]), fr.d(radii[end])
+    if r_out - r_in < MIN_ZONE_UNITS:
+        return None
+    rows = range(a, end + 1)
+    cap = _star_halfangle(radii[a:end + 1], float(radii[tip - 1]), r_in * fr.scale, n)
+    v = _straight_valley(pol, radii, rows, h, front, win, cap)
+    v = r_in if v is None else max(r_in, fr.d(v))
+    params = dict(front, r_outer=r3(r_out), width_ratio=r3(2 * np.pi * v / n / max(r_out - r_in, 1e-6)))
+    return params, min(share, sym), end + 1
+
+
 def _front_in_base(layers: list, meta: list[dict], zones: list[tuple[int, int]], pol: np.ndarray,
                    cov: np.ndarray, radii: np.ndarray, win: np.ndarray, fr: Frame, base: int,
                    ccx: float, ccy: float) -> None:
@@ -946,6 +1050,11 @@ def _front_in_base(layers: list, meta: list[dict], zones: list[tuple[int, int]],
         lobes = max(1, sum(bool(win[int(round((rot + 360.0 * k / n) % 360 * t / 360)) % t]) for k in range(n)))
         side = _band_units(mark, radii, range(a, tip), lobes, fr)
         wide = float(front["width_ratio"]) * (r_out - r_in) + 2 * side
+        # H16: the backing's width from its own tips beyond the front's (the white read over the
+        # front's rows also holds an inner star and the border: S70-19 1.326)
+        v = _straight_valley(pol, radii, range(tip, max(back_tip, tip - 1) + 1), h, front, win)
+        if v is not None:
+            wide = 2 * np.pi * max(r_in, fr.d(v)) / n
         back = dict(front, r_outer=r3(ro2), width_ratio=r3(wide / max(ro2 - r_in, 1e-6)))
         zone_meta = dict(zone=(a, b), rows=(a, tip), eats=None, inner=None)
         drop = []
@@ -963,6 +1072,11 @@ def _front_in_base(layers: list, meta: list[dict], zones: list[tuple[int, int]],
         meta.append(dict(zone_meta, front=True))
         layers.append(("points", h, min(share, frac), back, 0.0, max(back_tip, tip - 1) + 1))
         meta.append(dict(zone_meta, rows=(a, max(back_tip, tip - 1) + 1), trim=True, front=True))
+        inner = _inner_star(pol, radii, a, tip, h, front, win, fr)
+        if inner is not None:  # H16: an inner star of the backing's color on the front star
+            q, conf, end = inner
+            layers.append(("points", h, conf, q, 0.0, end))
+            meta.append(dict(zone_meta, rows=(a, end), front=True))
 
 
 def _head_outline(p: Prepared, fr: Frame) -> np.ndarray:
@@ -1536,12 +1650,27 @@ def _part_geom(q: Part):
     return unary_union([to_geom(sh) for sh in shapes])
 
 
+def _front_roles(parts: list[Part], trims: set[int]) -> tuple[set[int], set[int]]:
+    """H16: (indices of the front layers in the head disc's color, of their backings). A front
+    layer cannot be told from the disc behind it, so it casts no stacking vote; its backing (a trim
+    of another color, a star of its own under it) votes in its place."""
+    base = next((q.color_group for q in parts if q.role == "head"), None)
+    front = {k for k, q in enumerate(parts) if q.role == "points" and q.id.startswith(FRONT_ID)}
+    void = {k for k in front if parts[k].color_group == base and id(parts[k]) not in trims}
+    backs = {k for k in front if id(parts[k]) in trims}
+    return void, backs
+
+
 def stack_votes(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame,
                 trims: set[int]) -> list[tuple[int, int, int, int]]:
     """H12: (index a, index b, samples of a's label, samples of b's label) over the drawn
-    overlap of every pair of non-trim points parts of different colors (STACK_*)."""
+    overlap of every pair of non-trim points parts of different colors (STACK_*). A front layer
+    in the disc's color does not vote; its backing does (H16, `_front_roles`)."""
     geoms = {k: _part_geom(q) for k, q in enumerate(parts) if q.role in ("points", "ring", "center", "unknown")}
-    pts = [k for k, q in enumerate(parts) if q.role == "points" and id(q) not in trims]
+    void, backs = _front_roles(parts, trims)
+    pts = [k for k, q in enumerate(parts)
+           if q.role == "points" and (id(q) not in trims or k in backs) and k not in void]
+    front = {k for k, q in enumerate(parts) if q.role == "points" and q.id.startswith(FRONT_ID)}
     cover = [geoms[k] for k, q in enumerate(parts) if q.role in ("ring", "center", "unknown") and geoms.get(k)]
     cover = unary_union(cover) if cover else None
     cx, cy, _ = p.head
@@ -1556,7 +1685,8 @@ def stack_votes(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame,
             if o.is_empty:
                 continue
             others = [geoms[k] for k, q in enumerate(parts)
-                      if k not in (a, b) and q.role == "points" and q.color_group in (ga, gb)]
+                      if k not in (a, b) and q.role == "points" and q.color_group in (ga, gb)
+                      and not (k in front and (a in front or b in front))]
             cut = [g for g in [cover, *others] if g is not None]
             if cut:
                 o = o.difference(unary_union(cut))
@@ -1595,12 +1725,29 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
         else:
             continue
         decided.add(frozenset((a, b)))
-    hosts = [k for k in pts if id(parts[k]) not in trims]
+    void, backs = _front_roles(parts, trims)
+    hosts = [k for k in pts if (id(parts[k]) not in trims or k in backs) and k not in void]
     nested = [(b, a) for a, b in nested_pairs(parts, hosts) if frozenset((a, b)) not in decided]
     edges += [(STACK_SHARE / 2, lo, up) for lo, up in nested]  # after every photo decision
-    if not edges:
+    # H16: a front layer lies just on its backing (`full` below); a front layer of the backing's
+    # color on the same axes (the inner star) lies on the front, so above the backing, first of all
+    front_of = {}
+    for f in void:
+        qf = parts[f].params
+        same = [b for b in backs if parts[b].params.get("count") == qf.get("count")
+                and parts[b].params.get("rotation_deg") == qf.get("rotation_deg")]
+        if same:
+            front_of[f] = min(same, key=lambda b: abs(parts[b].z - parts[f].z))
+            for k in hosts:
+                qk = parts[k].params
+                if (k not in backs and parts[k].id.startswith(FRONT_ID) and qk.get("count") == qf.get("count")
+                        and qk.get("rotation_deg") == qf.get("rotation_deg")):
+                    edges.append((2.0, front_of[f], k))
+    if not edges and not front_of:
         return
-    prior = {k: i for i, k in enumerate(sorted(hosts, key=lambda k: (parts[k].z, k)))}
+    # a backing keeps its front's place in the prior (before H16 it was a trim placed with it)
+    zkey = {k: max([parts[k].z] + [parts[f].z for f, b in front_of.items() if b == k]) for k in hosts}
+    prior = {k: i for i, k in enumerate(sorted(hosts, key=lambda k: (zkey[k], k)))}
     above: dict[int, set[int]] = {k: set() for k in hosts}  # lower -> uppers
 
     def reaches(x: int, y: int) -> bool:
@@ -1630,7 +1777,7 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
     # trims next to their host (under it when they were under it)
     host_of = {}
     for t in pts:
-        if id(parts[t]) in trims:
+        if id(parts[t]) in trims and t not in backs:
             q = parts[t]
             host_of[t] = min(hosts, key=lambda k: (parts[k].params.get("count") != q.params.get("count"),
                                                    parts[k].params.get("rotation_deg") != q.params.get("rotation_deg"),
@@ -1639,7 +1786,9 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
     for k in order:
         full += [t for t in pts if host_of.get(t) == k and parts[t].z < parts[k].z]
         full.append(k)
+        full += [f for f, b in front_of.items() if b == k]  # H16: the front just on its backing
         full += [t for t in pts if host_of.get(t) == k and parts[t].z >= parts[k].z]
+    full += [k for k in pts if k not in full]  # a front layer without its backing keeps the top
     zs = sorted(parts[k].z for k in pts)
     for k, z in zip(full, zs):
         parts[k].z = z
