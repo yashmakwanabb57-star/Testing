@@ -39,7 +39,7 @@ from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_group
 from .vision.layer_classify import classify_head_layers
 from .vision.parts import detect_parts
 from .vision.parts_common import Frame
-from .vision.parts_head import pleat_warnings
+from .vision.parts_head import ALT_INFO_PREFIX, alt_ring_info, pleat_warnings
 from .vision.prepare import Prepared, prepare
 from .vision.templates import (Pose, describe, load_library, photo_grid, rank, relabel_map, score_template,
                                template_by_id)
@@ -442,7 +442,8 @@ def use_head(model: RosetteModel, choice: str) -> RosetteModel:
         out.warnings = [w for w in out.warnings if w not in old] + [
             w for w in out.head_states.get(choice, {}).get("warnings", [])]
     _split_groups(out)
-    out.info = [x for x in out.info if not x.startswith(RECENTER_PREFIX)] + _recenter_info(out)
+    out.info = ([x for x in out.info if not x.startswith((RECENTER_PREFIX, ALT_INFO_PREFIX))]
+                + _recenter_info(out) + alt_ring_info(out.parts))  # A16: a one-color two-tone edge
     return out
 
 
@@ -681,7 +682,8 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     tidy.warnings.extend(pleat_warnings(parts, p, labels))  # ML-1: rings near the pleat bar
     used = {q.color_group for q in parts}
     model = RosetteModel(parts=parts, groups=[g for g in groups if g.id in used],
-                         rose=any(q.role == "center" for q in parts), warnings=tidy.warnings)
+                         rose=any(q.role == "center" for q in parts), warnings=tidy.warnings,
+                         info=list(tidy.info) + alt_ring_info(parts))  # A16: a one-color two-tone edge
     out = assign(model)
     # assign keeps the parts (same order and ids) and only relabels merged groups
     assert [q.id for q in model.parts] == [q.id for q in out.parts]

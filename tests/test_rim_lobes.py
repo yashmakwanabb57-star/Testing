@@ -53,3 +53,28 @@ def test_runs_beyond_a_full_band_make_a_points_layer():
     end, n, sc, rot = H._runs_beyond_band(ind, win, cov, rr, F, 100.0)
     assert n == 5 and sc >= H.SYM_T and end == len(rows)
     assert H._runs_beyond_band(ind[:12], win, cov[:12], rr[:12], F, 100.0) is None  # too short a stretch
+    # lobes inside the full band (between it and the center) are not beyond it
+    inv = ind[::-1].copy()
+    assert H._runs_beyond_band(inv, win, inv.mean(axis=1), rr, F, 100.0) is None
+
+
+def test_overlapping_loops_are_loop_blocks_not_a_ring():
+    """S55-15: five white loops whose bases overlap into a full band (no symmetry over the
+    layer as a whole), drawn as one plain ring before A16. A points layer of 5 lobes reaching
+    the loops' ends."""
+    labels, dx, dy, r, th = _base()
+    labels[r <= R] = 0  # the head disc
+    for k in range(5):
+        a = np.radians(18 + 72 * k)
+        ax = dx * np.cos(a) + dy * np.sin(a)
+        lat = -dx * np.sin(a) + dy * np.cos(a)
+        labels[(ax > 0.3 * R) & (ax < 0.88 * R) & (np.abs(lat) <= 0.2 * R)] = 1
+    rng = np.random.default_rng(5)
+    bins = (th * 2).astype(int) % 720
+    reach = rng.uniform(0.5, 0.62, 720)  # the overlapped bases: ragged, no 5-fold order
+    labels[(r >= 0.38 * R) & (r <= reach[bins] * R)] = 1
+    labels[r <= 0.38 * R] = 2  # the center
+    parts = _head(detect_parts(_photo(labels), labels))
+    white = [q for q in parts if q.color_group == 1]
+    assert [q.role for q in white] == ["points"]
+    assert white[0].params["count"] == 5 and float(white[0].params["r_outer"]) > 0.8 * 150

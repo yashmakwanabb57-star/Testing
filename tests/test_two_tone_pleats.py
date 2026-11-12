@@ -50,3 +50,18 @@ def test_a_two_tone_pleated_edge_is_one_pinked_ring_in_its_larger_color():
     assert not any(q.role == "points" and q.color_group in (1, 5) for q in parts)
     rings = [q for q in parts if q.role == "ring" and q.color_group in (1, 5)]
     assert len(rings) == 1 and rings[0].color_group == 1 and rings[0].params.get("pleats") == n
+    # the dropped color is recorded on the ring and named in an information line (no flag)
+    assert rings[0].params.get("alt_group") == 5
+    assert rings[0].confidence >= 0.6
+    assert H.alt_ring_info(parts) == [H.ALT_INFO.format(part=rings[0].id, group=5)]
+
+
+def test_the_alt_ring_information_line_follows_the_drawn_head():
+    from rosette.model import Part, RosetteModel
+    from rosette.pipeline import RULES_HEAD, use_head
+    ring = Part("ring-0", "ring", {"cx": 300.0, "cy": 175.0, "r_inner": 40.0, "r_outer": 70.0, "pinked": 1,
+                                   "pleats": 17, "alt_group": 5}, 1, 30, 0.9)
+    m = use_head(RosetteModel(parts=[ring], info=["something else"]), RULES_HEAD)
+    assert m.info == ["something else", H.ALT_INFO.format(part="ring-0", group=5)]
+    plain = use_head(RosetteModel(parts=[], info=list(m.info)), RULES_HEAD)
+    assert plain.info == ["something else"]

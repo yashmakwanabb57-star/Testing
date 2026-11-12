@@ -61,6 +61,10 @@ PLEAT_TEXTURE = 0.035
 # (`pleat_warnings`); none of the 38 labelled rings falls inside it.
 PLEAT_UNSURE = (0.03, 0.05)
 PLEAT_WARNING = "The ring's pleating is uncertain - check the ring edge against the photo."
+# A16 (C6): information line of a two-tone pleated edge drawn as one ring (`alt_ring_info`); its prefix
+# lets pipeline.use_head replace it for the drawn head.
+ALT_INFO_PREFIX = "Two-tone pleated edge:"
+ALT_INFO = ALT_INFO_PREFIX + " {part} is drawn in one color; the other color (group {group}) is left out."
 PLEAT_ROWS, PLEAT_INSET, PLEAT_THETA, PLEAT_WINDOW_DEG, PLEAT_SECTOR_DEG, PLEAT_MIN_SAMPLES = 8, 0.2, 1440, 10.0, 45.0, 100
 # Radial sampling step (canvas units) and angular samples per circle.
 RADIAL_STEP_UNITS = 1.0
@@ -456,6 +460,9 @@ def _runs_beyond_band(ind: np.ndarray, win: np.ndarray, cov: np.ndarray, rr: np.
     x = ind[:, vis].astype(np.int8)
     runs = (np.diff(x, axis=1) == 1).sum(axis=1) + x[:, 0]
     good = (runs >= RUNS_MIN) & (runs <= RUNS_MAX) & (cov < FULL_COV) & (cov > EXTENT_COV)
+    full = np.flatnonzero(cov >= FULL_COV)
+    if full.size:
+        good[:full[-1] + 1] = False  # beyond the band: outside its last full row
     best, i = None, 0
     while i < len(good):
         if not good[i]:
@@ -500,8 +507,7 @@ def _run_count(ind: np.ndarray, win: np.ndarray, n: int, rot: float) -> tuple[in
             j = i
             while j < len(near) and near[j]:
                 j += 1
-            if j - i > best:
-                best, at = j - i, (i, j)
+            best = max(best, j - i)
             i = j + 1
         if best >= RUNCOUNT_ROWS:
             sm = _score_at(x32, win, m)
@@ -704,18 +710,20 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
                     continue
             pleat = not convex and _pleat_layer(params, meta[k]["zone"], bands)
             j = _alternate_partner(k, layers, meta) if pleat else None
-            if j is not None:  # A16 (C6): one pinked ring in the color holding more of the edge
-                paired.add(j)
+            alt = None
+            if j is not None:  # A16 (C6, ruling: follow the reference look): one pinked ring in the
+                paired.add(j)  # color holding more of the edge; the other is named on it (alt_group)
                 if j in keep:
                     keep.remove(j)
+                alt = layers[j][1]
                 if layers[j][4] > lay[4]:
-                    g, share = layers[j][1], layers[j][2]
+                    alt, (g, share) = g, (layers[j][1], layers[j][2])
             if convex or pleat:
                 i0 = int(np.searchsorted(radii, float(params["r_inner"]) * fr.scale))
                 i1 = min(len(radii), int(np.searchsorted(radii, float(params["r_outer"]) * fr.scale)) + 1)
                 if i1 > i0:
                     conf = min(share, BLOB_UNCONFIRMED_CONF) if convex else share
-                    pleated.append((i0, i1, g, conf, 0 if convex else int(params["count"])))
+                    pleated.append((i0, i1, g, conf, 0 if convex else int(params["count"]), alt))
                     continue
         keep.append(k)
     layers, meta = [layers[k] for k in keep], [meta[k] for k in keep]
@@ -737,19 +745,21 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
                           center_band.label, 50, r3(center_band.cov)))
     # by outer edge (H11: a pleated annulus can enclose a narrower ring, which lies on it)
     starts = [(float(q.params["r_inner"]), q.color_group) for q in parts if q.role == "points" and id(q) not in trims]
-    found = []  # [sort key, i0, i1, label, confidence, pleats]
+    found = []  # [sort key, i0, i1, label, confidence, pleats, dropped color of a two-tone edge]
     for bd in bands:
         if bd is not head_band and bd is not center_band and id(bd) not in eaten:
-            found.append([bd.i1, bd.i0, _ring_outer(bd, bands, dom, cov, radii, fr, starts), bd.label, bd.cov, 0])
+            found.append([bd.i1, bd.i0, _ring_outer(bd, bands, dom, cov, radii, fr, starts), bd.label, bd.cov, 0, None])
     for ring in pleated:  # a pleated layer, already measured
-        i0, i1, label, conf, pinked = tuple(ring) + (0,) * (5 - len(ring))
-        found.append([i1, i0, i1, label, conf, pinked])
+        i0, i1, label, conf, pinked, alt = tuple(ring) + (0, None)[len(ring) - 4:]
+        found.append([i1, i0, i1, label, conf, pinked, alt])
     _rings_by_dominance(found, dom, domc, fr, radii, center_band)
     found.sort(key=lambda t: t[0])
-    for depth, (_, i0, i1, label, conf, pinked) in enumerate(reversed(found)):  # outermost first, inner on top
+    for depth, (_, i0, i1, label, conf, pinked, alt) in enumerate(reversed(found)):  # outermost first, inner on top
         rp = {"cx": r3(ccx), "cy": r3(ccy), "r_outer": r3(unit(i1)), "r_inner": r3(unit(i0))}
         if pinked:  # a pleated edge (H11): pinked, with its pleat count (re-centering)
             rp["pinked"], rp["pleats"] = 1, int(pinked)
+        if alt is not None:  # A16 (C6): the color the one-color ring leaves out (alt_ring_info)
+            rp["alt_group"] = int(alt)
         elif pleat_texture(p, labels == label, unit(i0) * fr.scale, unit(i1) * fr.scale) >= PLEAT_TEXTURE:
             rp["pinked"] = 1  # ML-1: a pleated ribbon band (the files draw these pinked)
         parts.append(Part(f"ring-{depth}", "ring", rp, label, min(49, 30 + depth), r3(conf)))
@@ -784,6 +794,13 @@ def pleat_texture(p: Prepared, member: np.ndarray, r0: float, r1: float,
         hp = x - ndimage.median_filter(x, size=size, mode="wrap")
         out.append(float(np.std(hp[sel]) / max(float(np.mean(x[sel])), 1.0)))
     return float(np.median(out)) if out else 0.0
+
+
+def alt_ring_info(parts: list[Part]) -> list[str]:
+    """A16 (C6): an information line (not a flag) for each ring drawn in one color from a
+    two-tone pleated edge, naming the color left out (its `alt_group`)."""
+    return [ALT_INFO.format(part=q.id, group=int(q.params["alt_group"]))
+            for q in parts if q.role == "ring" and q.params.get("alt_group") is not None]
 
 
 def pleat_warnings(parts: list[Part], p: Prepared, labels: np.ndarray) -> list[str]:
@@ -1030,7 +1047,8 @@ def _base_star(parts: list[Part], p: Prepared, labels: np.ndarray, fr: Frame, wi
     phi = np.minimum(phi, 2 * np.pi / n - phi)
     xu = np.array([fr.d(v) for v in np.where(valid, out, 0.0)])
     flank = valid & (xu > cover + BASE_FLANK_UNITS) & (xu < BASE_FLANK_TIP * r_tip)
-    limit = STAR_HIDDEN_DEPTH * r_tip * np.cos(np.pi / n)  # notched, never a polygon
+    depth = STAR_HIDDEN_FEW if n <= STAR_FEW else STAR_HIDDEN_DEPTH  # A16: under the bar for its count
+    limit = depth * r_tip * np.cos(np.pi / n)  # notched, never a polygon
     if flank.sum() < 8 or limit <= 1.0:
         return
     cands = np.arange(1.0, limit, 0.5)

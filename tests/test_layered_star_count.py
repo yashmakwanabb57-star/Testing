@@ -19,12 +19,19 @@ def test_run_count_reads_the_lower_star_of_layered_stars():
             row[(np.arange(-half, half + 1) + c * 60) % t] = True
         rows.append(row)
     ind = np.array(rows)
-    n, sc, rot = H._symmetry(ind, win)
-    assert n == 12 or H._run_count(ind, win, 4, 0.0)[0] == 12
     assert H._run_count(ind, win, 4, 0.0)[0] == 12
-    # loops whose runs double (two edges each) but whose doubled order does not fit: kept
+    # loops whose runs double (S61-19, S57-17: a split loop end or a stripe reads two runs per
+    # lobe) but whose score at 12 lies more than SPLIT_MARGIN under the one at 6: kept at 6
     loops = np.zeros((20, t), bool)
-    for c in range(4):
-        loops[:, (np.arange(-40, 41) + c * 180) % t] = True
-        loops[:, (c * 180) % t] = False
-    assert H._run_count(loops, win, 4, 0.0)[0] in (4, 8)
+    for c in range(6):  # six wide loops on 30 + 60 k (one in the tails sector), each split near its axis
+        mid = 60 + c * 120
+        loops[:, (np.arange(-45, 46) + mid) % t] = True
+        cut = (mid - 2 + (c % 3) * 6) % t
+        loops[:, cut:cut + 4] = False
+    xl = loops.astype(np.float32)
+    s6, s12 = H._score_at(xl, win, 6), H._score_at(xl, win, 12)
+    assert H.SPLIT_FLOOR <= s12 < s6 - H.SPLIT_MARGIN  # refused by the margin alone, not the floor
+    vis = np.flatnonzero(win)
+    runs = (np.diff(loops[:, vis].astype(np.int8), axis=1) == 1).sum(axis=1) + loops[:, vis[0]]
+    assert abs(float(np.median(runs)) * t / len(vis) - 12) <= H.RUNCOUNT_TOL  # the runs read 12
+    assert H._run_count(loops, win, 6, 30.0)[0] == 6

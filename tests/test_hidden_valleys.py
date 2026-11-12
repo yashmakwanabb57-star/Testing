@@ -67,11 +67,50 @@ def test_a_pleated_band_over_a_stars_valleys_is_a_pinked_ring_on_top():
     assert rings[0].z > stars[0].z  # drawn over the star
     # the valleys lie under the ring, with notches
     assert float(stars[0].params["r_inner"]) < float(rings[0].params["r_outer"])
-    assert not H._convex_star(stars[0].params) or float(stars[0].params["r_inner"]) < H.STAR_HIDDEN_FEW * float(
-        stars[0].params["r_outer"]) * np.cos(np.pi / 4) + 0.5
+    assert not H._convex_star(stars[0].params)
 
 
 def test_a_plain_band_stays_the_stars_body():
     p, labels = _photo(pleats=False)
     red = _red(detect_parts(p, labels))
     assert [q.role for q in red] == ["points"]  # the star covers its body band (H11)
+
+
+def _star_and_trims(monkeypatch, trims):
+    """A convex 4-point star (label 1, read beyond a disc at 0.6 R) and trim layers added as
+    the trims rule would (`trims`: (label, count) each, a copy of the star's params)."""
+    h, w = 1200, 900
+    yy, xx = np.mgrid[:h, :w].astype(float)
+    dx, dy = xx - CX, yy - CY
+    r, th = np.hypot(dx, dy), np.degrees(np.arctan2(dy, dx)) % 360
+    labels = np.full((h, w), -1, np.int32)
+    labels[(yy > CY + 0.5 * R) & (yy < 1150) & (np.abs(xx - CX) < 110)] = 3
+    a = np.pi / 4
+    phi = a - np.radians(np.abs((th % 90) - 45))
+    labels[r <= 0.95 * R * 0.3 * np.sin(a) / (0.3 * np.sin(a - phi) + 0.95 * np.sin(phi))] = 1
+    labels[r <= 0.6 * R] = 2
+    labels[r <= 0.2 * R] = 0
+    p = Prepared(rgb=np.zeros((h, w, 3), np.uint8), mask=labels >= 0, axis_x=CX, head=(CX, CY, R),
+                 tails_top_y=CY + 0.5 * R, bottom_y=1149.0, scale=2.0)
+    orig = H._split_and_explain
+
+    def with_trims(layers, meta, *args):
+        layers, meta = orig(layers, meta, *args)
+        k = next(i for i, lay in enumerate(layers) if lay[0] == "points" and lay[1] == 1)
+        for g, n in trims:
+            q = dict(layers[k][3], count=n, r_outer=float(layers[k][3]["r_outer"]) + 5.0)
+            layers.append(("points", g, layers[k][2], q, 0.0, layers[k][5]))
+            meta.append(dict(meta[k], trim=True))
+        return layers, meta
+    monkeypatch.setattr(H, "_split_and_explain", with_trims)
+    return {q.color_group: q for q in detect_parts(p, labels) if q.role == "points"}
+
+
+def test_a_backing_follows_its_hosts_hidden_valleys(monkeypatch):
+    pts = _star_and_trims(monkeypatch, [(5, 4), (6, 8)])
+    host, back, other = pts[1], pts[5], pts[6]
+    assert not H._convex_star(host.params)  # its valleys moved under the disc
+    assert back.params["r_inner"] == host.params["r_inner"]  # the backing copy moved with it
+    assert back.params["width_ratio"] == host.params["width_ratio"]
+    # a trim that is no copy of the host (another count) keeps its own valleys
+    assert other.params["r_inner"] != host.params["r_inner"]
