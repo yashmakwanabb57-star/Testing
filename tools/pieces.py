@@ -18,6 +18,7 @@ AI-made: read the table as evidence, not truth. --subset FILE: also summarize th
 from __future__ import annotations
 
 import csv
+import os
 import sys
 from pathlib import Path
 
@@ -134,7 +135,7 @@ def summary_line(label: str, rows: list[dict]) -> str:
     cmean = float(np.mean([r["circle_mean_best_iou"] for r in rows])) if rows else 0.0
     pieces = float(np.mean([r["pieces"] for r in rows])) if rows else 0.0
     return (f"[{label}] {len(rows)} photos  layers {layers}  covered >= {COVERED_IOU:.2f}: {covered}/{layers}"
-            f"  mean of mean_best_iou {mean:.3f}  mean pieces {pieces:.1f}"
+            f"  per-photo mean of mean_best_iou {mean:.3f}  mean pieces {pieces:.1f}"
             f"  | head-circle alignment: covered {ccov}/{layers}  mean {cmean:.3f}")
 
 
@@ -145,10 +146,10 @@ def main(argv: list[str]) -> int:
         return default
 
     ids = opt("--ids")
-    ids = [s for s in ids.split(",") if s] if ids else score_ids()
+    ids = [s for s in ids.split(",") if s] if ids else sorted(q.stem for q in (REF / "photos").glob("*.png"))
     out = Path(opt("--out", ROOT / "output" / "pieces"))
     out.mkdir(parents=True, exist_ok=True)
-    env = dict(__import__("os").environ)
+    env = dict(os.environ)
     if opt("--model"):
         env["ROSETTE_SAM2"] = opt("--model")
     settings = psettings.load(env)
