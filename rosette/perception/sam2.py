@@ -45,7 +45,7 @@ def load(settings: Settings) -> Loaded:
     if size not in REPOS:
         raise ValueError(f"ROSETTE_SAM2={size!r} cannot be loaded; allowed values: small, tiny")
     path = local_dir(settings.models_dir, size)
-    if not (path / "model.safetensors").exists():
+    if not all((path / f).exists() for f in ("model.safetensors", "config.json", "preprocessor_config.json")):
         raise MissingModel(
             f"SAM 2.1 {size} weights not found in {path}. "
             f"Fetch them once with: .venv/Scripts/python.exe tools/fetch_models.py --model {size}"
