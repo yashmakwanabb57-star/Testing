@@ -36,19 +36,16 @@ import numpy as np  # noqa: E402
 from scipy import ndimage  # noqa: E402
 from shapely import contains_xy  # noqa: E402
 
+from rosette.layer_model import CLASSES, POINTS_CLASSES, rules_features  # noqa: E402
 from rosette.roles import category, circular_runs, classify_masks, drawn_frame, element_masks, polar_mask  # noqa: E402
-from rosette.vision.layer_features import COUNTS, layer_features, symmetry_scores  # noqa: E402
-from rosette.vision.parts_common import Frame, polar_sample  # noqa: E402
+from rosette.vision.layer_classify import UNKNOWN_IN, head_layer_rows, rules_class, rules_count  # noqa: E402,F401
+from rosette.vision.layer_features import COUNTS, symmetry_scores  # noqa: E402
 from rosette.vision.parts_head import RING_THETA, TAIL_SECTOR_DEG, _part_geom  # noqa: E402
 from tools.stacking import mark_backings, piece_kind  # noqa: E402
 from tools.truth import PINKED_DEPTH, _rim_depth  # noqa: E402
 
 REF = ROOT / "reference"
 OUT = ROOT / "rosette" / "data" / "layers.csv"
-CLASSES = ("disc", "pinked_ring", "ring", "loop", "kite", "petal", "star", "base_star", "backing", "edge",
-           "center", "none")
-# Classes whose layers have a lobe count.
-POINTS_CLASSES = ("loop", "kite", "petal", "star", "base_star", "backing", "edge")
 # Comparison grid: GRID points per side over +-GRID_R head radii.
 GRID, GRID_R = 241, 1.25
 # A detected layer whose best match score (see `match`) is under this overlaps nothing: none.
@@ -69,14 +66,10 @@ FULL_ROW, FULL_ROWS_MIN, PLEAT_DEPTH = 0.75, 0.1, (1.0, 12.0)
 # A reference points layer starting within this many head radii of the middle is the
 # center drawn lobed (roles.CENTER_RMIN).
 CENTER_R = 0.1
-# Unknown parts count as head layers when their center lies within this many head radii.
-UNKNOWN_IN = 1.05
 # The photo pixels a detected part is matched by are those of its color inside its radial
 # extent and within DRAWN_GROW_UNITS of its drawn shape, unless that keeps under
 # DRAWN_MIN_SHARE of them (a drawn shape far off its color: the color's pixels decide).
 DRAWN_GROW_UNITS, DRAWN_MIN_SHARE = 3.0, 0.3
-# Radial step of the polar unwrap (canvas units; parts_head.RADIAL_STEP_UNITS).
-STEP_UNITS = 1.0
 
 # Reference-differs photos (docs/pipeline.md). "rules": the docs confirm the rule-based
 # head's reading of the photo, so the rules' class/count is the label, except the parts
@@ -95,38 +88,6 @@ CURATED: dict[str, dict] = {
     # reference and in the rules; neither reading is right.
     "s44-15": {"source": "ref", "exclude": set(POINTS_CLASSES)},
 }
-
-
-# ---------------------------------------------------------------- the rules' reading
-
-def rules_class(part, parts) -> str:
-    """Class of a rule-based head part (`CLASSES`)."""
-    a = part.params
-    if part.role == "head":
-        return "disc"
-    if part.role == "ring":
-        return "pinked_ring" if int(a.get("pinked", 0)) else "ring"
-    if part.role == "center":
-        return "center"
-    if part.role != "points":
-        return "none"
-    if part.id == "base":
-        return "base_star"
-    if a.get("edge_width"):
-        return "edge"
-    for q in parts:  # a copy of another Color's points (same kind, count, axes), reaching further
-        b = q.params
-        if (q is not part and q.role == "points" and q.color_group != part.color_group
-                and b.get("kind") == a.get("kind")
-                and int(b.get("count", 0)) == int(a["count"]) and not b.get("edge_width")
-                and abs((float(a["rotation_deg"]) - float(b["rotation_deg"]) + 180) % 360 - 180) <= 4.0
-                and float(a["r_outer"]) > float(b["r_outer"])):
-            return "backing"
-    return {"bow": "loop", "diamond": "kite", "petal": "petal", "star": "star"}.get(str(a.get("kind")), "none")
-
-
-def rules_count(part, cls: str) -> int:
-    return int(part.params.get("count", 0)) if cls in POINTS_CLASSES else 0
 
 
 # ---------------------------------------------------------------- reference layers
@@ -315,29 +276,6 @@ def trim_in_reference(cls: str, cat: int | None, extent: tuple[float, float], la
 
 # ---------------------------------------------------------------- the photo side
 
-def _extent(part, head_r_units: float, center: tuple[float, float]) -> tuple[float, float]:
-    """Radial extent (canvas units) of a detected head part."""
-    a = part.params
-    if part.role in ("points", "ring"):
-        return float(a["r_inner"]), float(a["r_outer"])
-    if part.role in ("head", "center"):
-        return 0.0, float(a["r"])
-    d = float(np.hypot(float(a["cx"]) - center[0], float(a["cy"]) - center[1]))
-    return max(0.0, d - float(a["r"])), d + float(a["r"])
-
-
-def context_features(k: int, extents: list[tuple[float, float]], counts: list[float]) -> dict[str, float]:
-    """Numbers about the layers overlapping layer k (extents in head radii; counts: their
-    best symmetry n): how many overlap it, by how much the nearest other outer edge lies
-    inside or beyond its own, whether one encloses it and whether one shares its count."""
-    a0, a1 = extents[k]
-    over = [j for j, (b0, b1) in enumerate(extents) if j != k and min(a1, b1) - max(a0, b0) > 0.02]
-    d_out = min((a1 - extents[j][1] for j in over), key=abs, default=0.0)
-    return {"n_over": float(len(over)), "d_out": float(d_out),
-            "inside_other": float(any(extents[j][0] <= a0 + 0.01 and extents[j][1] >= a1 - 0.01 for j in over)),
-            "same_n_over": float(any(counts[j] == counts[k] for j in over))}
-
-
 def _cached(cache: Path | None, name: str, make):
     """make(), pickled under cache/name when a cache directory is given (development reruns)."""
     if cache is None:
@@ -355,36 +293,19 @@ def _cached(cache: Path | None, name: str, make):
 def photo_layers(sid: str, cache: Path | None = None) -> list[dict]:
     """Rows (features, rules class and count, part id) of one photo's head layers."""
     from rosette.pipeline import detect
-    d = _cached(cache, f"{sid}.det.pkl", lambda: detect((REF / "photos" / f"{sid}.png").read_bytes()))
+    d = _cached(cache, f"{sid}.det.pkl", lambda: detect((REF / "photos" / f"{sid}.png").read_bytes(), classify=False))
     return rows_of_detection(d)
 
 
-def head_parts(model) -> list:
-    head = [q for q in model.parts if q.role in ("head", "ring", "points", "center", "unknown")]
-    return head
-
-
 def rows_of_detection(d) -> list[dict]:
-    """Feature rows of a Detection's head layers (see photo_layers)."""
+    """Feature rows of a Detection's head layers (`layer_classify.head_layer_rows`), each
+    with `seen`: the grid points where the photo shows its colour inside its extent, near
+    its drawn shape (see DRAWN_*)."""
     p, labels, model, merged = d.prepared, d.labels, d.model, d.merged
-    fr = Frame.of(p)
-    parts = [q for q in model.parts if q.role in ("head", "ring", "points", "center")]
-    if not parts:
+    rows, u = head_layer_rows(p, labels, model, merged)
+    if not rows:
         return []
-    ccx, ccy = float(parts[0].params["cx"]), float(parts[0].params["cy"])
-    cx_px = fr.axis_x + (ccx - 300.0) * fr.scale
-    cy_px = fr.py(ccy)
-    r_px = cy_px - (p.head[1] - p.head[2])  # refine_center keeps the head top
-    head_r = r_px / fr.scale
-    for q in model.parts:
-        if q.role == "unknown" and np.hypot(float(q.params["cx"]) - ccx, float(q.params["cy"]) - ccy) <= UNKNOWN_IN * head_r:
-            parts.append(q)
-    step = fr.scale * STEP_UNITS
-    radii = np.arange(step / 2, 1.1 * r_px, step)
-    pol = polar_sample(labels.astype(np.int32), cx_px, cy_px, radii, RING_THETA, fill=-1)
-    theta = np.degrees(np.linspace(0, 2 * np.pi, RING_THETA, endpoint=False))
-    win = np.abs(theta - 90.0) > TAIL_SECTOR_DEG
-    groups = {g.id: g for g in model.groups}
+    (ccx, ccy), (cx_px, cy_px), r_px, head_r = u.center, u.center_px, u.r_px, u.head_r
     uu, vv = _grid()
     h, w = labels.shape
     gx = np.clip(np.rint(cx_px + uu * r_px).astype(int), 0, w - 1)
@@ -392,36 +313,23 @@ def rows_of_detection(d) -> list[dict]:
     inside = (cx_px + uu * r_px >= 0) & (cx_px + uu * r_px < w) & (cy_px + vv * r_px >= 0) & (cy_px + vv * r_px < h)
     glab = np.where(inside, labels[gy, gx], -1)
     rho = np.hypot(uu, vv)
-    rows = []
-    for q in parts:
-        g = q.color_group
-        members = [g] + [a for a, b in merged.items() if b == g]
-        r0, r1 = _extent(q, head_r, (ccx, ccy))
-        grp = groups.get(g)
-        f = layer_features(pol, radii, win, members, r0 * fr.scale, r1 * fr.scale, r_px, fr.scale,
-                           grp.category if grp else None, grp.pattern if grp else False,
-                           grp.texture if grp else 0.0)
-        cls = rules_class(q, model.parts)
+    for r in rows:
+        q = r["part"]
+        r0, r1 = r["extent"]
         if q.role == "unknown":  # its disc
             a = q.params
-            region = np.hypot(uu - (float(a["cx"]) - ccx) / head_r, vv - (float(a["cy"]) - ccy) / head_r) <= float(a["r"]) / head_r
+            region = (np.hypot(uu - (float(a["cx"]) - ccx) / head_r, vv - (float(a["cy"]) - ccy) / head_r)
+                      <= float(a["r"]) / head_r)
         else:
-            region = (rho >= r0 / head_r) & (rho <= r1 / head_r)
-        seen = np.isin(glab, members) & region & (rho <= UNKNOWN_IN)
+            region = (rho >= r0) & (rho <= r1)
+        seen = np.isin(glab, r["members"]) & region & (rho <= UNKNOWN_IN)
         drawn = part_grid(q, (ccx, ccy), head_r)
         if drawn is not None:  # where the part is drawn (same-color trims share a band)
             grow = max(1, int(round(DRAWN_GROW_UNITS / head_r / (2 * GRID_R / (GRID - 1)))))
             near = seen & ndimage.binary_dilation(drawn, iterations=grow)
             if near.sum() >= DRAWN_MIN_SHARE * seen.sum():
                 seen = near
-        rows.append(dict(part=q, features=f, rules=cls, rules_count=rules_count(q, cls),
-                         extent=(r0 / head_r, r1 / head_r), seen=seen))
-    extents = [r["extent"] for r in rows]
-    counts = [r["features"]["sym_best_n"] for r in rows]
-    for k, r in enumerate(rows):
-        r["features"].update(context_features(k, extents, counts))
-    for r in rows:
-        r["center"], r["head_r"] = (ccx, ccy), head_r
+        r["seen"] = seen
     return rows
 
 
@@ -458,6 +366,7 @@ def photo_ids() -> list[str]:
     return sorted(p.stem for p in (REF / "photos").glob("*.png") if (REF / "svg" / f"{p.stem}.svg").exists())
 
 
+RULES_KEYS = set(rules_features("none", "points", 0))
 META = ("photo", "part", "role", "rules", "rules_count", "label", "count", "iou", "source")
 
 
@@ -467,7 +376,7 @@ def to_records(sid: str, rows: list[dict]) -> list[dict]:
         rec = dict(photo=sid, part=r["part"].id, role=r["part"].role, rules=r["rules"],
                    rules_count=r["rules_count"], label=r["label"], count=r["count"],
                    iou=round(float(r["iou"]), 4), source=r["source"])
-        rec.update({k: round(float(v), 6) for k, v in r["features"].items()})
+        rec.update({k: round(float(v), 6) for k, v in r["features"].items() if k not in RULES_KEYS})
         out.append(rec)
     return out
 

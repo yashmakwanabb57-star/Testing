@@ -46,6 +46,16 @@ from rosette.vision.parts_common import Frame, blob_rings, majority, polar_sampl
 from rosette.vision.parts_trims import explain_trims, fold_specks, split_borders
 from rosette.vision.prepare import Prepared
 
+# ML-1 pleated rings: a ring band whose `pleat_texture` is at least PLEAT_TEXTURE is drawn
+# pinked. Measured on the 38 detected rings the dataset labels (tools/build_layer_dataset.py):
+# the 31 the reference files draw pinked read 0.053-0.68, the one smooth satin band (S55-15)
+# 0.020; the 6 other "plain" labels are the head disc showing as a band and read 0.16-0.55
+# (A10-15's inner red band is pleated on the photo). Circles: PLEAT_ROWS over the band less
+# PLEAT_INSET of its width at each side, PLEAT_THETA samples, brightness against its running
+# median over PLEAT_WINDOW_DEG, outside PLEAT_SECTOR_DEG of the tails, PLEAT_MIN_SAMPLES on
+# the colour per circle.
+PLEAT_TEXTURE = 0.035
+PLEAT_ROWS, PLEAT_INSET, PLEAT_THETA, PLEAT_WINDOW_DEG, PLEAT_SECTOR_DEG, PLEAT_MIN_SAMPLES = 8, 0.2, 1440, 10.0, 45.0, 100
 # Radial sampling step (canvas units) and angular samples per circle.
 RADIAL_STEP_UNITS = 1.0
 RING_THETA = 720
@@ -612,11 +622,39 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
         rp = {"cx": r3(ccx), "cy": r3(ccy), "r_outer": r3(unit(i1)), "r_inner": r3(unit(i0))}
         if pinked:  # a pleated edge (H11): pinked, with its pleat count (re-centering)
             rp["pinked"], rp["pleats"] = 1, int(pinked)
+        elif pleat_texture(p, labels == label, unit(i0) * fr.scale, unit(i1) * fr.scale) >= PLEAT_TEXTURE:
+            rp["pinked"] = 1  # ML-1: a pleated ribbon band (the files draw these pinked)
         parts.append(Part(f"ring-{depth}", "ring", rp, label, min(49, 30 + depth), r3(conf)))
     _finish_points(parts, labels, p, fr, pol, radii, win, head["label"] if head else -2, trims)
     if head is None:
         _base_star(parts, p, labels, fr, win, trims)
     return parts
+
+
+def pleat_texture(p: Prepared, member: np.ndarray, r0: float, r1: float) -> float:
+    """Pleat texture of a ring band between radii r0..r1 (px) of the colour `member`: on
+    PLEAT_ROWS circles over the middle of the band, the spread of the photo's brightness
+    around its PLEAT_WINDOW_DEG running median along the circle (folds every few degrees),
+    over its mean, on the colour's pixels outside PLEAT_SECTOR_DEG of the tails; the
+    median over the circles (0 when too little shows)."""
+    cx, cy, _ = p.head
+    pad = PLEAT_INSET * (r1 - r0)
+    rr = np.linspace(r0 + pad, r1 - pad, PLEAT_ROWS)
+    gray = p.rgb.astype(np.float32).mean(axis=2)
+    g = polar_sample(gray, cx, cy, rr, PLEAT_THETA, fill=np.nan)
+    on = polar_sample(member.astype(np.int8), cx, cy, rr, PLEAT_THETA, fill=0) > 0
+    th = np.degrees(np.linspace(0, 2 * np.pi, PLEAT_THETA, endpoint=False))
+    vis = np.abs(th - 90.0) > PLEAT_SECTOR_DEG
+    size = int(round(PLEAT_WINDOW_DEG / 360.0 * PLEAT_THETA)) | 1
+    out = []
+    for row, ok in zip(g, on):
+        sel = vis & ok & np.isfinite(row)
+        if sel.sum() < PLEAT_MIN_SAMPLES:
+            continue
+        x = np.where(np.isfinite(row), row, np.nanmean(row))
+        hp = x - ndimage.median_filter(x, size=size, mode="wrap")
+        out.append(float(np.std(hp[sel]) / max(float(np.mean(x[sel])), 1.0)))
+    return float(np.median(out)) if out else 0.0
 
 
 def _rings_by_dominance(found: list[list], dom: np.ndarray, domc: np.ndarray, fr: Frame,

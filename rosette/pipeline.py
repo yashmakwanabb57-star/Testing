@@ -36,6 +36,7 @@ from .roles import PAD_FRAC, render_categories
 from .tidy import drop_specks, drop_two_point_layers, merge_tail_slivers
 from .validate import Issue, validate
 from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_groups
+from .vision.layer_classify import classify_head_layers
 from .vision.parts import detect_parts
 from .vision.parts_common import Frame
 from .vision.prepare import Prepared, prepare
@@ -571,6 +572,9 @@ class PhotoContext:
     groups: list
     merged: dict[int, int]
     rules: RosetteModel
+    # The rule-based head before the learned classifier (ML-1): the layers a confirmed
+    # download is logged against (rosette.confirmed).
+    detected: RosetteModel | None = None
 
 
 def add_library_head(model: RosetteModel, tid: str, ctx: PhotoContext) -> RosetteModel:
@@ -642,10 +646,14 @@ class Detection:
     model: RosetteModel
     merged: dict[int, int]
     merged_print: list
+    rules_model: RosetteModel | None = None  # before the learned classifier (ML-1)
 
 
-def detect(data: bytes) -> Detection:
-    """prepare -> pixel_groups -> detect_parts -> tidy -> RosetteModel -> assign."""
+def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -> Detection:
+    """prepare -> pixel_groups -> detect_parts -> tidy -> RosetteModel -> assign -> the
+    learned layer classifier (ML-1; classify=False: the rules alone, as the classifier's
+    training data needs; exclude_key: the classifier trained without that design, for
+    leave-one-out evaluation only)."""
     p = prepare(data)
     merged_print: list = []
     labels, groups = pixel_groups(p, merged=merged_print)
@@ -660,7 +668,11 @@ def detect(data: bytes) -> Detection:
     assert [q.id for q in model.parts] == [q.id for q in out.parts]
     merged = {a.color_group: b.color_group for a, b in zip(model.parts, out.parts)
               if a.color_group != b.color_group}
-    return Detection(p, labels, groups, out, merged, merged_print)
+    # ML-1: the learned classifier's count, and its kind where it is sure (layer_classify)
+    rules_model = copy.deepcopy(out)
+    if classify:
+        out.warnings.extend(classify_head_layers(p, labels, out, merged, exclude_key=exclude_key))
+    return Detection(p, labels, groups, out, merged, merged_print, rules_model)
 
 
 def analyze_with_fit(data: bytes, template: bool = True,
@@ -674,9 +686,9 @@ def analyze_with_fit(data: bytes, template: bool = True,
 def analyze_with_context(data: bytes, template: bool = True,
                          exclude_key: str | None = None) -> tuple[RosetteModel, HeadFit | None, PhotoContext]:
     """analyze_with_fit, plus the PhotoContext add_library_head needs later."""
-    d = detect(data)
+    d = detect(data, exclude_key=exclude_key)
     p, labels, groups, out, merged, merged_print = d.prepared, d.labels, d.groups, d.model, d.merged, d.merged_print
-    ctx = PhotoContext(p, labels, groups, merged, copy.deepcopy(out))
+    ctx = PhotoContext(p, labels, groups, merged, copy.deepcopy(out), d.rules_model)
     used = {q.color_group for q in out.parts} | set(merged)
     lib = None
     if template:

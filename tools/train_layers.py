@@ -15,7 +15,6 @@ prediction the tests reproduce).
 """
 from __future__ import annotations
 
-import csv
 import hashlib
 import json
 import sys
@@ -28,23 +27,16 @@ if str(ROOT) not in sys.path:  # run as a script
 
 import numpy as np  # noqa: E402
 
-from rosette.layer_model import (CLASSES, COUNTS, MODEL_PATH, POINTS_CLASSES, LayerModel,  # noqa: E402
-                                 fit_count, fit_kind, rules_features, save, train)
+from rosette.layer_model import (CLASSES, CONFIRMED, COUNTS, DATASET, META, MODEL_PATH,  # noqa: E402
+                                 POINTS_CLASSES, LayerModel, as_features, fit_count, fit_kind, read_rows,
+                                 rules_features, save, train)
 
-DATASET = ROOT / "rosette" / "data" / "layers.csv"
-CONFIRMED = ROOT / "rosette" / "data" / "confirmed_layers.csv"
 CHECK = ROOT / "rosette" / "data" / "layer_model_check.json"
-META = ("photo", "part", "role", "rules", "rules_count", "label", "count", "iou", "source")
 # The model decides a layer when its probability is at or above the bar where its LOO
 # precision (right among the layers at or above the bar) reaches this share.
 GATE_PRECISION = 0.9
 # Fewest LOO layers above a candidate bar for its precision to count.
 GATE_MIN_LAYERS = 20
-
-
-def read_rows(path: Path) -> list[dict]:
-    with open(path, newline="", encoding="utf-8") as fh:
-        return list(csv.DictReader(fh))
 
 
 def feature_columns(rows: list[dict]) -> list[str]:
@@ -61,16 +53,6 @@ def data_hash(paths: list[Path]) -> str:
         if p.exists():
             h.update(p.read_bytes())
     return h.hexdigest()
-
-
-def as_features(rows: list[dict], cols: list[str]) -> list[dict]:
-    """Feature dicts: the measured columns plus the rules' reading (`rules_features`)."""
-    out = []
-    for r in rows:
-        f = {k: float(r[k]) for k in cols if k in r}
-        f.update(rules_features(r["rules"], r["role"], int(r["rules_count"])))
-        out.append(f)
-    return out
 
 
 def model_columns(cols: list[str], with_rules: bool) -> list[str]:
@@ -215,8 +197,12 @@ def main(argv: list[str]) -> int:
     m.train_hash = data_hash([DATASET, CONFIRMED])
     bar, prec, cov = gate([x["prob"] for x in res], [x["kind"] == r["label"] for x, r in zip(res, lab)])
     m.gate = bar
+    pts = [i for i, r in enumerate(lab) if r["label"] in POINTS_CLASSES and int(r["count"]) in COUNTS]
+    cbar, cprec, ccov = gate([res[i]["count_score"] for i in pts], [res[i]["count"] == int(lab[i]["count"]) for i in pts])
+    m.count_gate = cbar
+    print(f"count gate: score >= {cbar:.3f} -> LOO precision {cprec:.3f} on {ccov:.1%} of the points layers")
     m.info = dict(loo_layers=len(lab), loo_photos=len(set(r["photo"] for r in lab)), gate_precision=prec,
-                  gate_coverage=cov, confirmed_layers=len(labelled(extra)), with_rules=with_rules,
+                  gate_coverage=cov, confirmed_layers=len(labelled(extra)), with_rules=bool(with_rules),
                   loo_kind=float(acc[with_rules]))
     save(m)
     probe = feats[0]

@@ -76,6 +76,7 @@ class LayerModel:
     train_hash: str = ""
     gate: float = 1.01
     info: dict = field(default_factory=dict)
+    count_gate: float = 0.0
 
     def _x(self, rows: list[dict]) -> np.ndarray:
         return np.array([[float(r[k]) for k in self.features] for r in rows])
@@ -136,7 +137,48 @@ def save(model: LayerModel, path: Path = MODEL_PATH) -> None:
     joblib.dump(model, path, compress=3)
 
 
+DATASET = DATA / "layers.csv"
+CONFIRMED = DATA / "confirmed_layers.csv"
+META = ("photo", "part", "role", "rules", "rules_count", "label", "count", "iou", "source")
+
+
+def read_rows(path: Path) -> list[dict]:
+    import csv
+    with open(path, newline="", encoding="utf-8") as fh:
+        return list(csv.DictReader(fh))
+
+
+def as_features(rows: list[dict], cols: list[str]) -> list[dict]:
+    """Feature dicts of dataset rows: the measured columns plus the rules' reading."""
+    out = []
+    for r in rows:
+        f = {k: float(r[k]) for k in cols if k in r and k not in META}
+        f.update(rules_features(r["rules"], r["role"], int(r["rules_count"])))
+        out.append(f)
+    return out
+
+
 _CACHE: dict[str, LayerModel] = {}
+_WITHOUT: dict[str, LayerModel] = {}
+
+
+def model_without(exclude_key: str | None) -> LayerModel | None:
+    """The saved model, or with `exclude_key` (a design key, vision.templates.design_key) a
+    model of the same settings, bar and inputs trained without that design's photos: the
+    new-image evaluation (tools/score.py) must not let the classifier see the photo it
+    reads. Cached per key."""
+    base = load()
+    if base is None or exclude_key is None:
+        return base
+    if exclude_key not in _WITHOUT:
+        from rosette.vision.templates import design_key
+        rows = [r for path in (DATASET, CONFIRMED) if path.exists() for r in read_rows(path)
+                if r["label"] and design_key(r["photo"]) != exclude_key]
+        m = train(as_features(rows, base.features), [r["label"] for r in rows],
+                  [int(r["count"]) for r in rows], base.features)
+        m.gate, m.count_gate, m.train_hash = base.gate, base.count_gate, "without " + exclude_key
+        _WITHOUT[exclude_key] = m
+    return _WITHOUT[exclude_key]
 
 
 def load(path: Path = MODEL_PATH) -> LayerModel | None:
