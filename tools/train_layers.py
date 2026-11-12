@@ -3,19 +3,20 @@
 Usage: .venv/Scripts/python.exe tools/train_layers.py [--eval-only]
 
 Reads `rosette/data/layers.csv` (tools/build_layer_dataset.py), evaluates leave one
-PHOTO out (every layer of the held-out photo is predicted by a model trained on the other
-photos; never leave-one-layer-out, which would leak a photo's other layers) for the model
+DESIGN out (every layer of the held-out design's photos is predicted by a model trained on
+the other designs, as tools/score.py's new-image mode groups them; never leave-one-layer-out,
+which would leak a photo's other layers; confirmed downloads never enter it) for the model
 and, on the same labels, the rules (`rules`, `rules_count` columns: what the rule-based
 head drew), prints per-class accuracy, confusion matrices and count accuracy, derives
-the confidence bar (the lowest LOO probability from which the model is right on at least
-GATE_PRECISION of the layers it decides) and, unless --eval-only, trains on every
+the bars (the lowest held-out probability / count score from which the model is right on at
+least GATE_PRECISION of the layers the bar is applied to: ring and point-shape layers for the
+kind, non-trim points layers for the count) and, unless --eval-only, trains on every
 labelled layer and saves `rosette/data/layer_model.joblib` (with the training set's sha256,
 the bar and the LOO summary) and `rosette/data/layer_model_check.json` (one stored
 prediction the tests reproduce).
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import sys
 from collections import Counter
@@ -27,14 +28,17 @@ if str(ROOT) not in sys.path:  # run as a script
 
 import numpy as np  # noqa: E402
 
-from rosette.layer_model import (CLASSES, CONFIRMED, COUNTS, DATASET, META, MODEL_PATH,  # noqa: E402
+from rosette.layer_model import (CLASSES, CONFIRMED, COUNTS, DATASET, META, MODEL_PATH, data_hash,  # noqa: E402
                                  POINTS_CLASSES, LayerModel, as_features, fit_count, fit_kind, read_rows,
                                  rules_features, save, train)
+from rosette.vision.layer_classify import RING_CLASSES, SHAPE_CLASSES  # noqa: E402
 
 CHECK = ROOT / "rosette" / "data" / "layer_model_check.json"
 # The model decides a layer when its probability is at or above the bar where its LOO
 # precision (right among the layers at or above the bar) reaches this share.
 GATE_PRECISION = 0.9
+# Rules classes whose count the count scorer may replace (non-trim points layers).
+COUNT_RULES = ("loop", "kite", "petal", "star", "base_star")
 # Fewest LOO layers above a candidate bar for its precision to count.
 GATE_MIN_LAYERS = 20
 
@@ -47,12 +51,10 @@ def labelled(rows: list[dict]) -> list[dict]:
     return [r for r in rows if r["label"]]
 
 
-def data_hash(paths: list[Path]) -> str:
-    h = hashlib.sha256()
-    for p in paths:
-        if p.exists():
-            h.update(p.read_bytes())
-    return h.hexdigest()
+def held_out_rows(rows: list[dict]) -> list[dict]:
+    """The rows a held-out evaluation may use: labelled reference rows, never confirmed
+    downloads (their design is not always known)."""
+    return [r for r in labelled(rows) if r.get("source") != "confirmed"]
 
 
 def model_columns(cols: list[str], with_rules: bool) -> list[str]:
@@ -62,17 +64,18 @@ def model_columns(cols: list[str], with_rules: bool) -> list[str]:
 
 
 def loo(rows: list[dict], cols: list[str]) -> list[dict]:
-    """Per labelled row: the model's LOO kind, probability and count (trained without the
-    row's photo); `cols` are the kind model's inputs."""
+    """Per labelled row: the model's held-out kind, probability and count, trained without
+    every photo of the row's design (`design` column: the scoring's grouping, so a variant
+    such as S36-15B never teaches its S36-15 twin); `cols` are the kind model's inputs."""
     feats = as_features(rows, [c for c in cols if c in rows[0]])
     x = np.array([[f[k] for k in cols] for f in feats])
     y = [r["label"] for r in rows]
     counts = [int(r["count"]) for r in rows]
-    photos = [r["photo"] for r in rows]
+    groups = [r.get("design") or r["photo"] for r in rows]
     out = [dict() for _ in rows]
-    for ph in sorted(set(photos)):
-        test = [i for i, p in enumerate(photos) if p == ph]
-        tr = [i for i, p in enumerate(photos) if p != ph]
+    for g in sorted(set(groups)):
+        test = [i for i, d in enumerate(groups) if d == g]
+        tr = [i for i, d in enumerate(groups) if d != g]
         kind = fit_kind(x[tr], [y[i] for i in tr])
         ct = [i for i in tr if y[i] in POINTS_CLASSES and counts[i] in COUNTS]
         count = fit_count([feats[i] for i in ct], [counts[i] for i in ct])
@@ -81,6 +84,27 @@ def loo(rows: list[dict], cols: list[str]) -> list[dict]:
         for i, (k, p), (c, cp) in zip(test, m.predict_kind(tf), m.predict_count(tf)):
             out[i] = dict(kind=k, prob=p, count=c, count_score=cp)
     return out
+
+
+def kind_scope(rows: list[dict]) -> list[int]:
+    """Rows the kind bar is applied to: the rules read a plain or pinked ring or a point
+    shape (layer_classify.RING_CLASSES, SHAPE_CLASSES)."""
+    return [i for i, r in enumerate(rows) if r["rules"] in RING_CLASSES + SHAPE_CLASSES]
+
+
+def count_scope(rows: list[dict]) -> list[int]:
+    """Rows the count bar is applied to: non-trim points layers of the rules with a
+    labelled count."""
+    return [i for i, r in enumerate(rows) if r["rules"] in COUNT_RULES and r["label"] in POINTS_CLASSES
+            and int(r["count"]) in COUNTS]
+
+
+def bars(rows: list[dict], res: list[dict]) -> dict:
+    """The kind and count bars (`gate`) on their scopes, with precision and coverage."""
+    ks, cs = kind_scope(rows), count_scope(rows)
+    kb = gate([res[i]["prob"] for i in ks], [res[i]["kind"] == rows[i]["label"] for i in ks])
+    cb = gate([res[i]["count_score"] for i in cs], [res[i]["count"] == int(rows[i]["count"]) for i in cs])
+    return dict(kind=kb, count=cb, kind_n=len(ks), count_n=len(cs))
 
 
 def per_class(y: list[str], pred: list[str]) -> dict[str, tuple[int, int]]:
@@ -131,7 +155,8 @@ def report(rows: list[dict], res: list[dict]) -> list[str]:
     y = [r["label"] for r in rows]
     rk = [r["rules"] for r in rows]
     mk = [x["kind"] for x in res]
-    lines = [f"layers {len(rows)} on {len(set(r['photo'] for r in rows))} photos (leave one photo out)", ""]
+    lines = [f"layers {len(rows)} on {len(set(r['photo'] for r in rows))} photos, "
+             f"{len(set(r.get('design') or r['photo'] for r in rows))} designs (leave one design out)", ""]
     pr, pm = per_class(y, rk), per_class(y, mk)
     lines.append(f"{'class':12} {'n':>4} {'rules':>7} {'model':>7}")
     for c in CLASSES:
@@ -158,16 +183,21 @@ def report(rows: list[dict], res: list[dict]) -> list[str]:
                          f"{np.mean([int(rows[i]['rules_count']) == int(rows[i]['count']) for i in idx]):.3f} "
                          f"model {np.mean([res[i]['count'] == int(rows[i]['count']) for i in idx]):.3f}")
     lines += ["", "rules confusion:"] + confusion(y, rk) + ["", "model confusion:"] + confusion(y, mk)
-    bar, prec, cov = gate([x["prob"] for x in res], [a == b for a, b in zip(y, mk)])
-    lines += ["", f"gate: probability >= {bar:.3f} -> LOO precision {prec:.3f} on {cov:.1%} of the layers"]
-    above = [i for i, x in enumerate(res) if x["prob"] >= bar]
+    b = bars(rows, res)
+    (bar, prec, cov), (cbar, cprec, ccov) = b["kind"], b["count"]
+    lines += ["", f"kind bar (on the {b['kind_n']} ring / point-shape layers): probability >= {bar:.3f} -> "
+                  f"held-out precision {prec:.3f} on {cov:.1%} of them",
+              f"count bar (on the {b['count_n']} non-trim points layers): score >= {cbar:.3f} -> "
+              f"held-out precision {cprec:.3f} on {ccov:.1%} of them"]
+    ks = kind_scope(rows)
+    above = [i for i in ks if res[i]["prob"] >= bar]
     if above:
-        rules_there = np.mean([rk[i] == y[i] for i in above])
-        lines.append(f"  rules on those layers: {rules_there:.3f}; model and rules disagree on "
-                     f"{sum(mk[i] != rk[i] for i in above)} of them, model right on "
+        lines.append(f"  rules on the layers above the kind bar: {np.mean([rk[i] == y[i] for i in above]):.3f}; "
+                     f"model and rules disagree on {sum(mk[i] != rk[i] for i in above)}, model right on "
                      f"{sum(mk[i] != rk[i] and mk[i] == y[i] for i in above)}")
-    gated = [mk[i] if res[i]["prob"] >= bar else rk[i] for i in range(len(y))]
-    lines.append(f"  gated (model at or above the bar, else rules): kind {np.mean([a == b for a, b in zip(y, gated)]):.3f}")
+    gated = [mk[i] if i in set(above) else rk[i] for i in range(len(y))]
+    lines.append(f"  gated kind (model above the bar on its scope, else rules): "
+                 f"{np.mean([a == b for a, b in zip(y, gated)]):.3f}")
     return lines
 
 
@@ -175,7 +205,7 @@ def main(argv: list[str]) -> int:
     rows = read_rows(DATASET)
     extra = read_rows(CONFIRMED) if CONFIRMED.exists() else []
     cols = feature_columns(rows)
-    lab = labelled(rows)
+    lab = held_out_rows(rows)
     results = {}
     for with_rules in (False, True):
         mc = model_columns(cols, with_rules)
@@ -194,22 +224,20 @@ def main(argv: list[str]) -> int:
     allrows = lab + labelled(extra)
     feats = as_features(allrows, cols)
     m = train(feats, [r["label"] for r in allrows], [int(r["count"]) for r in allrows], mc)
-    m.train_hash = data_hash([DATASET, CONFIRMED])
-    bar, prec, cov = gate([x["prob"] for x in res], [x["kind"] == r["label"] for x, r in zip(res, lab)])
-    m.gate = bar
-    pts = [i for i, r in enumerate(lab) if r["label"] in POINTS_CLASSES and int(r["count"]) in COUNTS]
-    cbar, cprec, ccov = gate([res[i]["count_score"] for i in pts], [res[i]["count"] == int(lab[i]["count"]) for i in pts])
-    m.count_gate = cbar
-    print(f"count gate: score >= {cbar:.3f} -> LOO precision {cprec:.3f} on {ccov:.1%} of the points layers")
-    m.info = dict(loo_layers=len(lab), loo_photos=len(set(r["photo"] for r in lab)), gate_precision=prec,
-                  gate_coverage=cov, confirmed_layers=len(labelled(extra)), with_rules=bool(with_rules),
-                  loo_kind=float(acc[with_rules]))
+    m.train_hash = data_hash()
+    b = bars(lab, res)
+    (bar, prec, cov), (cbar, cprec, ccov) = b["kind"], b["count"]
+    m.gate, m.count_gate = bar, cbar
+    m.info = dict(loo_layers=len(lab), loo_designs=len(set(r["design"] for r in lab)), gate_precision=prec,
+                  gate_coverage=cov, count_gate_precision=cprec, count_gate_coverage=ccov,
+                  confirmed_layers=len(labelled(extra)), with_rules=bool(with_rules), loo_kind=float(acc[with_rules]))
     save(m)
     probe = feats[0]
     (k, p), (c, cs) = m.predict_kind([probe])[0], m.predict_count([probe])[0]
     CHECK.write_bytes((json.dumps(dict(features=probe, kind=k, prob=p, count=c, count_score=cs,
                                        train_hash=m.train_hash), indent=1) + chr(10)).encode("utf-8"))
-    print(f"saved {MODEL_PATH.relative_to(ROOT)} (train hash {m.train_hash[:12]}, gate {bar:.3f})")
+    print(f"saved {MODEL_PATH.relative_to(ROOT)} (train hash {m.train_hash[:12]}, kind bar {bar:.3f}, "
+          f"count bar {cbar:.3f})")
     return 0
 
 

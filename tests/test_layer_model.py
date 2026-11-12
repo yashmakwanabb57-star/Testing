@@ -91,4 +91,38 @@ def test_saved_model_was_trained_on_the_dataset():
     if tl.CONFIRMED.exists():
         pytest.skip("local confirmed layers: retrain with tools/train_layers.py")
     m = lm.load(DATA / "layer_model.joblib")
-    assert m.train_hash == tl.data_hash([tl.DATASET, tl.CONFIRMED])
+    assert m.train_hash == lm.data_hash()
+
+
+def test_bars_are_measured_on_the_layers_they_apply_to():
+    rows = [dict(rules="loop", label="loop", count="6"), dict(rules="center", label="center", count="0"),
+            dict(rules="pinked_ring", label="ring", count="0"), dict(rules="edge", label="edge", count="6")]
+    assert tl.kind_scope(rows) == [0, 2, 3]  # the center is never changed by the kind model
+    assert tl.count_scope(rows) == [0]  # trims follow their host's count
+
+
+def test_held_out_rows_leave_confirmed_downloads_out():
+    rows = [dict(label="loop", source="ref"), dict(label="loop", source="confirmed"), dict(label="", source="ref")]
+    assert tl.held_out_rows(rows) == [rows[0]]
+
+
+def test_held_out_evaluation_groups_by_design(monkeypatch):
+    seen = []
+    monkeypatch.setattr(tl, "fit_kind", lambda x, y: seen.append(len(y)) or None)
+    monkeypatch.setattr(tl, "fit_count", lambda f, c: None)
+
+    class M:
+        def __init__(self, **k):
+            pass
+
+        def predict_kind(self, rows):
+            return [("loop", 1.0)] * len(rows)
+
+        def predict_count(self, rows):
+            return [(6, 1.0)] * len(rows)
+
+    monkeypatch.setattr(tl, "LayerModel", M)
+    rows = [dict(photo=p, design=d, rules="loop", role="points", rules_count="6", label="loop", count="6", a="0")
+            for p, d in (("S36-15", "S36"), ("S36-15B", "S36"), ("S1-15", "S1"))]
+    tl.loo(rows, ["a"])
+    assert sorted(seen) == [1, 2]  # S36 held out with both its photos

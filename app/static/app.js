@@ -7,6 +7,7 @@ import {
   MAX_COUNT, POINT_KINDS, errorText, hex, flagItems,
   downloadBlockers as blockersFor, groupColor, tailGroups, parseValue, tailCheckKey, sourceNotice,
   convertBlocker, resetForFile, checklistItems, paramShown, automaticHeadText, renderBody, templateText, usesGroup,
+  confirmBody,
 } from './logic.js';
 
 export { errorText, flagItems, parseValue, tailGroups, hex };
@@ -145,11 +146,11 @@ export const api = {
     form.append('file', file, file.name);
     return request('/api/analyze', { method: 'POST', body: form });
   },
-  confirm(model) {
+  confirm(body) {
     return request('/api/confirm', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model }),
+      body,
     });
   },
   render(model, head) {
@@ -418,7 +419,8 @@ export const actions = {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     // ML-1: the confirmed head layers become local training rows (setting on by default)
     const learn = document.getElementById('learn-toggle');
-    if (learn && learn.checked && state.model) api.confirm(state.model).catch(() => {});
+    const body = confirmBody(Boolean(learn && learn.checked), state.model, state.filename);
+    if (body) api.confirm(body).catch(() => {});
   },
 };
 

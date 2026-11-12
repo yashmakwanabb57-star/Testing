@@ -37,7 +37,8 @@ def test_downloaded_model_labels_the_detected_layers(tmp_path):
     final = copy.deepcopy(model)
     final.parts = [q for q in final.parts if q.id != "ring-0"]  # the user deleted the ring
     final.parts[0].params["kind"] = "bow"  # and drew the points as loops
-    recs = confirmed.confirmed_records(ctx, final)
+    recs = confirmed.confirmed_records(ctx, final, "S46-15B kopi.svg")
+    assert {r["design"] for r in recs} == {"S46"}
     got = {r["part"]: (r["rules"], r["label"], r["count"]) for r in recs}
     assert got == {"ring-0": ("ring", "none", 0), "points-0": ("kite", "loop", 6)}
     path = tmp_path / "confirmed.csv"
@@ -66,3 +67,70 @@ def test_api_confirm_without_the_photo_logs_nothing():
     r = client.post("/api/confirm", json={"model": RosetteModel().to_json()})
     assert r.status_code == 200 and r.json() == {"logged": 0}
     assert client.post("/api/confirm", json={"model": {"parts": [{"bad": 1}]}}).status_code == 422
+
+
+def test_design_of_the_download_name():
+    assert confirmed.design_of("s46-15.svg") == "S46"
+    assert confirmed.design_of("C:/x/S11a-15 kopi.svg") == "S11"
+    assert confirmed.design_of("rosette.svg") == ""
+    ctx, model = _ctx()
+    recs = confirmed.confirmed_records(ctx, model)
+    assert recs[0]["design"] == recs[0]["photo"]  # unknown design: the photo id
+
+
+def test_api_confirm_rejects_malformed_parts_without_a_crash(tmp_path, monkeypatch):
+    from app.main import photos
+    monkeypatch.setattr(confirmed, "CONFIRMED_PATH", tmp_path / "confirmed.csv")
+    ctx, model = _ctx()
+    bad = copy.deepcopy(model)
+    twin = copy.deepcopy(bad.parts[1])
+    twin.id, twin.color_group = "points-1", 1
+    bad.parts[1].params["rotation_deg"] = "ten"  # not a number, and another layer to compare it with
+    bad.parts.append(twin)
+    bad.photo_token = photos.put(ctx)
+    r = TestClient(app).post("/api/confirm", json={"model": bad.to_json(), "filename": "s1-15.svg"})
+    assert r.status_code == 422
+
+
+def test_held_out_models_never_see_confirmed_rows_or_the_design(tmp_path, monkeypatch):
+    from rosette import layer_model as lm
+    header = next(csv.reader(open(tl.DATASET, encoding="utf-8")))
+    feats = [k for k in header if k not in lm.META]
+    rows = []
+    for photo, design, source in (("S1-15", "S1", "ref"), ("S2-15", "S2", "ref"), ("confirmed-ab", "S2", "confirmed"),
+                                  ("S2-15B", "S2", "ref")):
+        r = dict.fromkeys(header, "0")
+        r.update(photo=photo, design=design, part="points-0", role="points", rules="loop", rules_count="6",
+                 label="loop", count="6", iou="1", source=source)
+        rows.append(r)
+    data = tmp_path / "layers.csv"
+    with open(data, "w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=header, lineterminator=chr(10))
+        w.writeheader()
+        w.writerows(rows)
+    seen = []
+
+    class Base:
+        features = feats
+        gate, count_gate = 0.6, 0.8
+
+    def fake_train(fs, labels, counts, cols):
+        seen.append(len(labels))
+        return lm.LayerModel(kind=None, count=None, features=cols)
+
+    monkeypatch.setattr(lm, "DATASET", data)
+    monkeypatch.setattr(lm, "load", lambda path=None: Base())
+    monkeypatch.setattr(lm, "train", fake_train)
+    monkeypatch.setattr(lm, "_WITHOUT", {})
+    assert lm.model_without("S2").train_hash == "without S2"
+    assert seen == [1]  # S1-15 only: S2-15, S2-15B (the design) and the confirmed row left out
+
+
+def test_api_confirm_writes_rows_for_a_known_photo(tmp_path, monkeypatch):
+    from app.main import photos
+    monkeypatch.setattr(confirmed, "CONFIRMED_PATH", tmp_path / "confirmed.csv")
+    ctx, model = _ctx()
+    model.photo_token = photos.put(ctx)
+    r = TestClient(app).post("/api/confirm", json={"model": model.to_json(), "filename": "s1-15.svg"})
+    assert r.status_code == 200 and r.json() == {"logged": 2}
+    assert (tmp_path / "confirmed.csv").exists()

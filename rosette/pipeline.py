@@ -39,6 +39,7 @@ from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_group
 from .vision.layer_classify import classify_head_layers
 from .vision.parts import detect_parts
 from .vision.parts_common import Frame
+from .vision.parts_head import pleat_warnings
 from .vision.prepare import Prepared, prepare
 from .vision.templates import (Pose, describe, load_library, photo_grid, rank, relabel_map, score_template,
                                template_by_id)
@@ -661,6 +662,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     tidy = merge_tail_slivers(drop_two_point_layers(drop_specks(RosetteModel(parts=detect_parts(p, labels, groups)),
                                                                 head_r=Frame.of(p).d(p.head[2]))))
     parts = tidy.parts
+    tidy.warnings.extend(pleat_warnings(parts, p, labels))  # ML-1: rings near the pleat bar
     used = {q.color_group for q in parts}
     model = RosetteModel(parts=parts, groups=[g for g in groups if g.id in used],
                          rose=any(q.role == "center" for q in parts), warnings=tidy.warnings)

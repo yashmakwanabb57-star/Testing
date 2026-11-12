@@ -51,6 +51,7 @@ class RenderRequest(BaseModel):
 
 class ConfirmRequest(BaseModel):
     model: Any
+    filename: str = ""  # the download name: its design key labels the rows (rosette.confirmed)
 
 
 class PhotoCache:
@@ -155,7 +156,12 @@ def api_confirm(req: ConfirmRequest) -> dict:
     if ctx is None:
         return {"logged": 0}
     try:
-        n = confirmed.append_confirmed(confirmed.confirmed_records(ctx, model))
+        records = confirmed.confirmed_records(ctx, model, req.filename)
+    except Exception:
+        log.exception("confirm failed for submitted model")
+        raise HTTPException(422, INVALID_MODEL) from None
+    try:
+        n = confirmed.append_confirmed(records)
     except OSError:
         log.exception("could not write the confirmed layers")
         n = 0

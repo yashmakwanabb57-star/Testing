@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  HEAD_CHECK, LOOP_BASE, SOURCE_NOT_READY, checklistItems, paramShown, convertBlocker, headFitText, downloadBlockers, errorText, flagItems, parseValue, resetForFile, sourceNotice,
+  HEAD_CHECK, LOOP_BASE, SOURCE_NOT_READY, checklistItems, confirmBody, paramShown, convertBlocker, headFitText, downloadBlockers, errorText, flagItems, parseValue, resetForFile, sourceNotice,
 } from '../../app/static/logic.js';
 import { applyConfig } from '../../app/static/simulator.js';
 
@@ -343,4 +343,17 @@ test('a bow without inner_ratio shows the base width the geometry draws', () => 
   assert.equal(paramShown(bow, 'inner_ratio'), 0.85);
   assert.equal(paramShown({ ...bow, inner_ratio: 0.7 }, 'inner_ratio'), 0.7);
   assert.equal(paramShown(bow, 'width_ratio'), 0.5);
+});
+
+// ------------------------------------------------------------ learn from downloads (ML-1)
+
+test('with the learn setting off a download posts nothing', () => {
+  assert.equal(confirmBody(false, model(), 's46-15.svg'), null);
+  assert.equal(confirmBody(true, null, 's46-15.svg'), null);
+});
+
+test('with the learn setting on the download posts the model and its name', () => {
+  const body = JSON.parse(confirmBody(true, model(), 's46-15.svg'));
+  assert.equal(body.filename, 's46-15.svg');
+  assert.deepEqual(body.model, model());
 });

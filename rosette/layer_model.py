@@ -15,6 +15,7 @@ Runs locally on the features of `rosette.vision.layer_features`; no network.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -99,11 +100,19 @@ class LayerModel:
         return out
 
 
+def _fit(clf, x, y):
+    """clf.fit without scikit-learn's joblib-config notice (raised once per parallel tree)."""
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*sklearn.utils.parallel.delayed.*")
+        clf.fit(x, y)
+
+
 def fit_kind(x: np.ndarray, y: list[str]):
     from sklearn.ensemble import RandomForestClassifier
     clf = RandomForestClassifier(n_estimators=KIND_TREES, class_weight="balanced_subsample",
                                  min_samples_leaf=1, random_state=SEED, n_jobs=-1)
-    clf.fit(x, y)
+    _fit(clf, x, y)
     clf.n_jobs = 1  # one layer at a time at run time: no worker start-up
     return clf
 
@@ -117,7 +126,7 @@ def fit_count(rows: list[dict], counts: list[int]):
         ys += [int(n == c) for n in COUNTS]
     clf = RandomForestClassifier(n_estimators=COUNT_TREES, class_weight="balanced_subsample",
                                  min_samples_leaf=2, random_state=SEED, n_jobs=-1)
-    clf.fit(np.vstack(xs), ys)
+    _fit(clf, np.vstack(xs), ys)
     clf.n_jobs = 1
     return clf
 
@@ -139,7 +148,9 @@ def save(model: LayerModel, path: Path = MODEL_PATH) -> None:
 
 DATASET = DATA / "layers.csv"
 CONFIRMED = DATA / "confirmed_layers.csv"
-META = ("photo", "part", "role", "rules", "rules_count", "label", "count", "iou", "source")
+# Row columns that are not features; `design` is the design key (vision.templates.design_key) of the
+# photo when known, else the photo id.
+META = ("photo", "design", "part", "role", "rules", "rules_count", "label", "count", "iou", "source")
 
 
 def read_rows(path: Path) -> list[dict]:
@@ -158,35 +169,80 @@ def as_features(rows: list[dict], cols: list[str]) -> list[dict]:
     return out
 
 
-_CACHE: dict[str, LayerModel] = {}
-_WITHOUT: dict[str, LayerModel] = {}
+_CACHE: dict[str, LayerModel | None] = {}
+_WITHOUT: dict[str, LayerModel | None] = {}
+_FAILED: set[str] = set()  # model files that could not be loaded (logged once)
+UNAVAILABLE_WARNING = "Layer classifier unavailable - rules only."
+log = logging.getLogger("rosette.layer_model")
+
+
+def load_failed(path: Path = MODEL_PATH) -> bool:
+    """True when the model file exists but could not be loaded (`load` returned None)."""
+    return str(path) in _FAILED
 
 
 def model_without(exclude_key: str | None) -> LayerModel | None:
     """The saved model, or with `exclude_key` (a design key, vision.templates.design_key) a
-    model of the same settings, bar and inputs trained without that design's photos: the
-    new-image evaluation (tools/score.py) must not let the classifier see the photo it
-    reads. Cached per key."""
+    model of the same settings, bars and inputs trained on the reference dataset alone
+    without that design's photos: the held-out evaluation (tools/score.py) must not let the
+    classifier see the photo it reads, and confirmed downloads (whose design is not always
+    known) never enter it. Cached per key; None when the saved model is unavailable or the
+    training fails."""
     base = load()
     if base is None or exclude_key is None:
         return base
     if exclude_key not in _WITHOUT:
-        from rosette.vision.templates import design_key
-        rows = [r for path in (DATASET, CONFIRMED) if path.exists() for r in read_rows(path)
-                if r["label"] and design_key(r["photo"]) != exclude_key]
-        m = train(as_features(rows, base.features), [r["label"] for r in rows],
-                  [int(r["count"]) for r in rows], base.features)
-        m.gate, m.count_gate, m.train_hash = base.gate, base.count_gate, "without " + exclude_key
+        try:
+            from rosette.vision.templates import design_key
+            rows = [r for r in read_rows(DATASET)
+                    if r["label"] and r.get("source") != "confirmed"
+                    and (r.get("design") or design_key(r["photo"])) != exclude_key]
+            m = train(as_features(rows, base.features), [r["label"] for r in rows],
+                      [int(r["count"]) for r in rows], base.features)
+            m.gate, m.count_gate, m.train_hash = base.gate, base.count_gate, "without " + exclude_key
+        except Exception:
+            log.exception("layer classifier: training without %s failed - rules only", exclude_key)
+            m = None
         _WITHOUT[exclude_key] = m
     return _WITHOUT[exclude_key]
 
 
 def load(path: Path = MODEL_PATH) -> LayerModel | None:
-    """The saved model, or None when there is none (the rules then decide alone)."""
+    """The saved model, or None when there is none or it cannot be used (a corrupt or
+    unpicklable file, another scikit-learn version, not a LayerModel): the rules then
+    decide alone; a failure is logged once and `load_failed` reports it. A model whose
+    training-set hash differs from the data files is used, with a logged warning
+    (retrain with tools/train_layers.py)."""
     key = str(path)
     if key not in _CACHE:
         if not path.exists():
             return None
-        import joblib
-        _CACHE[key] = joblib.load(path)
+        try:
+            import warnings
+
+            import joblib
+            from sklearn.exceptions import InconsistentVersionWarning
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", InconsistentVersionWarning)
+                m = joblib.load(path)
+            if not isinstance(m, LayerModel):
+                raise TypeError(f"not a LayerModel: {type(m).__name__}")
+        except Exception:
+            log.exception("layer classifier %s could not be loaded - rules only", path)
+            _FAILED.add(key)
+            m = None
+        if m is not None and path == MODEL_PATH and m.train_hash != data_hash():
+            log.warning("layer classifier was trained on other data than %s - retrain with tools/train_layers.py",
+                        DATASET.name)
+        _CACHE[key] = m
     return _CACHE[key]
+
+
+def data_hash(paths: tuple[Path, ...] = (DATASET, CONFIRMED)) -> str:
+    """sha256 over the training files that exist (the model's train_hash)."""
+    import hashlib
+    h = hashlib.sha256()
+    for f in paths:
+        if f.exists():
+            h.update(f.read_bytes())
+    return h.hexdigest()

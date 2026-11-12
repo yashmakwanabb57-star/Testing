@@ -36,7 +36,8 @@ import numpy as np  # noqa: E402
 from scipy import ndimage  # noqa: E402
 from shapely import contains_xy  # noqa: E402
 
-from rosette.layer_model import CLASSES, POINTS_CLASSES, rules_features  # noqa: E402
+from rosette.layer_model import CLASSES, POINTS_CLASSES, rules_features  # noqa: E402,F401
+from rosette.vision.templates import design_key  # noqa: E402
 from rosette.roles import category, circular_runs, classify_masks, drawn_frame, element_masks, polar_mask  # noqa: E402
 from rosette.vision.layer_classify import UNKNOWN_IN, head_layer_rows, rules_class, rules_count  # noqa: E402,F401
 from rosette.vision.layer_features import COUNTS, symmetry_scores  # noqa: E402
@@ -367,13 +368,12 @@ def photo_ids() -> list[str]:
 
 
 RULES_KEYS = set(rules_features("none", "points", 0))
-META = ("photo", "part", "role", "rules", "rules_count", "label", "count", "iou", "source")
 
 
 def to_records(sid: str, rows: list[dict]) -> list[dict]:
     out = []
     for r in rows:
-        rec = dict(photo=sid, part=r["part"].id, role=r["part"].role, rules=r["rules"],
+        rec = dict(photo=sid, design=design_key(sid), part=r["part"].id, role=r["part"].role, rules=r["rules"],
                    rules_count=r["rules_count"], label=r["label"], count=r["count"],
                    iou=round(float(r["iou"]), 4), source=r["source"])
         rec.update({k: round(float(v), 6) for k, v in r["features"].items() if k not in RULES_KEYS})

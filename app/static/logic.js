@@ -329,3 +329,10 @@ export function canJump(from, to, s, reached) {
   for (let k = from; k < to; k++) if (!canAdvance(k, s)) return false;
   return true;
 }
+
+// ML-1: the body of the /api/confirm post made after a download, or null when the
+// "Learn from my downloads" setting is off (nothing is posted) or there is no model.
+export function confirmBody(learnOn, model, filename) {
+  if (!learnOn || !model) return null;
+  return JSON.stringify({ model, filename: filename || '' });
+}

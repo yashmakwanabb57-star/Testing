@@ -121,3 +121,59 @@ def test_count_below_its_bar_is_flagged_not_made():
 def test_no_saved_model_changes_nothing(monkeypatch):
     monkeypatch.setattr(lc, "model_without", lambda key: None)
     assert lc.classify_head_layers(None, None, None, {}) == []
+
+
+def test_a_corrupt_model_file_means_rules_only(tmp_path, monkeypatch):
+    from rosette import layer_model as lm
+    bad = tmp_path / "layer_model.joblib"
+    bad.write_bytes(b"not a model at all")
+    assert lm.load(bad) is None and lm.load_failed(bad)
+    monkeypatch.setattr(lc, "model_without", lambda key: lm.load(bad))
+    monkeypatch.setattr(lc, "load_failed", lambda: lm.load_failed(bad))
+    loops = _pts("points-0", "bow", n=4, g=1)
+    model = type("M", (), {"parts": [loops], "groups": []})()
+    assert lc.classify_head_layers(None, None, model, {}) == [lc.UNAVAILABLE_WARNING]
+    assert loops.params["count"] == 4
+
+
+def test_a_failing_classifier_leaves_the_rules_reading(monkeypatch):
+    loops = _pts("points-0", "bow", n=4, g=1)
+    model = type("M", (), {"parts": [loops], "groups": []})()
+
+    def boom(*a):
+        loops.params["count"] = 99  # a half-applied change
+        raise ValueError("feature mismatch")
+
+    monkeypatch.setattr(lc, "_classify", boom)
+    assert lc.classify_head_layers(None, None, model, {}, lm=_Stub()) == [lc.UNAVAILABLE_WARNING]
+    assert loops.params["count"] == 4
+    assert lc.UNAVAILABLE_WARNING == "Layer classifier unavailable - rules only."
+
+
+def _ring_photo(amplitude):
+    h = w = 400
+    c = 200.0
+    yy, xx = np.mgrid[:h, :w]
+    d, t = np.hypot(xx - c, yy - c), np.arctan2(yy - c, xx - c)
+    gray = np.full((h, w), 200.0)
+    band = (d >= 80) & (d <= 120)
+    gray[band] = 180 + amplitude * np.cos(60 * t[band])
+    rgb = np.repeat(gray[..., None], 3, axis=2).astype(np.uint8)
+    p = Prepared(rgb=rgb, mask=d <= 150, axis_x=c, head=(c, c, 150.0), tails_top_y=350, bottom_y=399, scale=1.0)
+    labels = np.where(band, 1, 0)
+    ring = Part("ring-0", "ring", dict(cx=300, cy=175, r_inner=80, r_outer=120, pinked=1), 1, 30, 0.9)
+    return p, labels, ring
+
+
+def test_rings_near_the_pleat_bar_are_flagged():
+    from rosette.vision.parts_head import PLEAT_UNSURE, PLEAT_WARNING, pleat_warnings
+    p, labels, ring = _ring_photo(10.0)  # texture about 0.04: inside the band
+    t = pleat_texture(p, labels == 1, 80, 120)
+    assert PLEAT_UNSURE[0] <= t < PLEAT_UNSURE[1]
+    assert pleat_warnings([ring], p, labels) == [PLEAT_WARNING]
+    p, labels, ring = _ring_photo(40.0)  # clearly pleated
+    assert pleat_warnings([ring], p, labels) == []
+    p, labels, ring = _ring_photo(10.0)
+    ring.params["pleats"] = 24  # an H11 pleated edge: read from its teeth, not checked
+    assert pleat_warnings([ring], p, labels) == []
+    assert "—" not in PLEAT_WARNING and "-" in PLEAT_WARNING

@@ -55,6 +55,11 @@ from rosette.vision.prepare import Prepared
 # median over PLEAT_WINDOW_DEG, outside PLEAT_SECTOR_DEG of the tails, PLEAT_MIN_SAMPLES on
 # the colour per circle.
 PLEAT_TEXTURE = 0.035
+# The bar rests on one smooth ring (0.020) and the lowest pleated one (0.053): a ring whose
+# texture lies in PLEAT_UNSURE is drawn by the bar but flagged with PLEAT_WARNING
+# (`pleat_warnings`); none of the 38 labelled rings falls inside it.
+PLEAT_UNSURE = (0.03, 0.05)
+PLEAT_WARNING = "The ring's pleating is uncertain - check the ring edge against the photo."
 PLEAT_ROWS, PLEAT_INSET, PLEAT_THETA, PLEAT_WINDOW_DEG, PLEAT_SECTOR_DEG, PLEAT_MIN_SAMPLES = 8, 0.2, 1440, 10.0, 45.0, 100
 # Radial sampling step (canvas units) and angular samples per circle.
 RADIAL_STEP_UNITS = 1.0
@@ -631,13 +636,14 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
     return parts
 
 
-def pleat_texture(p: Prepared, member: np.ndarray, r0: float, r1: float) -> float:
+def pleat_texture(p: Prepared, member: np.ndarray, r0: float, r1: float,
+                  center: tuple[float, float] | None = None) -> float:
     """Pleat texture of a ring band between radii r0..r1 (px) of the colour `member`: on
     PLEAT_ROWS circles over the middle of the band, the spread of the photo's brightness
     around its PLEAT_WINDOW_DEG running median along the circle (folds every few degrees),
     over its mean, on the colour's pixels outside PLEAT_SECTOR_DEG of the tails; the
-    median over the circles (0 when too little shows)."""
-    cx, cy, _ = p.head
+    median over the circles (0 when too little shows). `center` (px): default the head's."""
+    cx, cy = center if center is not None else p.head[:2]
     pad = PLEAT_INSET * (r1 - r0)
     rr = np.linspace(r0 + pad, r1 - pad, PLEAT_ROWS)
     gray = p.rgb.astype(np.float32).mean(axis=2)
@@ -655,6 +661,24 @@ def pleat_texture(p: Prepared, member: np.ndarray, r0: float, r1: float) -> floa
         hp = x - ndimage.median_filter(x, size=size, mode="wrap")
         out.append(float(np.std(hp[sel]) / max(float(np.mean(x[sel])), 1.0)))
     return float(np.median(out)) if out else 0.0
+
+
+def pleat_warnings(parts: list[Part], p: Prepared, labels: np.ndarray) -> list[str]:
+    """PLEAT_WARNING for every ring drawn by the pleat-texture rule whose texture lies in
+    PLEAT_UNSURE (the bar rests on few rings; see PLEAT_TEXTURE). H11 pleated edges
+    (rings with a pleat count) are read from their teeth and are not checked."""
+    fr = Frame.of(p)
+    out = []
+    for q in parts:
+        a = q.params
+        if q.role != "ring" or a.get("pleats"):
+            continue
+        center = (fr.axis_x + (float(a["cx"]) - 300.0) * fr.scale, fr.py(float(a["cy"])))
+        t = pleat_texture(p, labels == q.color_group, float(a["r_inner"]) * fr.scale,
+                          float(a["r_outer"]) * fr.scale, center)
+        if PLEAT_UNSURE[0] <= t < PLEAT_UNSURE[1]:
+            out.append(PLEAT_WARNING)
+    return out[:1]
 
 
 def _rings_by_dominance(found: list[list], dom: np.ndarray, domc: np.ndarray, fr: Frame,

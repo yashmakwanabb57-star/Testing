@@ -24,15 +24,18 @@ Without a saved model (`rosette.layer_model.load` -> None) nothing changes.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import numpy as np
 
-from rosette.layer_model import POINTS_CLASSES, LayerModel, model_without, rules_features
+from rosette.layer_model import (POINTS_CLASSES, UNAVAILABLE_WARNING, LayerModel, load_failed, model_without,
+                                 rules_features)
 from rosette.vision.layer_features import layer_features
 from rosette.vision.parts_common import Frame, polar_sample, r3
 from rosette.vision.parts_head import RING_THETA, TAIL_SECTOR_DEG
 
+log = logging.getLogger("rosette.layer_classify")
 # Unknown parts count as head layers when their center lies within this many head radii.
 UNKNOWN_IN = 1.05
 # Radial step of the polar unwrap (canvas units; parts_head.RADIAL_STEP_UNITS).
@@ -255,10 +258,27 @@ def classify_head_layers(p, labels: np.ndarray, model, merged: dict[int, int],
                          lm: LayerModel | None = None, exclude_key: str | None = None) -> list[str]:
     """Applies the given layer model, else the saved one (trained without the design
     `exclude_key` when given: evaluation only), to the model's head layers in place;
-    returns the warnings to add. No model: no change."""
-    lm = lm if lm is not None else model_without(exclude_key)
+    returns the warnings to add. No model file: no change. A model that cannot be loaded
+    or fails: no change and UNAVAILABLE_WARNING (the rules decide alone)."""
     if lm is None:
-        return []
+        try:
+            lm = model_without(exclude_key)
+        except Exception:  # never let the classifier stop a conversion
+            log.exception("layer classifier failed - rules only")
+            return [UNAVAILABLE_WARNING]
+        if lm is None:
+            return [UNAVAILABLE_WARNING] if load_failed() else []
+    saved = [(q, dict(q.params)) for q in model.parts]
+    try:
+        return _classify(p, labels, model, merged, lm)
+    except Exception:
+        log.exception("layer classifier failed - rules only")
+        for q, params in saved:  # the rules' reading, untouched
+            q.params = params
+        return [UNAVAILABLE_WARNING]
+
+
+def _classify(p, labels: np.ndarray, model, merged: dict[int, int], lm: LayerModel) -> list[str]:
     rows, u = head_layer_rows(p, labels, model, merged)
     if not rows:
         return []
