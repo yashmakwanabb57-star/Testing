@@ -7,7 +7,7 @@ from shapely import LineString, Polygon, make_valid, set_precision, unary_union
 from shapely.affinity import affine_transform
 
 from .geometry import disc, outlines, pinked_circle, pinked_ring, place_rose, points_ring, ring, tails
-from .geometry.clip import SIMPLIFY, clip_occluded, from_geom, to_geom
+from .geometry.clip import SIMPLIFY, clip_visible, from_geom, to_geom, xor_all
 from .model import Part, RosetteModel
 from .shapes import Shape
 from .vision.templates import template_by_id
@@ -104,10 +104,7 @@ def template_pieces(part: Part) -> list[tuple[Shape, int]]:
     for i, pc in enumerate(pieces):
         if keys[i] in keys[i + 1:]:
             continue
-        geom = None
-        for ring_ in pc.rings:
-            poly = Polygon(ring_).buffer(0)
-            geom = poly if geom is None else geom.symmetric_difference(poly)
+        geom = xor_all([Polygon(ring_).buffer(0) for ring_ in pc.rings])
         if geom is None:
             continue
         shape = from_geom(affine_transform(geom, m), Shape("polygon", {}, None, role=pc.role, z=TEMPLATE_Z + i))
@@ -145,7 +142,7 @@ def _rose_center(model: RosetteModel) -> tuple[float, float, float, int] | None:
 
 def build(model: RosetteModel) -> list[Shape]:
     pairs = color_shapes(model)
-    colors = clip_occluded([s for s, _ in pairs])  # Color 1 is painted first whatever the stacking
+    colors = clip_visible([s for s, _ in pairs])  # visible pieces, whatever the Colors (H14)
     result = list(colors)
     result += outlines(colors)
 

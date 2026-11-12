@@ -56,8 +56,10 @@ def test_asymmetric_diverging_ribbons_become_a_fan():
     assert len(fills) == 3
     from shapely import Polygon, unary_union
     from rosette.geometry.clip import to_geom
-    union = unary_union([to_geom(s) for s in fills])
-    assert isinstance(union, Polygon) and not union.interiors  # tails meet, no gap between them
+    # tails meet, no gap between them (H14: they are visible pieces that abut, so they are
+    # merged within 0.01 units)
+    union = unary_union([to_geom(s).buffer(0.01) for s in fills])
+    assert isinstance(union, Polygon) and not union.interiors
     bottoms = [max(float(v.split(",")[1]) for v in s.attrs["points"].split()) for s in fills]
     assert bottoms == [pytest.approx(bottoms[0])] * 3  # every tail ends on the same pinked line
     assert validate(write_svg(shapes)) == []

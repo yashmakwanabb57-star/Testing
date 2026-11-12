@@ -87,24 +87,25 @@ def test_color1_part_above_other_colors_stays_visible():
     assert validate(write_svg(build(m))) == []
 
 
-def test_clip_only_by_strictly_higher_parts():
+def test_clip_at_equal_z_follows_the_paint_order():
     from rosette.geometry import disc
-    from rosette.geometry.clip import clip_occluded
+    from rosette.geometry.clip import clip_visible
     low = disc(300, 300, 50)
     low.category, low.z = 2, 20
     same = disc(300, 300, 20)
     same.category, same.z = 1, 20
-    out = clip_occluded([low, same])
-    assert out[0] is low  # equal z: no stacking intent, nothing cut
+    out = clip_visible([low, same])
+    assert out[0] is low  # equal z: the shop paints Color 2 last, so it shows whole
+    assert len(out) == 1  # and the Color 1 disc under it is hidden
 
 
 def test_clip_rejects_unknown_color_shape():
-    from rosette.geometry.clip import clip_occluded
+    from rosette.geometry.clip import clip_visible
     from rosette.shapes import Shape
     odd = Shape("path", {"d": "M0,0 L10,0 L10,10z"}, 2, z=0)
     top = Shape("circle", {"cx": "5", "cy": "5", "r": "3"}, 1, z=5)
     with pytest.raises(ValueError):
-        clip_occluded([odd, top])
+        clip_visible([odd, top])
 
 
 def _tail_tops(shapes):

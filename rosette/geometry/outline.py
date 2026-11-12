@@ -5,7 +5,13 @@ edges that a shape painted later hides (A7-15: the tops of Color 1 tail stripes 
 Color 1 head disc). Each outline is the shape's boundary minus every shape painted after
 it in the written file: Layer_1 (Color 1) first, then the Layer_2_1 groups (Colors 2, 3,
 4; Layer_3 is their pattern twin), each in the shapes' order. Circles and ring paths that
-nothing covers keep their own outline element."""
+nothing covers keep their own outline element.
+
+Since H14 the color shapes are their visible pieces already (`clip.clip_visible`), so a
+later shape no longer hides an edge; what this still does is draw an edge two pieces
+share once (the lower piece's cut edge runs along the upper piece's outline, within
+COVER_TOL) and leave out the hairline crossings of overlaps under MIN_PIECE, which the
+cut keeps whole."""
 from __future__ import annotations
 
 from shapely import LineString, MultiLineString, line_merge, unary_union
