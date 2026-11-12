@@ -4,7 +4,9 @@ arms) is read from the base color's bordered wedges; the border is its backing. 
 labels only."""
 import numpy as np
 
+from rosette.vision import parts_head as H
 from rosette.vision.parts import detect_parts
+from rosette.vision.parts_common import Frame
 from rosette.vision.prepare import Prepared
 
 R = 300.0
@@ -143,6 +145,48 @@ def test_the_backing_width_is_read_from_its_visible_tips_not_the_merged_white():
     a = back.params
     straight = 2 * np.pi * 0.36 * UNIT / 6 / (a["r_outer"] - a["r_inner"])
     assert abs(a["width_ratio"] - straight) < 0.15 * straight
+    f = next(q.params for q in parts if q.role == "points" and q.color_group == 0)
+    # never narrower than its front (the fit's valley inside the front's keeps the H15 width)
+    assert a["width_ratio"] * (a["r_outer"] - a["r_inner"]) >= f["width_ratio"] * (f["r_outer"] - f["r_inner"])
+
+
+def test_the_backing_width_fit_needs_the_axes_and_a_radial_span():
+    # the backing's own tips read on one axis of six (or over one row) are no evidence
+    t, n = 360, 6
+    radii = np.arange(100.0, 140.0, 2.0)
+    fr = Frame(axis_x=CX, top=0.0, scale=SCALE)
+    pol = np.zeros((len(radii), t), np.int32)
+    params = {"count": n, "rotation_deg": 0.0}
+    win = np.ones(t, bool)
+    rows = range(len(radii))
+    cols = [int(c) for c in (np.arange(n) * t // n)]
+
+    def lobe(c, i, half):
+        pol[i, [(c + d) % t for d in range(-half, half + 1)]] = 1
+
+    for i in rows:
+        lobe(cols[0], i, 12 - i // 2)
+    assert H._straight_valley(pol, radii, rows, 1, params, win) is not None  # H16 as before
+    assert H._straight_valley(pol, radii, rows, 1, params, win, fr=fr) is None  # 1 of 6 axes
+    for c in cols:
+        for i in rows:
+            lobe(c, i, 12 - i // 2)
+    v = H._straight_valley(pol, radii, rows, 1, params, win, fr=fr)
+    assert v is not None
+    assert H._straight_valley(pol, radii, range(0, 2), 1, params, win, fr=fr) is None  # 2 px: 1 unit
+    lobe(cols[1], 5, 25)  # a jump on one axis is dropped by the median over the axes
+    assert H._straight_valley(pol, radii, rows, 1, params, win, fr=fr) == v
+    assert H._straight_valley(pol, radii, rows, 1, params, win) != H._straight_valley(
+        np.where(np.arange(t) == -1, 0, pol), radii, rows, 1, params, win, fr=fr)
+
+
+def test_the_star_halfangle_falls_with_the_radius_on_a_convex_star():
+    # r_tip 100, r_valley 90, 6 points: the side dips under 90 before the valley
+    r = np.linspace(85.0, 100.0, 31)
+    phi = H._star_halfangle(r, 100.0, 90.0, 6)
+    assert np.all(np.diff(phi) <= 1e-12) and abs(phi[0] - np.pi / 6) < 1e-9 and abs(phi[-1]) < 1e-9
+    concave = H._star_halfangle(np.array([60.0, 80.0]), 100.0, 40.0, 6)
+    assert np.allclose(H._star_side(concave, 100.0, 40.0, 6), [60.0, 80.0], atol=0.2)
 
 
 def test_no_inner_star_where_the_front_star_holds_its_axes_from_the_ring():
