@@ -4,6 +4,9 @@ drop_specks(model): an `unknown` part whose disc is under SPECK_MAX_HEAD_SHARE o
 head disc is not drawn (one warning names it), wherever it lies. Larger unknowns stay
 placeholders; seam specks inside the head are folded by parts_trims before this.
 
+drop_two_point_layers(model): a points layer of fewer than 3 lobes is not drawn (H13), with a
+warning: two lobes are what a mirror-symmetric head's half turn reads, never a points layer.
+
 merge_tail_slivers(model): a tail stripe under SLIVER_SHARE of the median stripe width
 (assign.tail_slivers) is merged into a neighbouring stripe, with a warning.
 """
@@ -48,6 +51,25 @@ def drop_specks(model: RosetteModel, head_r: float | None = None) -> RosetteMode
         if share < SPECK_MAX_HEAD_SHARE:
             out.warnings.append(f"Part {q.id} ({share:.1%} of the head) is too small to draw and was "
                                 "left out - check that spot against the photo.")
+            continue
+        kept.append(q)
+    out.parts = kept
+    return out
+
+
+# Points layers need at least this many lobes to be drawn (H13).
+MIN_POINTS = 3
+
+
+def drop_two_point_layers(model: RosetteModel) -> RosetteModel:
+    """A copy of the model without points layers of fewer than MIN_POINTS lobes, one
+    warning per dropped layer (S53-19: white pleat teeth read as a 2-point "star")."""
+    out = copy.deepcopy(model)
+    kept = []
+    for q in out.parts:
+        if q.role == "points" and int(q.params.get("count", MIN_POINTS)) < MIN_POINTS:
+            out.warnings.append(f"Part {q.id} read as a {int(q.params['count'])}-point layer was left out - "
+                                "check the head against the photo.")
             continue
         kept.append(q)
     out.parts = kept

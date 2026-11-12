@@ -64,6 +64,14 @@ EXPLAIN_MIN_LOBES, EXPLAIN_MIN_SHARE = 2 / 3, 0.45
 # the designer files (S17-15: a 4-point star) and are kept, as are unknowns of a third
 # color (a badge's print, a gold rim) and zones open on one side (S5-15's loops).
 SEAM_PLEATS = 2
+# H13 (split_borders): a layer's outer rows are a border when >= BORDER_ROW_SHARE of its
+# pixels on each of them lie in a band along another layer's sides; the layer keeps at
+# least BORDER_BODY_UNITS of body below the border.
+# A border pixel lies within BORDER_UNITS of the other layer (around the circle).
+# The border must run along >= BORDER_MIN_SIDES of the visible sides of the other layer's
+# points (S69-19: 5 of 10; where a side meets a loop or its border was too thin to keep, the
+# labels lose it).
+BORDER_ROW_SHARE, BORDER_BODY_UNITS, BORDER_UNITS, BORDER_MIN_SIDES = 0.5, 10.0, 8.0, 0.5
 SPECK_MAX_UNITS2 = 6000.0
 
 
@@ -250,6 +258,102 @@ def explain_trims(layers: list, meta: list[dict], pol: np.ndarray, radii: np.nda
         for _, layer, mm in trims:
             out.append(layer)
             out_meta.append(mm)
+    return out, out_meta
+
+
+def _border_bands(pol: np.ndarray, i0: int, i1: int, g: int, h: int, params: dict,
+                  win: np.ndarray, radii: np.ndarray, fr: Frame) -> tuple[float, np.ndarray]:
+    """(share of the visible sides of g's points with a border of h along them on
+    >= EDGE_MIN_RADII of the rows that show g on the axis, polar mask of the border
+    pixels): h lying, on rows i0..i1, in a band at most BORDER_UNITS wide right outside the
+    sides of the points (walking from the axis through g, then h, then neither). Unlike
+    the loops' edge strips the band need not be narrow against the points: at a star's
+    tips it is wider than they are."""
+    t = pol.shape[1]
+    reach = t // int(params["count"])
+    mark = np.zeros(pol.shape, bool)
+    lobes = []
+    for c in _axis_cols(params, t):
+        if not win[c]:
+            continue
+        seen, hits = 0, [0, 0]
+        for i in range(i0, min(i1, pol.shape[0])):
+            row = pol[i]
+            if row[c] != g:
+                continue
+            seen += 1
+            wide = int(np.ceil(BORDER_UNITS * fr.scale * t / (2 * np.pi * max(radii[i], 1e-6)))) + 1
+            for side, d in enumerate((1, -1)):
+                steps = 0
+                while row[(c + d * steps) % t] == g and steps < reach:
+                    steps += 1
+                m = 0
+                while row[(c + d * (steps + m)) % t] == h and m <= wide:
+                    m += 1
+                if 1 <= m <= wide and row[(c + d * (steps + m)) % t] != g:
+                    mark[i, [(c + d * (steps + j)) % t for j in range(m)]] = True
+                    hits[side] += 1
+        lobes.extend(seen > 0 and n >= EDGE_MIN_RADII * seen for n in hits)
+    return (float(np.mean(lobes)) if lobes else 0.0), mark
+
+
+def split_borders(layers: list, meta: list[dict], pol: np.ndarray, radii: np.ndarray,
+                  win: np.ndarray, fr: Frame) -> tuple[list, list[dict]]:
+    """H13: a points layer of h whose outer rows are a thin border of h along the sides of
+    another layer's points (same count, axes within EDGETIP_AXIS_DEG, not loop blocks; a
+    band of h along >= BORDER_MIN_SIDES of their sides, `_border_bands`) ends where the
+    border starts (>= BORDER_ROW_SHARE of its pixels on each row from there out to the other
+    layer's tips lie within BORDER_UNITS of that layer; beyond them h is the backing's tips):
+    the border is a backing of the other layer (a trim: its points, reaching h's outer end,
+    wider by the band on each side), drawn behind it, not part of a layer of h in front
+    (S69-19: the navy border of the white star, kept by the H13 rim-blob rule, had made the
+    navy front star reach the tips over the white star)."""
+    out, out_meta = list(layers), list(meta)
+    for k, (role, h, share, params, area, rb) in enumerate(layers):
+        m = meta[k]
+        if role != "points" or m.get("trim") or share < EXPLAIN_MAX_CONF:
+            continue
+        ra = m["rows"][0]
+        mine = pol == h
+        mine[:, ~win] = False
+        for j, (role2, g, share2, p2, _, rb2) in enumerate(layers):
+            if (role2 != "points" or g == h or j == k or meta[j].get("trim") or p2["kind"] == "bow"
+                    or meta[j]["zone"] != m["zone"] or int(p2["count"]) != int(params["count"])
+                    or _axis_gap(params, p2) > EDGETIP_AXIS_DEG):
+                continue
+            i0, i1 = meta[j]["rows"]
+            frac, mark = _border_bands(pol, i0, i1, g, h, p2, win, radii, fr)
+            if frac < BORDER_MIN_SIDES:
+                continue
+            border = mark & mine
+            axes = [c for c in _axis_cols(p2, pol.shape[1]) if win[c]]
+            shown = (pol[:, axes] == g).any(axis=1)  # rows where the border can be read
+            rs, i, miss = rb, rb - 1, 0  # inward over border rows; a run of BORDER_UNITS of others ends it
+            gap = _rows(BORDER_UNITS, radii, fr)
+            while i > ra and miss <= gap:
+                if i >= i1 or (mine[i].any() and shown[i]
+                               and border[i].sum() >= BORDER_ROW_SHARE * mine[i].sum()):
+                    rs, miss = i, 0
+                elif mine[i].any() and shown[i]:
+                    miss += 1  # around the other layer's tips the backing is wider than a band
+                i -= 1
+            if fr.d(radii[rb - 1] - radii[rs]) < BACK_MIN_UNITS or rs - ra < _rows(BORDER_BODY_UNITS, radii, fr):
+                continue
+            ri, ro = float(params["r_inner"]), r3(fr.d(radii[rs - 1]))
+            if ro <= ri:
+                continue
+            w = float(params["width_ratio"]) * (float(params["r_outer"]) - ri)
+            out[k] = (role, h, share, dict(params, r_outer=ro, width_ratio=r3(w / (ro - ri))), area, rs)
+            out_meta[k] = dict(m, rows=(ra, rs))
+            cut = (i1 - i0) // 5
+            lobes = max(1, sum(bool(win[c]) for c in _axis_cols(p2, pol.shape[1])))
+            side = _band_units(border, radii, range(i0 + cut, i1 - cut), lobes, fr)
+            ri2, ro2 = float(p2["r_inner"]), r3(fr.d(radii[rb - 1]))
+            w2 = float(p2["width_ratio"]) * (float(p2["r_outer"]) - ri2)
+            q = dict(p2, r_outer=ro2, width_ratio=r3((w2 + 2 * side) / max(ro2 - ri2, 1e-6)))
+            out.append(("points", h, min(frac, share), q, 0.0, rb))
+            out_meta.append(dict(meta[j], rows=(i0, rb), eats=None, trim=True))
+            break
     return out, out_meta
 
 

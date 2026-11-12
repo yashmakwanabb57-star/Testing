@@ -46,7 +46,7 @@ def _head(labels):
     return [q for q in detect_parts(_photo(labels), labels) if q.role != "tail_stripe"]
 
 
-def star_head(base="star", triangles=True, tips_two_tone=False):
+def star_head(base="star", triangles=True, tips_two_tone=False):  # noqa: C901
     """Tails (3); a base (1): an 8-point star (tips 0.95 R on 0 + 45 k, valleys 0.55 R) or a
     disc to 0.95 R; with `triangles`, glitter triangles (4) filling the four axis arms from
     0.6 R to 0.88 R (the arms' tips stay blue); a white ring (0) 0.3-0.65 R over the
@@ -56,6 +56,8 @@ def star_head(base="star", triangles=True, tips_two_tone=False):
     labels[(yy > CY + 0.5 * R) & (yy < 1150) & (np.abs(xx - CX) < 110)] = 3
     if base == "star":
         body = r <= _star(th, 8, 0, 0.55 * R, 0.95 * R)
+    elif base == "round":  # rounded lobes on 22.5 + 45 k (none cut by the tails): not a star's sides
+        body = r <= 0.55 * R + 0.4 * R * np.cos(np.radians((np.degrees(th) % 45) - 22.5) * 4) ** 2
     else:
         body = r <= 0.95 * R
     labels[body] = 1
@@ -117,10 +119,9 @@ def test_outline_symmetry_reads_the_tips():
     assert n == 8 and sc > 0.9 and abs(rot - 10) < 1
 
 
-def _call_base(parts, trims=()):
-    from rosette.model import Part  # noqa: F401
+def _call_base(parts, trims=(), labels=None):
     from rosette.vision.parts_common import Frame
-    labels = star_head(triangles=False)
+    labels = star_head(triangles=False) if labels is None else labels
     p = _photo(labels)
     theta = np.degrees(np.linspace(0, 2 * np.pi, H.RING_THETA, endpoint=False))
     win = np.abs(theta - 90.0) > H.TAIL_SECTOR_DEG
@@ -186,3 +187,95 @@ def test_ring_overlap_resolution_is_what_separates_the_bands(monkeypatch):
     rings = sorted((q for q in _head(pleated_bands()) if q.role == "ring"), key=lambda q: q.params["r_outer"])
     white = rings[-1]  # without it the outer white ring runs in to the center (S53-19)
     assert white.color_group == 2 and white.params["r_inner"] < 0.25 * R / SCALE
+
+
+class _Fr:
+    scale = 1.0
+
+    @staticmethod
+    def d(v):
+        return float(v)
+
+
+class _Center:
+    i1 = 10
+
+
+def _profile(runs, n=120):
+    """dom / domc of a radial profile: [(i0, i1, label)] held runs, every other row unheld."""
+    dom, domc = np.zeros(n, int), np.full(n, 0.3)
+    for a, b, g in runs:
+        dom[a:b], domc[a:b] = g, 0.9
+    return dom, domc
+
+
+def _resolve(found, runs, center=True):
+    dom, domc = _profile(runs)
+    H._rings_by_dominance(found, dom, domc, _Fr, np.arange(len(dom)) + 0.5, _Center if center else None)
+    return found
+
+
+def test_rings_meet_on_an_odd_gap_and_the_outer_one_reaches_under_the_teeth():
+    teeth = int(np.ceil(H.TOOTH / H.RADIAL_STEP_UNITS))
+    blue, glitter = [50, 10, 50, 0, 0.5, 18], [50, 20, 50, 1, 0.5, 18]
+    _resolve([blue, glitter], [(0, 10, 2), (10, 28, 0), (29, 50, 1)])  # one unheld row, 28
+    assert blue[2] == 29  # the boundary row goes to one side
+    assert glitter[1] == blue[2] - teeth
+
+
+def test_a_ring_whose_color_holds_no_band_under_it_stays_as_measured():
+    white, blue = [84, 35, 84, 2, 0.5, 24], [60, 35, 60, 0, 0.5, 18]
+    _resolve([white, blue], [(0, 10, 3), (21, 33, 2), (36, 60, 0)])
+    assert (white[1], white[2]) == (35, 84)
+
+
+def test_identical_rings_of_one_color_are_kept_once():
+    found = [[50, 12, 50, 0, 0.5, 18], [50, 15, 48, 0, 0.5, 18], [70, 20, 70, 1, 0.5, 18]]
+    _resolve(found, [(0, 10, 2), (10, 40, 0), (40, 70, 1)])
+    assert sorted((r[1], r[2], r[3]) for r in found if r[3] == 0) == [(10, 40, 0)]
+
+
+def test_ring_extension_is_bounded_on_both_sides():
+    # no center band: the unheld rows inside the innermost ring and outside the outermost are
+    # not taken; the gap between two rings is split
+    blue, glitter = [60, 5, 60, 0, 0.5, 0], [70, 30, 70, 1, 0.5, 0]
+    _resolve([blue, glitter], [(20, 40, 0), (44, 60, 1)], center=False)
+    assert blue[1] == 20 and glitter[2] == 60
+    assert blue[2] == glitter[1] == 42
+
+
+def test_a_base_whose_outline_does_not_fit_a_star_is_flagged():
+    from rosette.assign import FLAG_BELOW
+    sharp = _call_base([])
+    assert len(sharp) == 1 and sharp[0].confidence >= FLAG_BELOW
+    rounded = _call_base([], labels=star_head(base="round", triangles=False))
+    assert len(rounded) == 1 and rounded[0].confidence < FLAG_BELOW
+
+
+def backed_star():
+    """S69-19: a navy (0) 6-point star on top (tips 0.6 R, valleys 0.35 R) over a white (1)
+    6-point star (tips 0.88 R, valleys 0.5 R) whose sides show a thin navy border: a navy
+    backing star behind it (tips 0.95 R, sides about 4 units outside the white ones), on the
+    same axes 30 + 60 k; a ring (2) to 0.3 R and a center (4) to 0.2 R; tails (3)."""
+    yy, xx, dx, dy, r, th = _grid()
+    labels = np.full(r.shape, -1, np.int32)
+    labels[(yy > CY + 0.5 * R) & (yy < 1150) & (np.abs(xx - CX) < 110)] = 3
+    labels[r <= _star(th, 6, 30, 0.53 * R, 0.95 * R)] = 0
+    labels[r <= _star(th, 6, 30, 0.5 * R, 0.88 * R)] = 1
+    labels[r <= _star(th, 6, 30, 0.35 * R, 0.6 * R)] = 0
+    labels[r <= 0.3 * R] = 2
+    labels[r <= 0.2 * R] = 4
+    return labels
+
+
+def test_a_thin_border_along_a_stars_sides_is_its_backing_not_part_of_the_front_star():
+    parts = _head(backed_star())
+    navy = sorted((q for q in parts if q.role == "points" and q.color_group == 0), key=lambda q: q.params["r_outer"])
+    white = [q for q in parts if q.role == "points" and q.color_group == 1]
+    assert len(white) == 1 and len(navy) == 2
+    front, back = navy
+    unit = R / SCALE
+    assert front.params["r_outer"] <= 0.6 * unit + 5  # the front star ends at its own tips
+    assert back.params["count"] == 6 and back.params["r_outer"] >= 0.92 * unit
+    assert abs(back.params["rotation_deg"] - white[0].params["rotation_deg"]) < 1
+    assert back.z < white[0].z < front.z  # the backing behind the white star, the front star on it

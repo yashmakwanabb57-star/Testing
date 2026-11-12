@@ -43,7 +43,7 @@ from rosette.geometry.common import TOOTH
 from rosette.geometry.clip import to_geom
 from rosette.model import Part
 from rosette.vision.parts_common import Frame, blob_rings, majority, polar_sample, r3
-from rosette.vision.parts_trims import explain_trims, fold_specks
+from rosette.vision.parts_trims import explain_trims, fold_specks, split_borders
 from rosette.vision.prepare import Prepared
 
 # Radial sampling step (canvas units) and angular samples per circle.
@@ -190,7 +190,8 @@ STACK_SHARE, STACK_MIN_UNITS2 = 0.65, 200.0
 # such pairs; the photo decides 6, agreeing with the rule on 5 (S47-15, S58-17, S59-17,
 # S61-19, S69-19; A15-17 disagrees and the photo wins); the rule decides S29-15.
 NEST_AXIS_DEG, NEST_UNITS = 6.0, 3.0
-# H13: a head without a round outline (no head disc, HEAD_ROUND) whose silhouette above the
+# H13: a head without a round outline (no head disc, HEAD_ROUND: tips standing less than about
+# 12 % of the head radius past a round disc keep the disc and get no base) whose silhouette above the
 # tails has an n-fold lobed outline (n >= STAR_MIN_ORDER by the outline's turned
 # self-correlation, SYM_T) stands on a star when the label just inside its tips (the
 # BASE_TIP_UNITS under each visible tip) is one color group on >= BASE_TIP_SHARE of them:
@@ -212,6 +213,10 @@ RING_OVERLAP_UNITS, RING_MAJORITY = 8.0, 0.5
 BASE_TIP_UNITS, BASE_TIP_SHARE = 6.0, 0.75
 BASE_FLANK_UNITS, BASE_FLANK_TIP, BASE_REACH = 2.0, 0.95, 0.1
 BASE_Z = 15
+# The base's confidence is at most 1 - (median flank-fit error) / BASE_FIT_UNITS: an outline
+# whose lobes are rounded (not a star's straight sides) is flagged. S53-19 fits to 1.7 units (0.72), a
+# synthetic 8-lobed scalloped outline to 3.4 (0.43).
+BASE_FIT_UNITS = 6.0
 # Center search: +- units along the axis, over radii RECENTER_FROM..RECENTER_TO head
 # radii sampled every RECENTER_RADIAL_STEP units.
 RECENTER_UNITS = 12.0
@@ -553,6 +558,7 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             meta.append(dict(zone=(a, b), rows=(ra, rb), eats=inner if has_core else None, inner=inner))
 
     layers, meta = _split_and_explain(layers, meta, pol, radii, win, fr, ccx, ccy)
+    layers, meta = split_borders(layers, meta, pol, radii, win, fr)
     layers, meta = fold_specks(layers, meta, bands, head_band, pleated, radii, fr, RING_MAX_GROWTH_UNITS)
     # H11: convex "stars" and pleated edges are rings (annuli), flagged / pinked
     keep = []
@@ -650,19 +656,32 @@ def _rings_by_dominance(found: list[list], dom: np.ndarray, domc: np.ndarray, fr
             continue
         a0, a1, _ = max(mine, key=lambda r: (min(r[1], row[2]) - max(r[0], row[1]),
                                             -abs((r[0] + r[1]) - (row[1] + row[2]))))
-        lo = a0  # over the unheld rows, halfway to the next run (or the center)
+        if min(a1, row[2]) - max(a0, row[1]) <= 0:
+            continue  # its color holds no band under it: as measured
+        lo = a0  # over the unheld rows to the boundary with the next run (or the center)
         while lo > 0 and lab[lo - 1] == -1:
             lo -= 1
         hi = a1
         while hi < n and lab[hi] == -1:
             hi += 1
-        lo = a0 - (a0 - lo) // 2 if lo > 0 and lab[lo - 1] != -1 else lo
-        hi = a1 + (hi - a1) // 2 if hi < n else a1
+        # a gap bounded on both sides is split at one boundary row, the same for the rings on
+        # either side of it (the inner one takes the odd row); an open gap is not taken
+        lo = lo + (a0 - lo + 1) // 2 if lo > 0 else a0
+        hi = a1 + (hi - a1 + 1) // 2 if hi < n else a1
         row[1], row[2], row[0] = lo, hi, hi
+    moved_rows = [id(found[k]) for k in moved]
+    seen, keep = set(), []
+    for k, row in enumerate(found):  # one ring per color and radii
+        key = (row[1], row[2], row[3])
+        if k in moved and key in seen:
+            continue
+        seen.add(key)
+        keep.append(row)
+    found[:] = keep
     teeth = max(1, int(np.ceil(TOOTH / RADIAL_STEP_UNITS)))
-    for k in moved:  # a ring reaches under the pinked teeth of the ring inside it (drawn on top)
-        if any(r is not found[k] and r[5] and r[2] == found[k][1] for r in found):
-            found[k][1] = max(0, found[k][1] - teeth)
+    for row in found:  # a ring reaches under the pinked teeth of the ring inside it (drawn on top)
+        if id(row) in moved_rows and any(r is not row and r[5] and r[3] != row[3] and r[2] == row[1] for r in found):
+            row[1] = max(0, row[1] - teeth)
 
 
 def _head_outline(p: Prepared, fr: Frame) -> np.ndarray:
@@ -753,13 +772,14 @@ def _base_star(parts: list[Part], p: Prepared, labels: np.ndarray, fr: Frame, wi
     cands = np.arange(1.0, limit, 0.5)
     errs = [float(np.median(np.abs(xu[flank] - _star_side(phi[flank], r_tip, v, n)))) for v in cands]
     r_in = float(cands[int(np.argmin(errs))])
+    fit = max(0.0, 1.0 - min(errs) / BASE_FIT_UNITS)  # straight sides: a star, rounded lobes: not
     for k in sorted(partial, reverse=True):
         del parts[k]
     chord = 2 * r_in * np.sin(np.pi / n)  # the widest lobe width, at the valleys
     parts.append(Part("base", "points", {
         "cx": r3(fr.x(cx)), "cy": r3(fr.y(cy)), "kind": "star", "count": int(n), "r_inner": r3(r_in),
         "r_outer": r3(r_tip), "rotation_deg": r3(rot),
-        "width_ratio": r3(chord / max(r_tip - r_in, 1e-6))}, g, BASE_Z, r3(min(score, share, 1.0))))
+        "width_ratio": r3(chord / max(r_tip - r_in, 1e-6))}, g, BASE_Z, r3(min(score, share, fit, 1.0))))
 
 
 def _finish_points(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame, pol: np.ndarray,

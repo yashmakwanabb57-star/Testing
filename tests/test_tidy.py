@@ -119,3 +119,16 @@ def test_mirrored_tails_merge_alike_and_wide_stripes_stay():
     assert stripe_list(out, 0)[0] == [1, 0] and stripe_list(out, 1)[0] == [0, 1]
     same = RosetteModel(parts=tail([1, 0, 1], [0.3, 0.2, 0.5]), groups=[group(0), group(1)])
     assert tidy.merge_tail_slivers(same).parts == same.parts
+
+
+def test_a_two_point_layer_is_not_drawn_and_is_warned():
+    # S53-19 (H13): white pleat teeth read as a 2-point "star" (r 0-101.5, width ratio 39)
+    two = Part("points-2", "points", {"cx": 300, "cy": 190, "kind": "star", "count": 2, "r_inner": 1.0,
+                                      "r_outer": 101.5, "rotation_deg": 114.6, "width_ratio": 39.0}, 1, 22, 0.6)
+    three = Part("points-3", "points", {"cx": 300, "cy": 190, "kind": "star", "count": 3, "r_inner": 50.0,
+                                        "r_outer": 101.5, "rotation_deg": 0.0, "width_ratio": 1.0}, 1, 21, 0.6)
+    m = RosetteModel(parts=[head(), two, three], groups=[group(0), group(1)])
+    out = tidy.drop_two_point_layers(m)
+    assert [q.id for q in out.parts] == ["head", "points-3"]
+    assert len(out.warnings) == 1 and "points-2" in out.warnings[0]
+    assert [q.id for q in m.parts] == ["head", "points-2", "points-3"]  # the input is not changed

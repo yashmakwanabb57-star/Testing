@@ -33,7 +33,7 @@ from .assign import FLAG_BELOW, FLAGGED_CONF, assign, hex_rgb
 from .build import build
 from .model import Part, RosetteModel
 from .roles import PAD_FRAC, render_categories
-from .tidy import drop_specks, merge_tail_slivers
+from .tidy import drop_specks, drop_two_point_layers, merge_tail_slivers
 from .validate import Issue, validate
 from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_groups
 from .vision.parts import detect_parts
@@ -649,8 +649,8 @@ def detect(data: bytes) -> Detection:
     p = prepare(data)
     merged_print: list = []
     labels, groups = pixel_groups(p, merged=merged_print)
-    tidy = merge_tail_slivers(drop_specks(RosetteModel(parts=detect_parts(p, labels, groups)),
-                                          head_r=Frame.of(p).d(p.head[2])))
+    tidy = merge_tail_slivers(drop_two_point_layers(drop_specks(RosetteModel(parts=detect_parts(p, labels, groups)),
+                                                                head_r=Frame.of(p).d(p.head[2]))))
     parts = tidy.parts
     used = {q.color_group for q in parts}
     model = RosetteModel(parts=parts, groups=[g for g in groups if g.id in used],
