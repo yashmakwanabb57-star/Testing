@@ -1,6 +1,6 @@
 # Rosette SVG generator
 
-A local tool that turns a product photo of a ribbon rosette into a configurator SVG for brroset.dk. It uses classical computer vision plus one small local learned model (a scikit-learn classifier for the kind and count of each head layer, trained on the reference photos); no paid services or cloud APIs, and no network calls at run time. The SVG follows the shop contract in section 3 of [the design spec](docs/superpowers/specs/2026-11-05-rosette-svg-generator-design.md): fixed layer order, the Color 1-4 categories the shop script recolors, and a pattern-capable Color 2.
+A local tool that turns a product photo of a ribbon rosette into a configurator SVG for brroset.dk. It uses classical computer vision plus free local models: a small scikit-learn classifier for the kind and count of each head layer (trained on the reference photos) and, optionally, SAM 2.1 (Meta's segmentation model, Apache 2.0) to cut the photo into cloth pieces. No paid services or cloud APIs, and no network calls at run time. The SVG follows the shop contract in section 3 of [the design spec](docs/superpowers/specs/2026-11-05-rosette-svg-generator-design.md): fixed layer order, the Color 1-4 categories the shop script recolors, and a pattern-capable Color 2.
 
 The pipeline, its tuning constants, the scoreboard and the known limitations are in [docs/pipeline.md](docs/pipeline.md).
 
@@ -16,7 +16,25 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-All dependencies are pinned in `requirements.txt`.
+All dependencies are pinned in `requirements.txt` (torch and torchvision are the CPU wheels from the PyTorch index named in it).
+
+### SAM 2 weights (once, optional)
+
+The head reader also uses the cloth pieces SAM 2.1 finds in the photo (docs/pipeline.md, ML-2). Fetch the weights once into `models/` (git-ignored; the small model is about 180 MB). This is the only step that uses the network:
+
+```
+.venv\Scripts\python.exe tools/fetch_models.py --model small
+```
+
+Without the weights the tool runs as before (the rules alone) and the line under the photo says the model is missing, with this command.
+
+Three settings, environment variables read at each analysis (set them before starting the server):
+
+- `ROSETTE_SAM2`: `small` (default), `tiny` (fetch it with `--model tiny`) or `off` (no pieces: the output is exactly what the rules alone draw).
+- `ROSETTE_DEVICE`: `auto` (default: a usable CUDA GPU, else the CPU), `cpu` or `cuda`. Current PyTorch cannot use the GeForce GT 730 on this machine, so it runs on the CPU.
+- `ROSETTE_MODELS_DIR`: the weights folder (default `models/`).
+
+A photo's pieces take about a minute on this CPU the first time; they are cached in `.cache/pieces/` (git-ignored), so the same photo is fast afterwards.
 
 ## Run
 
@@ -50,7 +68,7 @@ Download the SVG from the UI (the download is enabled once the flags are confirm
 .venv\Scripts\python.exe -m pytest -q -m slow
 ```
 
-The first command runs the fast suite: `pyproject.toml` already sets `-m "not slow"`, so the slow tests are skipped by default. The second runs only the tests marked `slow` (the scoreboard bar and a full pass over the reference photos). The slow bar test currently fails because the success bar is not met (see docs/pipeline.md).
+The first command runs the fast suite: `pyproject.toml` already sets `-m "not slow"`, so the slow tests are skipped by default. The tests run with the SAM 2 pieces off (`tests/conftest.py`) unless a test turns them on. The second runs only the tests marked `slow` (the scoreboard bar and a full pass over the reference photos). The slow bar test currently fails because the success bar is not met (see docs/pipeline.md).
 
 ## Scoring
 
