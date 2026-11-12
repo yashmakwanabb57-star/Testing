@@ -94,12 +94,38 @@ def test_cache_hit_never_loads_the_model(tmp_path, small_photo, monkeypatch):
         assert out.cached and len(out.pieces) == 1
 
 
-def test_default_key_is_the_sha256_of_the_rgb(tmp_path, small_photo, monkeypatch):
+def test_default_key_folds_the_model_and_the_grid(tmp_path, small_photo, monkeypatch):
     import hashlib
-    key = hashlib.sha256(small_photo.rgb.tobytes()).hexdigest()
+    s = Settings("cpu", "small", tmp_path)
+    key = hashlib.sha256(small_photo.rgb.tobytes() + b"|facebook/sam2.1-hiera-small|24").hexdigest()
+    assert pieces.default_key(small_photo, s) == key
+    assert pieces.default_key(small_photo, Settings("cpu", "tiny", tmp_path)) != key
+    assert pieces.default_key(small_photo, s, head_n=32) != key
     write_cache(tmp_path / f"{key}.npz", Pieces([], "fake", "cpu", 0.0, False))
     monkeypatch.setattr(pieces.sam2, "load", lambda *a, **k: pytest.fail("model loaded"))
-    assert segment(small_photo, Settings("cpu", "small", tmp_path), cache_dir=tmp_path).cached
+    assert segment(small_photo, s, cache_dir=tmp_path).cached
+
+
+def test_a_legacy_cache_file_of_the_same_model_is_adopted_once(tmp_path, small_photo, monkeypatch):
+    import hashlib
+    s = Settings("cpu", "small", tmp_path)
+    legacy = tmp_path / f"{hashlib.sha256(small_photo.rgb.tobytes()).hexdigest()}.npz"
+    write_cache(legacy, Pieces([], "facebook/sam2.1-hiera-small", "cpu", 0.0, False))
+    monkeypatch.setattr(pieces.sam2, "load", lambda *a, **k: pytest.fail("model loaded"))
+    assert segment(small_photo, s, cache_dir=tmp_path).cached
+    assert not legacy.exists() and (tmp_path / f"{pieces.default_key(small_photo, s)}.npz").exists()
+    # another model's legacy file is left alone and not served
+    write_cache(legacy, Pieces([], "facebook/sam2.1-hiera-tiny", "cpu", 0.0, False))
+    class WouldLoad(Exception):
+        pass
+
+    def would_load(*a, **k):
+        raise WouldLoad
+
+    monkeypatch.setattr(pieces.sam2, "load", would_load)
+    with pytest.raises(WouldLoad):
+        segment(small_photo, s, cache_dir=tmp_path, head_n=32)  # another grid: no hit, no adoption
+    assert legacy.exists()
 
 
 def _star_like(piece: Piece) -> bool:

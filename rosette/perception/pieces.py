@@ -8,6 +8,7 @@ returns the pieces in the `prepare` work frame. The image embedding is computed 
 from __future__ import annotations
 
 import hashlib
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,7 +97,7 @@ def grid(p, head_n: int = 32, tail_cols: int = 8, tail_rows: int = 16) -> np.nda
     return np.array(list(dict.fromkeys(pts)), int)
 
 
-def nms(masks: np.ndarray, scores: np.ndarray, iou: float = NMS_IOU) -> list[int]:
+def nms(masks, scores: np.ndarray, iou: float = NMS_IOU) -> list[int]:
     """Greedy mask NMS: indices kept, highest score first."""
     n = len(masks)
     if n == 0:
@@ -158,7 +159,7 @@ def write_cache(path: Path, result: Pieces) -> None:
         masks = np.stack([pc.mask for pc in result.pieces]).astype(bool)
     else:
         masks = np.zeros((0, 0, 0), bool)
-    tmp = path.with_name(path.stem + ".tmp.npz")
+    tmp = path.with_name(f"{path.stem}.{os.getpid()}.tmp.npz")
     np.savez_compressed(
         tmp,
         masks=np.packbits(masks.reshape(-1)),
@@ -195,19 +196,38 @@ def _run_model(loaded, rgb: np.ndarray, points: np.ndarray):
         emb = model.get_image_embeddings(inputs["pixel_values"].to(dev))
         for s in range(0, len(points), POINTS_PER_BATCH):
             chunk = points[s:s + POINTS_PER_BATCH]
-            enc = proc(original_sizes=original_sizes,
-                       input_points=[[[[float(x), float(y)]] for x, y in chunk]],
-                       input_labels=[[[1] for _ in chunk]], return_tensors="pt")
-            out = model(image_embeddings=emb, input_points=enc["input_points"].to(dev),
-                        input_labels=enc["input_labels"].to(dev), multimask_output=True)
-            iou = out.iou_scores[0]  # (n, 3)
-            best = iou.argmax(dim=1)
-            idx = torch.arange(len(chunk), device=iou.device)
-            logits.append(out.pred_masks[0][idx, best].float().cpu())  # (n, h', w')
-            ious.append(iou[idx, best].float().cpu())
+            for lg, io in _decode(model, proc, dev, emb, original_sizes, chunk):
+                logits.append(lg)
+                ious.append(io)
     if not logits:
         return torch.zeros((0, 256, 256)), torch.zeros((0,)), original_sizes
     return torch.cat(logits), torch.cat(ious), original_sizes
+
+
+def _decode(model, proc, dev, emb, original_sizes, chunk):
+    """The decoder on one chunk of points: [(logits (n, h', w'), predicted IoU (n,))]. The
+    decoder copies the image embedding per point; when that runs out of memory the chunk is
+    retried in halves (one point that still fails is skipped)."""
+    import torch
+
+    enc = proc(original_sizes=original_sizes,
+               input_points=[[[[float(x), float(y)]] for x, y in chunk]],
+               input_labels=[[[1] for _ in chunk]], return_tensors="pt")
+    try:
+        out = model(image_embeddings=emb, input_points=enc["input_points"].to(dev),
+                    input_labels=enc["input_labels"].to(dev), multimask_output=True)
+    except (RuntimeError, MemoryError) as exc:
+        if "memory" not in str(exc).lower() and not isinstance(exc, MemoryError):
+            raise
+        if len(chunk) <= 1:
+            return []
+        half = len(chunk) // 2
+        return (_decode(model, proc, dev, emb, original_sizes, chunk[:half])
+                + _decode(model, proc, dev, emb, original_sizes, chunk[half:]))
+    iou = out.iou_scores[0]  # (n, 3)
+    best = iou.argmax(dim=1)
+    idx = torch.arange(len(chunk), device=iou.device)
+    return [(out.pred_masks[0][idx, best].float().cpu(), iou[idx, best].float().cpu())]
 
 
 def _filtered(loaded, p, logits, ious, original_sizes) -> list[Piece]:
@@ -233,19 +253,35 @@ def _filtered(loaded, p, logits, ious, original_sizes) -> list[Piece]:
             stabs.append(st)
     if not masks:
         return []
-    order = nms(np.stack(masks), np.array(scores))
+    order = nms(masks, np.array(scores))
     return [_piece(masks[i], scores[i], stabs[i], p.tails_top_y) for i in order]
+
+
+def default_key(p, settings: Settings, head_n: int = HEAD_N) -> str:
+    """sha256 of the photo's pixels, the model repo and the head grid size: pieces of another
+    model or grid are never served for this one."""
+    tag = f"|{sam2.REPOS.get(settings.model, settings.model)}|{head_n}".encode()
+    return hashlib.sha256(p.rgb.tobytes() + tag).hexdigest()
 
 
 def segment(p, settings: Settings, cache_dir: Path | None = DEFAULT_CACHE_DIR,
             key: str | None = None, head_n: int = HEAD_N) -> Pieces:
-    """Pieces of the prepared photo. With a cache_dir, `<cache_dir>/<key>.npz` (key: sha256 of
-    p.rgb by default) is read when present, and the model is then never loaded; otherwise the
+    """Pieces of the prepared photo. With a cache_dir, `<cache_dir>/<key>.npz` (key: `default_key`,
+    the photo, model and grid, by default) is read when present, and the model is then never loaded; otherwise the
     pieces are computed and written there. seconds: model time (embedding, decoding, filters)."""
     path = None
     if cache_dir is not None:
-        key = key or hashlib.sha256(p.rgb.tobytes()).hexdigest()
+        if key is None:
+            key = default_key(p, settings, head_n)
+            legacy = Path(cache_dir) / f"{hashlib.sha256(p.rgb.tobytes()).hexdigest()}.npz"
+        else:
+            legacy = None
         path = Path(cache_dir) / f"{key}.npz"
+        if not path.exists() and legacy is not None and legacy.exists():
+            with np.load(legacy) as z:  # a file from before the key carried the model and grid
+                same = str(z["model_id"]) == sam2.REPOS.get(settings.model)
+            if same:
+                legacy.replace(path)
         if path.exists():
             return read_cache(path, p)
     loaded = sam2.load(settings)
