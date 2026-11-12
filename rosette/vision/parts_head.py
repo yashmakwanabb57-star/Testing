@@ -167,6 +167,10 @@ STAR_MIN_ORDER, STAR_INSIDE_TOL = 3, 0.05
 # valleys to its tips instead (a ring, flagged).
 STAR_CONVEX = 0.95
 STAR_HIDDEN_DEPTH = 0.85
+# A16 (C4): stars of STAR_FEW or fewer points (S3-15, S18-15, S18-15B, S32-15: 4-point stars drawn as
+# near-squares at 0.85-0.93 of the limit) use STAR_CONVEX_FEW and STAR_HIDDEN_FEW (under it, so a
+# moved star has notches by the same bar).
+STAR_FEW, STAR_CONVEX_FEW, STAR_HIDDEN_FEW = 4, 0.84, 0.8
 # H11 (Task 4): a points layer of PLEAT_MIN_COUNT or more lobes that fill
 # >= PLEAT_FILL of their angular spacing where they are widest, in a zone closed by
 # bands on both sides, is the pleated edge of a ring: drawn as a ring with a pinked edge.
@@ -576,6 +580,9 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             params = {"cx": r3(ccx), "cy": r3(ccy), "kind": kind, "count": int(n),
                       "r_inner": r3(r_in), "r_outer": r3(r_out), "rotation_deg": r3(rot),
                       "width_ratio": r3(fr.d(wide) / max(r_out - r_in, 1e-6))}
+            if (has_core and _convex_star(params)
+                    and pleat_texture(p, labels == g, radii[inner.i0], radii[inner.i1 - 1]) >= PLEAT_TEXTURE):
+                has_core = False  # A16 (C4): a pleated band of its color over the hidden valleys: a ring on top
             layers.append(("points", g, share, params, area, rb))
             # a star with a core: the band is this layer's body, the star polygon covers it
             meta.append(dict(zone=(a, b), rows=(ra, rb), eats=inner if has_core else None, inner=inner))
@@ -595,6 +602,13 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
                 deeper = _hidden_valleys(params, unit(meta[k]["zone"][0]))
                 if deeper is not None:
                     layers[k] = (role, g, share, deeper) + tuple(lay[4:])
+                    for j, (lay2, m2) in enumerate(zip(layers, meta)):  # A16: its backing follows it
+                        q2 = lay2[3]
+                        if (m2.get("trim") and lay2[0] == "points" and int(q2.get("count", 0)) == int(params["count"])
+                                and q2.get("r_inner") == params["r_inner"]
+                                and abs(float(q2["rotation_deg"]) - float(params["rotation_deg"])) < 1e-6):
+                            q2 = dict(q2, r_inner=deeper["r_inner"])  # the same width ratio as its host
+                            layers[j] = (lay2[0], lay2[1], lay2[2], q2) + tuple(lay2[4:])
                     keep.append(k)
                     continue
             if convex or (_pleat_layer(params, meta[k]["zone"], bands)
@@ -1297,8 +1311,9 @@ def _split_and_explain(layers: list, meta: list[dict], pol: np.ndarray, radii: n
 def _convex_star(params: dict) -> bool:
     """H11: a star without concave notches (STAR_CONVEX): drawn it would be a polygon."""
     n = int(params["count"])
+    bar = STAR_CONVEX_FEW if n <= STAR_FEW else STAR_CONVEX
     return (params.get("kind") == "star" and n >= 2
-            and float(params["r_inner"]) >= STAR_CONVEX * float(params["r_outer"]) * np.cos(np.pi / n))
+            and float(params["r_inner"]) >= bar * float(params["r_outer"]) * np.cos(np.pi / n))
 
 
 def _hidden_valleys(params: dict, zone_start: float) -> dict | None:
@@ -1310,7 +1325,8 @@ def _hidden_valleys(params: dict, zone_start: float) -> dict | None:
     if not _convex_star(deeper):
         return deeper
     n = int(params["count"])
-    r_in = STAR_HIDDEN_DEPTH * float(params["r_outer"]) * float(np.cos(np.pi / n))
+    depth = STAR_HIDDEN_FEW if n <= STAR_FEW else STAR_HIDDEN_DEPTH
+    r_in = depth * float(params["r_outer"]) * float(np.cos(np.pi / n))
     return dict(params, r_inner=r3(r_in)) if r_in < zone_start else None
 
 
