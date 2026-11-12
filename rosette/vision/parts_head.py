@@ -43,7 +43,8 @@ from rosette.geometry.common import TOOTH
 from rosette.geometry.clip import to_geom
 from rosette.model import Part
 from rosette.vision.parts_common import Frame, blob_rings, majority, polar_sample, r3
-from rosette.vision.parts_trims import explain_trims, fold_specks, split_borders
+from rosette.vision.parts_trims import (BACK_MIN_UNITS, BORDER_MIN_SIDES, _backing_tips, _band_units,
+                                       _border_bands, explain_trims, fold_specks, split_borders)
 from rosette.vision.prepare import Prepared
 
 # ML-1 pleated rings: a ring band whose `pleat_texture` is at least PLEAT_TEXTURE is drawn
@@ -226,6 +227,13 @@ NEST_AXIS_DEG, NEST_UNITS = 6.0, 3.0
 # RING_MAJORITY of the circle (_rings_by_dominance).
 RING_OVERLAP_UNITS, RING_MAJORITY = 8.0, 0.5
 BASE_TIP_UNITS, BASE_TIP_SHARE = 6.0, 0.75
+# H15: id prefix of a front layer in the base color and its backing (`_front_in_base`); they do
+# not set the count the head is re-centered on (parts.detect_parts), which is read before them.
+FRONT_ID = "front-"
+# H15: a front layer holds its own axes on >= FRONT_AXIS_SHARE of its rows (visible lobes): S70-19
+# 0.45, S41-15 0.98, s44-15 0.63, S68-19 0.93; S46-15 0.14, where the "wedges" are its disc and loop
+# edges showing between a gold star's arms and the loops.
+FRONT_AXIS_SHARE = 0.3
 BASE_FLANK_UNITS, BASE_FLANK_TIP, BASE_REACH = 2.0, 0.95, 0.1
 BASE_Z = 15
 # The base's confidence is at most 1 - (median flank-fit error) / BASE_FIT_UNITS: an outline
@@ -573,6 +581,8 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
             meta.append(dict(zone=(a, b), rows=(ra, rb), eats=inner if has_core else None, inner=inner))
 
     layers, meta = _split_and_explain(layers, meta, pol, radii, win, fr, ccx, ccy)
+    if head is not None:
+        _front_in_base(layers, meta, zones, pol, cov, radii, win, fr, head["label"], ccx, ccy)
     layers, meta = split_borders(layers, meta, pol, radii, win, fr)
     layers, meta = fold_specks(layers, meta, bands, head_band, pleated, radii, fr, RING_MAX_GROWTH_UNITS)
     # H11: convex "stars" and pleated edges are rings (annuli), flagged / pinked
@@ -605,7 +615,8 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
     for k in order:
         role, g, share, params, _, _ = layers[k]
         z = z_of[k]
-        parts.append(Part(f"{role}-{len(parts)}", role, params, g, z, r3(min(1.0, share))))
+        pid = f"{FRONT_ID}{len(parts)}" if meta[k].get("front") else f"{role}-{len(parts)}"
+        parts.append(Part(pid, role, params, g, z, r3(min(1.0, share))))
         if meta[k].get("trim"):
             trims.add(id(parts[-1]))
 
@@ -744,6 +755,80 @@ def _rings_by_dominance(found: list[list], dom: np.ndarray, domc: np.ndarray, fr
     for row in found:  # a ring reaches under the pinked teeth of the ring inside it (drawn on top)
         if id(row) in moved_rows and any(r is not row and r[5] and r[3] != row[3] and r[2] == row[1] for r in found):
             row[1] = max(0, row[1] - teeth)
+
+
+def _front_in_base(layers: list, meta: list[dict], zones: list[tuple[int, int]], pol: np.ndarray,
+                   cov: np.ndarray, radii: np.ndarray, win: np.ndarray, fr: Frame, base: int,
+                   ccx: float, ccy: float) -> None:
+    """H15: in a zone between bands, the base disc's color forming n-fold wedges (3 <= n < 16,
+    PLEAT_MIN_COUNT: more are a pleated edge's teeth; n the order of its rows that are not
+    full, whose turned self-correlation must reach SPLIT_FLOOR: the disc's pleats and the gaps
+    between loops blur it, S70-19 reads 0.28) whose sides carry a thin
+    border of another color (the H13 border geometry, `_border_bands`, on >= BORDER_MIN_SIDES
+    of the sides) is a points layer of the base color in front: a star of n lobes from the
+    zone's start (the ring or center it meets) to the last row its border runs along, and the
+    border color, when it shows at least BACK_MIN_UNITS beyond those tips, is its backing (a trim: the star wider by the border on each side, reaching
+    the border's tips behind it). A layer of the border color on the same axes inside that
+    reach (the border's tips read alone) gives way to the backing. S70-19: a red 6-point star
+    on a white star over blue loops on the red pleated disc; the white showed as chevrons."""
+    t = pol.shape[1]
+    for a, b in zones:
+        if fr.d(radii[b - 1] - radii[a]) < MIN_ZONE_UNITS:
+            continue
+        rows = np.flatnonzero((cov[a:b, base] > EXTENT_COV) & (cov[a:b, base] < FULL_COV))
+        if rows.size < 2:
+            continue
+        ra, rb = a + rows[0], a + rows[-1] + 1
+        n, share, rot = _symmetry(pol[ra:rb] == base, win)
+        if not STAR_MIN_ORDER <= n < PLEAT_MIN_COUNT or share < SPLIT_FLOOR:  # 16+ teeth: a pleated edge
+            continue
+        probe = {"count": n, "rotation_deg": rot}
+        best = None
+        for h in sorted({int(g) for g in np.unique(pol[a:b]) if g >= 0 and g != base}):
+            frac, mark = _border_bands(pol, a, b, base, h, probe, win, radii, fr, span=True, front=True)
+            if frac >= BORDER_MIN_SIDES and (best is None or frac > best[0]):
+                best = (frac, h, mark)
+        if best is None:
+            continue
+        frac, h, mark = best
+        marked = np.flatnonzero(mark.any(axis=1))
+        tip = int(marked[-1]) + 1
+        r_in, r_out = fr.d(radii[a]), fr.d(radii[tip - 1])
+        if r_out - r_in < MIN_ZONE_UNITS:
+            continue
+        axes = [c for c in (int(round((rot + 360.0 * k / n) % 360 * t / 360)) % t for k in range(n)) if win[c]]
+        held = float((pol[a:tip][:, axes] == base).mean()) if axes else 0.0
+        if held < FRONT_AXIS_SHARE:
+            continue  # the wedges run along their axes: elsewhere the base shows between other layers
+        rr = radii[a:tip]
+        w = (pol[a:tip] == base)[:, win].mean(axis=1) * 2 * np.pi * rr / n
+        front = {"cx": r3(ccx), "cy": r3(ccy), "kind": "star", "count": int(n), "r_inner": r3(r_in),
+                 "r_outer": r3(r_out), "rotation_deg": r3(rot),
+                 "width_ratio": r3(fr.d(float(w.max())) / max(r_out - r_in, 1e-6))}
+        _, back_tip, _ = _backing_tips(pol, radii, tip - 1, h, front, win, fr)
+        ro2 = fr.d(radii[max(back_tip, tip - 1)])
+        if ro2 - r_out < BACK_MIN_UNITS:
+            continue  # a backing shows beyond the front tips; a band ending with them is an edge
+        lobes = max(1, sum(bool(win[int(round((rot + 360.0 * k / n) % 360 * t / 360)) % t]) for k in range(n)))
+        side = _band_units(mark, radii, range(a, tip), lobes, fr)
+        wide = float(front["width_ratio"]) * (r_out - r_in) + 2 * side
+        back = dict(front, r_outer=r3(ro2), width_ratio=r3(wide / max(ro2 - r_in, 1e-6)))
+        zone_meta = dict(zone=(a, b), rows=(a, tip), eats=None, inner=None)
+        drop = []
+        for k, lay in enumerate(layers):
+            q = lay[3]
+            if (lay[0] == "points" and lay[1] == h and meta[k]["zone"] == (a, b) and int(q["count"]) == n
+                    and min((float(q["rotation_deg"]) - rot) % (360.0 / n),
+                            (rot - float(q["rotation_deg"])) % (360.0 / n)) <= NEST_AXIS_DEG
+                    and float(q["r_outer"]) <= ro2 + MIN_BAND_UNITS):
+                drop.append(k)
+        for k in reversed(drop):
+            del layers[k]
+            del meta[k]
+        layers.append(("points", base, min(share, frac), front, 0.0, tip))
+        meta.append(dict(zone_meta, front=True))
+        layers.append(("points", h, min(share, frac), back, 0.0, max(back_tip, tip - 1) + 1))
+        meta.append(dict(zone_meta, rows=(a, max(back_tip, tip - 1) + 1), trim=True, front=True))
 
 
 def _head_outline(p: Prepared, fr: Frame) -> np.ndarray:

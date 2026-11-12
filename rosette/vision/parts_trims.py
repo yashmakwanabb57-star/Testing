@@ -262,9 +262,13 @@ def explain_trims(layers: list, meta: list[dict], pol: np.ndarray, radii: np.nda
 
 
 def _border_bands(pol: np.ndarray, i0: int, i1: int, g: int, h: int, params: dict,
-                  win: np.ndarray, radii: np.ndarray, fr: Frame) -> tuple[float, np.ndarray]:
+                  win: np.ndarray, radii: np.ndarray, fr: Frame, span: bool = False,
+                  front: bool = False) -> tuple[float, np.ndarray]:
     """(share of the visible sides of g's points with a border of h along them on
-    >= EDGE_MIN_RADII of the rows that show g on the axis, polar mask of the border
+    >= EDGE_MIN_RADII of the rows that show g on the axis - with `span`, of those rows between
+    the lobe's first and last bordered row (H15: beyond a front star's tips the base color
+    goes on as the disc; with `front` the band may be followed by g too: g is the disc behind
+    both) -, polar mask of the border
     pixels): h lying, on rows i0..i1, in a band at most BORDER_UNITS wide right outside the
     sides of the points (walking from the axis through g, then h, then neither). Unlike
     the loops' edge strips the band need not be narrow against the points: at a star's
@@ -276,12 +280,12 @@ def _border_bands(pol: np.ndarray, i0: int, i1: int, g: int, h: int, params: dic
     for c in _axis_cols(params, t):
         if not win[c]:
             continue
-        seen, hits = 0, [0, 0]
+        rows_seen, rows_hit = [], ([], [])
         for i in range(i0, min(i1, pol.shape[0])):
             row = pol[i]
             if row[c] != g:
                 continue
-            seen += 1
+            rows_seen.append(i)
             wide = int(np.ceil(BORDER_UNITS * fr.scale * t / (2 * np.pi * max(radii[i], 1e-6)))) + 1
             for side, d in enumerate((1, -1)):
                 steps = 0
@@ -290,10 +294,14 @@ def _border_bands(pol: np.ndarray, i0: int, i1: int, g: int, h: int, params: dic
                 m = 0
                 while row[(c + d * (steps + m)) % t] == h and m <= wide:
                     m += 1
-                if 1 <= m <= wide and row[(c + d * (steps + m)) % t] != g:
+                if 1 <= m <= wide and (front or row[(c + d * (steps + m)) % t] != g):
                     mark[i, [(c + d * (steps + j)) % t for j in range(m)]] = True
-                    hits[side] += 1
-        lobes.extend(seen > 0 and n >= EDGE_MIN_RADII * seen for n in hits)
+                    rows_hit[side].append(i)
+        if span and (rows_hit[0] or rows_hit[1]):
+            lo, hi = min(rows_hit[0] + rows_hit[1]), max(rows_hit[0] + rows_hit[1])
+            rows_seen = [i for i in rows_seen if lo <= i <= hi]
+        seen = len(rows_seen)
+        lobes.extend(seen > 0 and len(n) >= EDGE_MIN_RADII * seen for n in rows_hit)
     return (float(np.mean(lobes)) if lobes else 0.0), mark
 
 

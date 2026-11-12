@@ -16,7 +16,7 @@ from scipy import ndimage
 
 from rosette.model import ColorGroup, Part
 from rosette.vision.parts_common import Frame, majority, r3
-from rosette.vision.parts_head import detect_head, refine_center
+from rosette.vision.parts_head import FRONT_ID, detect_head, refine_center
 from rosette.vision.parts_tails import detect_tails
 from rosette.vision.prepare import Prepared
 
@@ -65,7 +65,7 @@ def detect_parts(p: Prepared, labels: np.ndarray, groups: list[ColorGroup] | Non
     added to them once (detect_tails gives it the same id on every call)."""
     fr = Frame.of(p)
     head = detect_head(p, labels, fr)
-    pts = [int(q.params["count"]) for q in head if q.role == "points"]
+    pts = [int(q.params["count"]) for q in head if q.role == "points" and not q.id.startswith(FRONT_ID)]
     pts += [int(q.params["pleats"]) for q in head if q.role == "ring" and q.params.get("pleats")]
     if pts:  # re-center on the points' (or pleats', H11) symmetry and measure again
         p = refine_center(p, labels, fr, pts[0])
