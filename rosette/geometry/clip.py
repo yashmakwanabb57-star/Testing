@@ -142,3 +142,26 @@ def clip_visible(colors: list[Shape]) -> list[Shape]:
             out[i] = _piece(g.difference(cover), s)
         cover = g if cover is None else unary_union([cover, g])
     return [s for s in out if s is not None]
+
+
+def clip_occluded(colors: list[Shape]) -> list[Shape]:
+    """The pre-H14 cut (H3), kept for fill-only renders: each shape cut only by the shapes
+    of strictly higher z that the shop's layer order paints underneath it, so the colors
+    show as stacked but overlapping shapes stay whole. Such a render has no seams where
+    visible pieces abut (antialiased seam pixels blend two colors), which the head fit's
+    per-pixel color reading needs (`pipeline._head_render`); written files use
+    `clip_visible`."""
+    geoms = [to_geom(s) for s in colors]
+    out = []
+    for i, s in enumerate(colors):
+        above = [g for t, g in zip(colors[i + 1:], geoms[i + 1:])
+                 if t.z > s.z and _paint_rank(t.category) < _paint_rank(s.category)]
+        g = geoms[i]
+        cover = unary_union(above) if above else None
+        if cover is None or not g.intersects(cover) or g.intersection(cover).area < MIN_PIECE:
+            out.append(s)
+            continue
+        shape = from_geom(g.difference(cover).simplify(SIMPLIFY), s)
+        if shape is not None:
+            out.append(shape)
+    return out

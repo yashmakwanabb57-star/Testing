@@ -7,7 +7,7 @@ from shapely import LineString, Polygon, make_valid, set_precision, unary_union
 from shapely.affinity import affine_transform
 
 from .geometry import disc, outlines, pinked_circle, pinked_ring, place_rose, points_ring, ring, tails
-from .geometry.clip import SIMPLIFY, clip_visible, from_geom, to_geom, xor_all
+from .geometry.clip import SIMPLIFY, clip_occluded, clip_visible, from_geom, to_geom, xor_all
 from .model import Part, RosetteModel
 from .shapes import Shape
 from .vision.templates import template_by_id
@@ -140,9 +140,13 @@ def _rose_center(model: RosetteModel) -> tuple[float, float, float, int] | None:
     return (*at, TEMPLATE_Z + len(_template(tmpl).pieces))
 
 
-def build(model: RosetteModel) -> list[Shape]:
+def build(model: RosetteModel, pieces: bool = True) -> list[Shape]:
+    """Shapes for the writer. pieces: every color shape cut to its visible piece (H14, the
+    written files); False keeps overlapping shapes whole where the shop's layer order
+    already stacks them (`clip_occluded`), for seam-free fill renders such as the head fit."""
     pairs = color_shapes(model)
-    colors = clip_visible([s for s, _ in pairs])  # visible pieces, whatever the Colors (H14)
+    shapes = [s for s, _ in pairs]
+    colors = clip_visible(shapes) if pieces else clip_occluded(shapes)
     result = list(colors)
     result += outlines(colors)
 

@@ -176,7 +176,8 @@ def _head_render(model: RosetteModel) -> np.ndarray | None:
     groups = [copy.deepcopy(g) for g in model.groups if g.id in cat]
     for g in groups:
         g.category = cat[g.id]
-    svg = write_svg(build(RosetteModel(parts=copy.deepcopy(head), groups=groups)))
+    # whole stacked shapes, not visible pieces: abutting pieces leave antialiased seams (H14)
+    svg = write_svg(build(RosetteModel(parts=copy.deepcopy(head), groups=groups), pieces=False))
     img = render_categories(svg, _RENDER_H, _FIT_COLORS)
     pad = int(round(PAD_FRAC * _RENDER_H))
     img = img[pad:img.shape[0] - pad, pad:img.shape[1] - pad].astype(np.int32)

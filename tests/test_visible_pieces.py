@@ -196,3 +196,30 @@ def test_xor_all_is_the_even_odd_fill():
     sq = [Polygon([(-k, -k), (k, -k), (k, k), (-k, k)]) for k in (10, 8, 6, 4, 2)]
     assert xor_all(sq).area == pytest.approx(400 - 256 + 144 - 64 + 16)
     assert xor_all([]) is None
+
+
+def test_fill_render_build_keeps_stacked_shapes_whole():
+    # the head fit reads colors per pixel: seams between abutting pieces would read as no
+    # color, so its render builds with pieces=False (the pre-H14 cut)
+    whole = [s for s in build(loops_under_star(), pieces=False) if s.kind == "color"]
+    assert _overlaps(whole)  # the loops still lie whole under the star
+    import numpy as np
+    from tools.rasterize import DEFAULT_PALETTE, rasterize
+    a = rasterize(write_svg(whole), 850, DEFAULT_PALETTE).astype(int)
+    b = rasterize(write_svg([s for s in build(loops_under_star()) if s.kind == "color"]), 850,
+                  DEFAULT_PALETTE).astype(int)
+    assert np.mean(np.abs(a - b).sum(axis=2) > 200) < 0.0005  # same colors
+
+
+def test_head_render_has_no_seams(monkeypatch):
+    # pipeline._head_render must not see the seams between abutting pieces: built as
+    # visible pieces it leaves more head pixels without a group than it does
+    import numpy as np
+    import rosette.pipeline as pipeline
+    m = loops_under_star()
+    m.parts = [q for q in m.parts if q.role != "tail_stripe"]
+    unread = lambda img: int((img[60:340, 160:440] < 0).sum())  # noqa: E731  (inside the head)
+    used = unread(pipeline._head_render(m))
+    monkeypatch.setattr(pipeline, "build", lambda model, pieces=True: build(model))
+    seams = unread(pipeline._head_render(m))
+    assert seams > used + 50
