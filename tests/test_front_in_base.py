@@ -74,14 +74,14 @@ def test_a_star_of_the_disc_color_on_a_white_star_is_a_front_layer_with_its_back
     assert len(front) == 1 and len(white) == 1
     f, w = front[0], white[0]
     assert f.params["kind"] == "star" and f.params["count"] == 6
-    assert min(f.params["rotation_deg"] % 60 - 30, 30 - f.params["rotation_deg"] % 60, key=abs) < 3 or \
-        abs(f.params["rotation_deg"] % 60 - 30) < 3
+    assert abs(f.params["rotation_deg"] % 60 - 30) < 3  # on the loops' half-axes, not their axes
     assert abs(f.params["r_outer"] - 0.72 * UNIT) < 7
     assert w.params["count"] == 6 and abs(w.params["r_outer"] - 0.8 * UNIT) < 7
     assert abs((w.params["rotation_deg"] - f.params["rotation_deg"] + 30) % 60 - 30) < 2
     assert head[0].z < w.z < f.z  # disc, white backing, red front star
     loops = [q for q in parts if q.role == "points" and q.color_group == 2]
     assert len(loops) == 1 and loops[0].params["count"] == 6
+    assert loops[0].z < w.z  # the stars are drawn over the loops
 
 
 def test_a_plain_disc_stays_a_disc():
