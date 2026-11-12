@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   HEAD_CHECK, LOOP_BASE, SOURCE_NOT_READY, checklistItems, confirmBody, paramShown, convertBlocker, headFitText, downloadBlockers, errorText, flagItems, parseValue, resetForFile, sourceNotice,
+  perceptionText,
 } from '../../app/static/logic.js';
 import { applyConfig } from '../../app/static/simulator.js';
 
@@ -48,6 +49,19 @@ test('the head checklist item is always present and blocks download until ticked
   assert.equal(b.length, 1);
   assert.match(b[0], /Compare the head with the photo/);
   assert.equal(flagItems(model(), [], false).some((f) => f.key === HEAD_CHECK.key), false); // not a flag
+});
+
+test('the pieces status is one plain line', () => {
+  const on = perceptionText({ status: 'on', pieces: 28, model: 'facebook/sam2.1-hiera-small', device: 'cpu',
+    seconds: 76.3, message: 'pieces computed' });
+  assert.equal(on, 'Pieces: 28 found by sam2.1-hiera-small on cpu (76.3 s).');
+  assert.match(perceptionText({ status: 'on', pieces: 3, model: 'm', device: 'cpu', seconds: 1, message: 'cached pieces' }), /\(cached\)/);
+  assert.match(perceptionText({ status: 'off' }), /^Pieces: off - /);
+  const missing = perceptionText({ status: 'missing', message: 'Fetch them once with: tools/fetch_models.py --model small' });
+  assert.match(missing, /fetch_models\.py/);
+  assert.match(perceptionText({ status: 'failed', message: 'boom' }), /failed.*boom/);
+  for (const t of [on, missing]) assert.ok(!/[\u2013\u2014]/.test(t));
+  assert.equal(perceptionText(null), '');
 });
 
 test('head fit is shown as information, plain hyphens', () => {

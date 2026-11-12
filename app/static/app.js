@@ -7,7 +7,7 @@ import {
   MAX_COUNT, POINT_KINDS, errorText, hex, flagItems,
   downloadBlockers as blockersFor, groupColor, tailGroups, parseValue, tailCheckKey, sourceNotice,
   convertBlocker, resetForFile, checklistItems, paramShown, automaticHeadText, renderBody, templateText, usesGroup,
-  confirmBody,
+  confirmBody, perceptionText,
 } from './logic.js';
 
 export { errorText, flagItems, parseValue, tailGroups, hex };
@@ -79,6 +79,7 @@ export const state = {
   issues: [],
   flagged: false, // server is_flagged of the last render
   headFit: null, // head fit measured at conversion (information, not a flag)
+  perception: null, // the SAM 2 pieces' status at conversion (ML-2; one line under the photo)
   headDefault: null, // the head the conversion chose ('rules' or a template_id)
   confirmed: new Set(), // flag keys the user confirmed
   invalid: new Set(), // input field keys holding an invalid value
@@ -193,7 +194,7 @@ export const actions = {
       if (token !== state.analyzeSeq) return;
       Object.assign(state, {
         model: res.model, svg: res.svg, issues: res.issues || [], flagged: !!res.flagged,
-        filename: res.filename, headFit: res.head_fit || null,
+        filename: res.filename, headFit: res.head_fit || null, perception: res.perception || null,
         headDefault: (res.model.parts.find((p) => p.role === 'template') || { params: { template_id: 'rules' } })
           .params.template_id,
       });
@@ -657,6 +658,9 @@ export const views = {
       img.hidden = true;
       $('drop-hint').hidden = false;
     }
+    const line = perceptionText(state.perception);
+    $('perception').textContent = line;
+    $('perception').hidden = !line;
   },
 
   simControls() {

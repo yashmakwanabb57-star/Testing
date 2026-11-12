@@ -145,6 +145,20 @@ export function headFitText(fit) {
   return `Head match ${pct(fit.agreement)}, outline ${pct(fit.silhouette)} - measured on the photo when converted; information, not a flag.`;
 }
 
+// The SAM 2 pieces' status at conversion (api/analyze perception, ML-2): one plain line under
+// the photo. Plain hyphens.
+export function perceptionText(p) {
+  if (!p) return '';
+  if (p.status === 'on') {
+    const model = String(p.model || 'SAM 2').replace(/^.*\//, '');
+    const how = p.message === 'cached pieces' ? 'cached' : `${Number(p.seconds).toFixed(1)} s`;
+    return `Pieces: ${p.pieces} found by ${model} on ${p.device} (${how}).`;
+  }
+  if (p.status === 'off') return 'Pieces: off - the rules alone read the head.';
+  if (p.status === 'missing') return `Pieces: model missing - the rules alone read the head. ${p.message}`;
+  return `Pieces: failed - the rules alone read the head. ${p.message || ''}`.trim();
+}
+
 export function checklistItems(s) {
   if (!s.model) return [];
   return [{ ...HEAD_CHECK, info: headFitText(s.headFit) }];
@@ -166,7 +180,8 @@ export function resetForFile(s) {
   s.analyzeSeq++;
   s.render.seq++;
   Object.assign(s.render, { dirty: false, inFlight: false, error: null });
-  Object.assign(s, { filename: null, model: null, svg: null, issues: [], flagged: false, analyzing: false, photoFrame: null, headFit: null });
+  Object.assign(s, { filename: null, model: null, svg: null, issues: [], flagged: false, analyzing: false, photoFrame: null, headFit: null,
+    perception: null });
   s.confirmed.clear();
   s.invalid.clear();
   s.sim.tried.clear();

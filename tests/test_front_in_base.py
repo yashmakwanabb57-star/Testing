@@ -4,6 +4,7 @@ arms) is read from the base color's bordered wedges; the border is its backing. 
 labels only."""
 import numpy as np
 
+from rosette.vision import parts_head as H
 from rosette.vision.parts import detect_parts
 from rosette.vision.prepare import Prepared
 
@@ -42,13 +43,14 @@ def _blocks(dx, dy, n, rot, r0, r1, half):
     return out
 
 
-def base_head(white=True, red_star=True, white_tip=0.8, inner_tip=None):
+def base_head(white=True, red_star=True, white_tip=0.8, inner_tip=None, blocks_over=False):
     """Tails (3); a red disc (0) to 0.95 R; six blue loops (2) on 0 + 60 k from 0.3 R to 0.75 R;
     with `white` a white (1) 6-point star on 30 + 60 k (tips 0.8 R, valleys 0.36 R) over them;
     with `red_star` a red 6-point star on it (tips 0.72 R, valleys 0.33 R: white shows as
     chevrons along its arms); with `inner_tip` an inner white star on the red one (tips inner_tip R,
     valleys 0.25 R, under the ring: red shows as chevrons between the two white stars, S70-19); a red ring (0)
-    0.22-0.3 R and a white center (1) to 0.22 R."""
+    0.22-0.3 R and a white center (1) to 0.22 R. blocks_over: the loops lie over the white and red stars,
+    under the inner star (S70-19's zoomed photo)."""
     yy, xx, dx, dy, r, th = _grid()
     labels = np.full(r.shape, -1, np.int32)
     labels[(yy > CY + 0.5 * R) & (yy < 1150) & (np.abs(xx - CX) < 110)] = 3
@@ -58,6 +60,8 @@ def base_head(white=True, red_star=True, white_tip=0.8, inner_tip=None):
         labels[r <= _star(th, 6, 30, 0.36 * R, white_tip * R)] = 1
     if red_star:
         labels[r <= _star(th, 6, 30, 0.33 * R, 0.72 * R)] = 0
+    if blocks_over:
+        labels[_blocks(dx, dy, 6, 0, 0.3 * R, 0.75 * R, 0.16 * R)] = 2
     if inner_tip:
         labels[r <= _star(th, 6, 30, 0.25 * R, inner_tip * R)] = 1
     labels[r <= 0.3 * R] = 0
@@ -148,3 +152,99 @@ def test_the_backing_width_is_read_from_its_visible_tips_not_the_merged_white():
 def test_no_inner_star_where_the_front_star_holds_its_axes_from_the_ring():
     parts = _head(base_head())
     assert len([q for q in parts if q.role == "points" and q.color_group == 1]) == 1
+
+
+
+# ML-2: SAM 2 pieces. The front layer in the disc's color is read from its own piece's outline,
+# and the stacking vote counts visible pieces, so the order of the blocks against the stars comes
+# from which masks are whole (S70-19's zoomed photo: the blocks lie over the white backing and the
+# red star, the inner white star over the blocks' inner ends).
+
+def _piece(mask, g):
+    from rosette.perception.pieces import Piece
+    ys, xs = np.nonzero(mask)
+    return Piece(mask=mask, score=0.95, stability=0.95, area=int(mask.sum()),
+                 bbox=(int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())), in_head=True, color_group=g)
+
+
+def _star_pieces(blocks_on_top):
+    """Pieces of base_head(inner_tip=0.55): the disc, ring and center, six blocks, the white backing's
+    six chevrons, the red star and the inner white star. blocks_on_top: the blocks are whole and cut
+    the backing and the red star (the inner star stays whole); else every star is whole and cuts
+    the blocks."""
+    yy, xx, dx, dy, r, th = _grid()
+    white = r <= _star(th, 6, 30, 0.36 * R, 0.8 * R)
+    red = r <= _star(th, 6, 30, 0.33 * R, 0.72 * R)
+    inner = (r <= _star(th, 6, 30, 0.25 * R, 0.55 * R)) & (r > 0.3 * R)
+    core = r <= 0.3 * R
+    blocks = _blocks(dx, dy, 6, 0, 0.3 * R, 0.75 * R, 0.16 * R) & ~core
+    red_vis = red & ~inner & ~core
+    back_vis = white & ~red
+    if blocks_on_top:
+        red_vis, back_vis = red_vis & ~blocks, back_vis & ~blocks
+        blocks = blocks & ~inner
+    else:
+        blocks = blocks & ~white
+    d = np.degrees(th) % 360
+    out = [_piece((r <= 0.95 * R) & ~white & ~blocks & ~core, 0), _piece(core & (r > 0.22 * R), 0),
+           _piece(r <= 0.22 * R, 1), _piece(red_vis, 0), _piece(inner, 1)]
+    for k in range(6):
+        out.append(_piece(blocks & (np.abs((d - 60 * k + 180) % 360 - 180) <= 30), 2))
+        out.append(_piece(back_vis & (np.abs((d - 30 - 60 * k + 180) % 360 - 180) <= 30), 1))
+    return out
+
+
+def _with_pieces(blocks_on_top):
+    labels = base_head(inner_tip=0.55, blocks_over=True)  # the labels: S70-19's order
+    return [q for q in detect_parts(_photo(labels), labels, pieces=_star_pieces(blocks_on_top))
+            if q.role != "tail_stripe"]
+
+
+def _stars_and_blocks(parts):
+    front = [q for q in parts if q.role == "points" and q.color_group == 0]
+    white = sorted((q for q in parts if q.role == "points" and q.color_group == 1), key=lambda q: q.params["r_outer"])
+    blocks = [q for q in parts if q.role == "points" and q.color_group == 2]
+    assert len(front) == 1 and len(white) == 2 and len(blocks) == 1
+    return front[0], white[0], white[1], blocks[0]
+
+
+def test_pieces_give_the_front_star_and_its_inner_star_on_one_set_of_axes():
+    f, inner, back, _ = _stars_and_blocks(_with_pieces(blocks_on_top=True))
+    assert f.params["source"] == "piece" and inner.params["source"] == "piece"
+    assert "source" not in back.params  # the backing has no piece of its own: the rules read it
+    assert f.params["kind"] == "star" and f.params["count"] == 6 and inner.params["count"] == 6
+    assert abs(f.params["r_outer"] - 0.72 * UNIT) < 7 and abs(inner.params["r_outer"] - 0.55 * UNIT) < 7
+    assert abs(back.params["r_outer"] - 0.8 * UNIT) < 7
+    for q in (inner, back):
+        assert abs((q.params["rotation_deg"] - f.params["rotation_deg"] + 30) % 60 - 30) < 3
+    assert abs(f.params["rotation_deg"] % 60 - 30) < 3
+
+
+def test_pieces_stack_the_blocks_over_the_outer_stars_and_under_the_inner_star(monkeypatch):
+    monkeypatch.setattr(H, "PIECE_STACKING", True)  # off in the pipeline (the color gate): the mechanism
+    # S70-19: the block masks are whole over the backing's and the red star's arms; the inner
+    # star's mask is whole over the blocks' inner ends
+    f, inner, back, blocks = _stars_and_blocks(_with_pieces(blocks_on_top=True))
+    assert back.z < f.z < blocks.z < inner.z
+
+
+def test_pieces_stack_whole_stars_over_cut_blocks(monkeypatch):
+    # the masks say the opposite of the labels: the pieces decide
+    monkeypatch.setattr(H, "PIECE_STACKING", True)
+    f, inner, back, blocks = _stars_and_blocks(_with_pieces(blocks_on_top=False))
+    assert blocks.z < back.z < f.z < inner.z
+
+
+def test_with_piece_stacking_off_the_labels_order_the_layers():
+    # PIECE_STACKING off: the masks that cut the blocks do not move them; the labels (blocks over the
+    # outer stars) and H16 (the front just on its backing, the inner star on top) do
+    f, inner, back, blocks = _stars_and_blocks(_with_pieces(blocks_on_top=False))
+    assert not H.PIECE_STACKING
+    assert back.z < f.z < blocks.z < inner.z
+
+
+def test_without_pieces_the_rules_layers_stand():
+    labels = base_head(inner_tip=0.55)
+    a = [(q.id, q.params, q.z) for q in detect_parts(_photo(labels), labels) if q.role != "tail_stripe"]
+    b = [(q.id, q.params, q.z) for q in detect_parts(_photo(labels), labels, pieces=None) if q.role != "tail_stripe"]
+    assert a == b and not any("source" in p for _, p, _ in a)
