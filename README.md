@@ -1,6 +1,6 @@
 # Rosette SVG generator
 
-A local tool that turns a product photo of a ribbon rosette into a configurator SVG for brroset.dk. It uses classical computer vision only (no AI/ML models, no paid APIs, no network calls at run time). The SVG follows the shop contract in section 3 of [the design spec](docs/superpowers/specs/2026-11-05-rosette-svg-generator-design.md): fixed layer order, the Color 1-4 categories the shop script recolors, and a pattern-capable Color 2.
+A local tool that turns a product photo of a ribbon rosette into a configurator SVG for brroset.dk. It uses classical computer vision plus one small local learned model (a scikit-learn classifier for the kind and count of each head layer, trained on the reference photos); no paid services or cloud APIs, and no network calls at run time. The SVG follows the shop contract in section 3 of [the design spec](docs/superpowers/specs/2026-11-05-rosette-svg-generator-design.md): fixed layer order, the Color 1-4 categories the shop script recolors, and a pattern-capable Color 2.
 
 The pipeline, its tuning constants, the scoreboard and the known limitations are in [docs/pipeline.md](docs/pipeline.md).
 
@@ -41,7 +41,7 @@ A result is **flagged** when the tool is unsure (a low-confidence color, any par
 
 ## Output
 
-Download the SVG from the UI (the download is enabled once the flags are confirmed) and keep it in `output/` (the tool does not write there by itself). Samples: `output/s35-19.svg`, `output/s46-15.svg`. Every file is checked by `rosette.validate.validate` against the contract before it is offered.
+Download the SVG from the UI (the download is enabled once the flags are confirmed) and keep it in `output/` (the tool does not write there by itself). With **Learn from my downloads** on (the default, under the Download button), the head layers of each downloaded SVG are also kept on this computer in `rosette/data/confirmed_layers.csv` as training examples for the layer classifier; retrain it with `.venv\Scripts\python.exe tools/train_layers.py` (the reference dataset is rebuilt with `tools/build_layer_dataset.py`). Nothing is sent anywhere. Samples: `output/s35-19.svg`, `output/s46-15.svg`. Every file is checked by `rosette.validate.validate` against the contract before it is offered.
 
 ## Tests
 

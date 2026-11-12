@@ -1,7 +1,7 @@
 # Rosette SVG generator
 
 Local tool that converts a rosette product photo into a configurator SVG for brroset.dk
-(classical CV only, no AI/ML models, no paid APIs, no runtime network calls).
+(no paid services or cloud APIs; free local models allowed; no runtime network calls).
 
 - Design spec: `docs/superpowers/specs/2026-11-05-rosette-svg-generator-design.md`. The SVG output
   contract is spec section 3; every generated file must satisfy it.

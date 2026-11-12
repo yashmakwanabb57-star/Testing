@@ -661,6 +661,44 @@ Mined on the 76 photos: 37 round heads (head disc); of the 39 others 19 have no 
 
 **Fix round 1.** (1) Rings: a gap of unheld rows between two runs is split at one boundary row shared by both rings (the inner one takes an odd row; before, an odd gap left a one-row seam and the outer ring never reached under the inner one's teeth), a gap open on one side (no center band, or outside the outermost run) is not taken, a ring whose color holds no run under it stays as measured (before, it could jump to another run of its color: a white ring 35-84 moved onto 21-33), and rings left identical in color and radii are kept once. (2) Borders are backings (`parts_trims.split_borders`, `_border_bands`; `BORDER_ROW_SHARE` 0.5, `BORDER_BODY_UNITS` 10, `BORDER_UNITS` 8, `BORDER_MIN_SIDES` 0.5): on S69-19 the navy border of the white star, kept by the rim-blob rule, had joined the navy front star's layer, which then reached the tips and was drawn over the white star. A points layer of h whose outer rows are a band of h at most 8 units wide right outside the sides of another layer's points (same count, axes within `EDGETIP_AXIS_DEG`, not loop blocks; read from each axis that shows the other layer, on >= 0.5 of the visible sides) ends where that border starts (rows with >= 0.5 of h's pixels in the band, gaps of up to 8 units around the other layer's tips bridged, rows where the axis does not show the other layer skipped), keeping at least 10 units of body; the border becomes a backing trim of the other layer (its points, reaching h's outer end, wider by the band on each side), drawn behind it by the H5 order. S69-19: navy front star 71.5-138.5 -> 71.5-114.5, navy backing diamond 83.5-138.5 behind the white star (rule-based head fit 0.615 / 0.869 -> 0.757 / 0.907; before H13 0.793 / 0.889), scoreboard agree 0.936 -> 0.998 (0.993 before H13), shape 0.933 -> 0.924, headS 0.802 -> 0.775 (the reference's white star sits differently). On the 13 rim-blob photos and A10-15 it fires on S69-19 only. (3) A points layer of fewer than 3 lobes is never drawn (`tidy.drop_two_point_layers`, `MIN_POINTS` 3; a warning names it): S53-19's 2-point "star" from the white pleat teeth is gone (its scoreboard row is unchanged). (4) The base's confidence includes the flank fit (`BASE_FIT_UNITS`, above). (5) Counts in the mining paragraph corrected (12 drawn already, 7 mixed). Scoreboard after the fix round, new image: PASS 21/34, color 0.855 -> 0.857, shape 0.919, head 0.844 -> 0.843 (gate 0.842 held), silently wrong 2; known design PASS 21/34, color 0.861, shape 0.920, head 0.848; only S69-19's row changes. Samples byte-identical, both validate to `[]`.
 
+## ML-1: a learned head-layer classifier (kind and count), pleated rings pinked
+
+Started at b48abe0. Full notes: `.superpowers/sdd/2026-11-05-rosette-svg-generator/ml1-report.md`. User ruling (2026-11-12): the "no AI/ML" rule means no paid services or cloud APIs; free local models are allowed. scikit-learn 1.9.1 (with joblib 1.6.0, threadpoolctl 3.8.0) is pinned; nothing calls the network at run time.
+
+**Dataset (`tools/build_layer_dataset.py` -> `rosette/data/layers.csv`).** Every head layer the rule-based detector draws on the 76 reference photos (`pipeline.detect(classify=False)`: head disc, rings, points layers with their trims and the base star, center, unknown parts inside 1.05 R): 331 layers, 325 labelled. Features (`rosette/vision/layer_features.py`, read off the detector's polar label unwrap between the layer's radii): extent in head radii and rim contact; coverage at 9 positions, fill share, full rows; the lobe-width profile at 9 positions and its ends / peak / fullness / width ratio (what the H4 kind rules threshold); the 72-bin angular profile at 5 radii as harmonic magnitudes 1..24 and a high-frequency share; circular runs at 5 radii; the turned self-correlation for every n in 2..24 (the rules' symmetry score); the color just inside and outside; category / pattern / texture; the layers overlapping it. Labels: the reference file is split into layers (classified pieces with `tools.stacking.piece_kind`; pieces of one Color and kind whose radial extents overlap are one layer; a scalloped annulus drawn as one shape is a pinked ring; a lobed shape from the middle is the center; a star under everything without a head disc is the base star), each with its rotational order as the count; a detected layer takes the reference layer seen on top on most of its photo pixels (its color in its extent near its drawn shape, in head radii; another Color counts half; under 0.25 it is `none`); detected trims are matched by the reference having that trim in their band and Color. Reference-differs photos (Known limitations): S29-15 and S53-19 take the rules' reading (confirmed photo-true in H12 / H13; S29-15's rings and unknowns are left out), s44-15's points layers are left out. Classes: disc 31, pinked ring 63, ring 7, loop 31, kite 22, petal 10, star 29, base star 4, backing 15, edge 5, center 99, none 9.
+
+**Model (`rosette/layer_model.py`, `tools/train_layers.py`, saved `rosette/data/layer_model.joblib`, 3.2 MB, with the training set's sha256).** Kind: a random forest (400 trees, balanced class weights) over the measurements plus the rules' reading (class, role and count; it beat the measurements alone, 0.643 vs 0.615). Count: each n in 2..24 is scored by a second forest from features of that n (its symmetry against the best, its harmonic, the runs against n and 2n, whether n is the rules' count) and the best n wins. Evaluated leave one photo out (76 folds; never leave-one-layer-out), the rules on the same labels. After the pleated-ring rule below:
+
+| class | n | rules | model |
+|---|---|---|---|
+| disc | 31 | 0.871 | 0.839 |
+| pinked ring | 63 | 0.492 (0.111 before the rule) | 0.683 |
+| ring | 7 | 0.143 | 0.000 |
+| loop | 31 | 0.677 | 0.742 |
+| kite | 22 | 0.091 | 0.182 |
+| petal | 10 | 0.100 | 0.000 |
+| star | 29 | 0.483 | 0.448 |
+| base star | 4 | 0.250 | 0.000 |
+| backing | 15 | 0.400 | 0.400 |
+| edge | 5 | 1.000 | 0.800 |
+| center | 99 | 0.667 | 0.869 |
+| none | 9 | 0.556 | 0.444 |
+| **kind, all** | 325 | **0.554** (0.498 before the rule) | **0.643** |
+| balanced | | 0.477 | 0.451 |
+| **count** (points labels) | 116 | **0.681** | **0.750** (loops 0.968, stars 0.724) |
+
+On the point shapes alone (loop to edge) the model ties the rules (0.42 vs 0.43); its gain is the ring style and the center role. The `ring` labels are almost all "the head disc shows as a band here".
+
+**The bars (from the LOO data, `train_layers.gate`).** Kind: the model decides at probability >= 0.645, where its LOO precision is 0.901 (37 % of the layers; the rules are right on 0.860 of them). Count: at score >= 0.889, LOO precision 0.911 (48 % of the points layers). (The count bar is a deviation from "the count replaces the rules everywhere": without it the full model turned S80-22's 6-point star into 3 and S69-19's 6-point star into 5.)
+
+**Wiring (`rosette/vision/layer_classify.py`, run by `pipeline.detect` after tidy and assign, on the same rows the model was trained on).** Count: at or above its bar the scorer's n replaces the rules' count of every non-trim points layer, the rotation is re-read for n and the width ratio scaled by old / new; the edge strips and backings on its axes follow. Kind: at or above its bar, only between plain and pinked ring and among the point shapes, and only where it is a parameter change (loop / kite / petal / star set the kind, an edge strip loses its strip width, a backing takes its host's kind); the role never changes; making a layer an edge strip or the base star needs geometry the model does not give. Below a bar a disagreement adds "Part {id}: the layer kind is uncertain - check the head against the photo." or "Part {id}: the point count is uncertain - check the number of points against the photo." (flags). Without a saved model nothing changes. Cost: about 0.6 s per photo (features 0.5 s, both forests 0.15 s) and a one-time model load of 2-5 s.
+
+**Pleated rings are pinked (`parts_head.pleat_texture`, `PLEAT_TEXTURE` 0.035).** The dataset showed a rule defect: the reference files draw nearly every pleated ring pinked and the rules called 24 of them plain. A ring band whose photo brightness varies along the circle around its 10-degree running median by at least 0.035 of its mean (median of 8 circles over the middle of the band, the band's color only, outside 45 degrees of the tails) is now pinked. On the 38 labelled detected rings the 31 pinked ones read 0.053-0.68 and the one smooth satin band (S55-15) 0.020; the 6 other "plain" labels are the head disc showing as a band (0.16-0.55; A10-15's inner red band is pleated on the photo).
+
+**Learning from confirmed downloads (`rosette/confirmed.py`, `/api/confirm`).** With "Learn from my downloads (kept on this computer)" on (the default; under the Download button, remembered in the browser), a download posts the final model; the detected head layers (before the classifier) are written to `rosette/data/confirmed_layers.csv` (git-ignored) with the downloaded part of the same id as the label (a deleted layer is `none`; a library head is not logged; a photo confirmed again replaces its rows). `tools/train_layers.py` trains on them together with the reference dataset.
+
+**Scoreboard (34 IDs).** New image, the headline: the classifier is retrained without the photo's own design (`layer_model.model_without(design_key)`, so it never reads a photo it learned from). PASS 21/34 (held), color 0.857 (held; S41-15 0.924 -> 0.931 from the pinked rule), head 0.843 (held), layer IoU mean 0.2163 (held), silently wrong 2 -> 1 (S33-15 is flagged now: the model disagrees with its star layers below the bar). No new-image row changes its kinds or counts at the bars; the rules-only run with the pinked rule gives the same rows. Known design (the full model, which has seen these photos; reported only): PASS 21 -> 22 (S33-15 0.886 -> 0.944: its stars drawn as kites, as its reference has them, headS 0.890 -> 0.863), S80-22 0.992 -> 1.000 (headS 0.879 -> 0.896), A14-17 0.949 -> 0.968, S37-15 0.949 -> 0.921, S41-15 0.924 -> 0.907, S67-19 0.964 -> 0.959, S58-17 headS 0.880 -> 0.874. The 76-photo comparison scripts were not run in this round.
+
 ## Final state (Task 16)
 
 ### Stages, modules and tuning constants
@@ -679,6 +717,7 @@ Constants are module-level names; read their comments in the source before chang
 | Color 1-4 assignment, confidence, warnings | `rosette/assign.py`, `rosette/roles.py`, rules in `rosette/data/assign_rules.json` (mined by `tools/mine_rules.py`) | `FLAG_BELOW`, `MAX_COLORS`, `PATTERN_MIN_RIBBON_SHARE`, `TAIL_POS_TOL`, `FLAGGED_CONF`, `PATTERN_MERGE_PENALTY`, `SLIVER_SHARE`, `RULE_LOGODDS` |
 | geometry, shapes, occlusion cuts | `rosette/geometry/`, `rosette/shapes.py`, `rosette/build.py`, `rosette/geometry/clip.py` | `QUAD_SEGS`, `SIMPLIFY`, `MIN_PIECE` |
 | SVG writer and contract validator | `rosette/writer.py`, `rosette/validate.py` | none (the contract is fixed) |
+| learned head-layer classifier (ML-1): features, kind and count behind LOO-derived bars, confirmed-download rows | `rosette/vision/layer_features.py`, `rosette/vision/layer_classify.py`, `rosette/layer_model.py` (model `rosette/data/layer_model.joblib`, data `rosette/data/layers.csv`, `tools/build_layer_dataset.py`, `tools/train_layers.py`), `rosette/confirmed.py` | `KIND_TREES`, `COUNT_TREES`, `SEED`, `LayerModel.gate` and `count_gate` (derived with `train_layers.GATE_PRECISION`, `GATE_MIN_LAYERS`), `UNKNOWN_IN`, `AXIS_DEG`; pleated rings `PLEAT_TEXTURE`, `PLEAT_*` (parts_head) |
 | orchestration, flagging, head fit | `rosette/pipeline.py` | `FLAG_BELOW` (imported from assign), `HEAD_FIT_MIN`, `HEAD_SILHOUETTE_MIN`, `CIRCLE_RATIO_MIN`, `CIRCLE_COVERAGE_MARGIN`, `HEAD_FIT_EXTENT`, `HEAD_FIT_WINDOW`, `HEAD_FIT_GRID` |
 | shop simulation (solid and pattern previews) | `rosette/simulate.py` | none |
 
@@ -690,15 +729,15 @@ Every generated file must satisfy section 3 of the [design spec](superpowers/spe
 
 `app/main.py` (FastAPI, started with `run.bat` or uvicorn on 127.0.0.1:8765) serves `app/static`. **Workbench** shows the photo, the detected model, the solid and pattern previews, edit controls and the flagged items on one screen. **Guided** walks through the same state one question at a time (`guided.js`); switching modes keeps the state. Edits go back through `render`, so the validator runs after every change.
 
-### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for H13)
+### Current scoreboard (`tools/score.py`, 34 IDs, re-recorded for ML-1)
 
-Re-recorded after H13 fix round 1: the columns are the new-image case (each photo's own design left out of the head library, the headline); the last column is the known design (full library) agree / success / headS. `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only).
+Re-recorded for ML-1 (the new-image column runs the layer classifier trained without the photo's own design): the columns are the new-image case (each photo's own design left out of the head library, the headline); the last column is the known design (full library) agree / success / headS. `stack reversed` counts the kind pairs our file stacks the other way round from the designer file (reported only).
 
 | ID | agree | uni | success | uni success | shape | headS | stack reversed | known design agree / success / headS |
 |---|---|---|---|---|---|---|---|---|
 | A10-15B | 0.906 | 0.942 | yes | yes | 0.870 | 0.684 | 0 | 0.906 / yes / 0.684 |
 | A13-15B | 0.187 | 0.187 | no | no | 0.929 | 0.967 | 1 (head>center) | 0.187 / no / 0.967 |
-| A14-17 | 0.949 | 0.949 | yes | yes | 0.957 | 0.963 | 0 | 0.949 / yes / 0.963 |
+| A14-17 | 0.949 | 0.949 | yes | yes | 0.957 | 0.963 | 0 | 0.968 / yes / 0.963 |
 | A15-17 | 0.949 | 0.949 | yes | yes | 0.965 | 0.957 | 0 | 0.949 / yes / 0.957 |
 | A16-17 | 0.837 | 0.926 | no | yes | 0.895 | 0.830 | 0 | 0.837 / no / 0.830 |
 | A9-15B | 1.000 | 1.000 | yes | yes | 0.939 | 0.828 | 0 | 1.000 / yes / 0.828 |
@@ -711,27 +750,27 @@ Re-recorded after H13 fix round 1: the columns are the new-image case (each phot
 | S29-15 | 0.301 | 0.301 | no | no | 0.908 | 0.765 | 1 (loop>star) | 0.301 / no / 0.765 |
 | S30-15 | 0.972 | 0.972 | yes | yes | 0.945 | 0.879 | 0 | 0.983 / yes / 0.944 |
 | S31-15 | 0.986 | 0.988 | yes | yes | 0.941 | 0.887 | 0 | 0.986 / yes / 0.887 |
-| S33-15 | 0.886 | 0.960 | no | yes | 0.955 | 0.890 | 0 | 0.886 / no / 0.890 |
+| S33-15 | 0.886 | 0.960 | no | yes | 0.955 | 0.890 | 0 | 0.944 / yes / 0.863 |
 | S35-19 | 0.963 | 0.963 | yes | yes | 0.927 | 0.845 | 0 | 0.942 / yes / 0.805 |
-| S37-15 | 0.949 | 0.936 | yes | yes | 0.905 | 0.825 | 0 | 0.949 / yes / 0.825 |
+| S37-15 | 0.949 | 0.936 | yes | yes | 0.905 | 0.825 | 0 | 0.921 / yes / 0.825 |
 | S40-15 | 0.893 | 0.889 | no | no | 0.927 | 0.879 | 0 | 0.893 / no / 0.879 |
-| S41-15 | 0.924 | 0.943 | yes | yes | 0.906 | 0.914 | 0 | 0.924 / yes / 0.914 |
+| S41-15 | 0.931 | 0.945 | yes | yes | 0.906 | 0.914 | 0 | 0.907 / yes / 0.914 |
 | S43-15 | 1.000 | 1.000 | yes | yes | 0.953 | 0.926 | 0 | 1.000 / yes / 0.926 |
 | S45-15 | 0.935 | 0.935 | yes | yes | 0.926 | 0.809 | 0 | 0.935 / yes / 0.809 |
 | S46-15 | 0.751 | 0.936 | no | yes | 0.835 | 0.660 | 1 (loop>star) | 0.751 / no / 0.660 |
 | S5-15 | 0.868 | 0.988 | no | yes | 0.852 | 0.734 | 0 | 0.868 / no / 0.734 |
 | S53-19 | 0.579 | 0.579 | no | no | 0.768 | 0.843 | 1 (star>ring) | 0.579 / no / 0.843 |
 | S56-17B | 0.969 | 0.963 | yes | yes | 0.902 | 0.817 | 0 | 0.988 / yes / 0.848 |
-| S58-17 | 1.000 | 1.000 | yes | yes | 0.943 | 0.880 | 0 | 1.000 / yes / 0.880 |
-| S67-19 | 0.964 | 0.964 | yes | yes | 0.947 | 0.861 | 0 | 0.964 / yes / 0.861 |
+| S58-17 | 1.000 | 1.000 | yes | yes | 0.943 | 0.880 | 0 | 1.000 / yes / 0.874 |
+| S67-19 | 0.964 | 0.964 | yes | yes | 0.947 | 0.861 | 0 | 0.959 / yes / 0.861 |
 | S68-19 | 0.966 | 0.620 | yes | no | 0.885 | 0.676 | 0 | 0.966 / yes / 0.676 |
 | S69-19 | 0.998 | 1.000 | yes | yes | 0.924 | 0.775 | 0 | 0.998 / yes / 0.775 |
 | S70-19 | 0.956 | 0.956 | yes | yes | 0.957 | 0.939 | 0 | 0.956 / yes / 0.939 |
-| S8-15 | 0.640 | 0.640 | no | no | 0.936 | 0.841 | 0 | 0.640 / no / 0.841 |
-| S80-22 | 0.992 | 1.000 | yes | yes | 0.934 | 0.879 | 0 | 0.992 / yes / 0.879 |
-| s34-15 | 0.956 | 0.951 | yes | yes | 0.926 | 0.838 | 1 (backing>star) | 0.956 / yes / 0.838 |
+| S8-15 | 0.640 | 0.640 | no | no | 0.936 | 0.841 | 0 | 0.637 / no / 0.841 |
+| S80-22 | 0.992 | 1.000 | yes | yes | 0.934 | 0.879 | 0 | 1.000 / yes / 0.896 |
+| s34-15 | 0.956 | 0.956 | yes | yes | 0.926 | 0.838 | 1 (backing>star) | 0.956 / yes / 0.841 |
 
-Official (per-axis), tools/score.py summary: new image `success 21  flagged-not-success 11  silently-wrong 2  errors 0` / `PASS 21/34 (target >= 80%)` / `color agreement mean 0.857  shape: mean IoU 0.919  head 0.843  tail 0.955  shape_ok 26/34 (IoU >= 0.9)`; known design (reported only) `PASS 21/34`, color 0.861, shape 0.920, head 0.848, shape_ok 26/34; `stacking: 6 kind pairs reversed vs the designer in 6/34 IDs (reported only)` / `success under uniform-scale alignment 26/34` (reported only). H12 (see its section for the rulings): S5-15 and S33-15 lose their success. H13: S53-19's headS 0.855 -> 0.843 accepted (reference proportions, see its section).
+Official (per-axis), tools/score.py summary: new image `success 21  flagged-not-success 12  silently-wrong 1  errors 0` / `PASS 21/34 (target >= 80%)` / `color agreement mean 0.857  shape: mean IoU 0.919  head 0.843  tail 0.955  shape_ok 26/34 (IoU >= 0.9)`, layer IoU mean 0.2163; known design (reported only) `PASS 22/34`, color 0.862, shape 0.920, head 0.847, shape_ok 26/34; `stacking: 6 kind pairs reversed vs the designer in 6/34 IDs (reported only)` / `success under uniform-scale alignment 26/34` (reported only). H12 (see its section for the rulings): S5-15 and S33-15 lose their success. H13: S53-19's headS 0.855 -> 0.843 accepted (reference proportions, see its section). ML-1: S33-15 is flagged now; the known-design column changes come from the full classifier (see its section).
 
 Flagged although correct: 20 of the 21 successes; S43-15 is an unflagged success with a visibly wrong head (see 5b); S28-15's wrong head is flagged since H11 (the point-count warning). The two silently wrong IDs are reference-vs-photo cases, not coloring misses: S46-15 (scorer alignment: the designer drew a larger head and narrower tails; its head fit 0.82 agreement, 0.94 outline is not a gross failure) and S33-15 (since H12 the photo's stacking puts the blue 6-point star over the purple glitter star, which its reference draws the other way; its head fit 0.71 is not a gross failure). S48-17 and s44-15 are the other reference-differs cases among the 76 photos (see Known limitations).
 
@@ -765,4 +804,4 @@ Before uploading either file to the shop, the user should open each photo in the
   - Color grouping: S2-15B (snowflake print merged with white satin). A13-15B's glitter is its own group since H6; its colors now differ from the reference's other scheme (royal Color 1 by the mined rules).
   - Designer differs from the photo: S8-15 (centre stripe the same red as the outer), S26-15 (glitter stripe widths), S46-15 (proportions).
 - Photos need a single rosette on a plain background; a rosette whose colors match the background can fail the mask. The messages for no rosette and unreadable files come from `prepare`.
-- Classical CV only: unusual head constructions fall back to `unknown` placeholder discs that the user must fix in the UI.
+- Classical CV plus one small learned classifier (ML-1): unusual head constructions fall back to `unknown` placeholder discs that the user must fix in the UI. The classifier ties the rules on the point shapes and changes no new-image scoreboard row at its bars; its labels come from LLM-made reference files (see the ML-1 section).

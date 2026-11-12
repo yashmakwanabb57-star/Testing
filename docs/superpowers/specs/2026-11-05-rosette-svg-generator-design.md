@@ -36,7 +36,8 @@ Non-goals (for now)
 - Colors inside the SVG. Output carries shapes and classes only; the shop applies colors.
 - Tracing text, paw prints, logos, satin shading, or background.
 - Uploading into the shop admin automatically.
-- AI/ML models or paid APIs (forbidden by `task.md`).
+- Paid services or cloud APIs. Free local models are allowed (user ruling 2026-11-12: the
+  `task.md` "no AI/ML" rule means no paid services); nothing calls the network at run time.
 
 Anti-goals
 - A raster-to-SVG tracer that "looks similar" but has one path per glitter speck or fold.
@@ -102,7 +103,7 @@ measurements and color assignment. The UI edits the RosetteModel; steps 5-7 reru
 instantly without re-analyzing the photo.
 
 1. **Prepare** - load (Pillow; WEBP supported), keep alpha, remove the near-white/transparent background, find the rosette mask, its vertical symmetry axis, bounding box, head circle (largest roughly-circular blob near the top) and tails region (below the head).
-2. **Detect parts** (OpenCV/scikit-image, classical CV only):
+2. **Detect parts** (OpenCV/scikit-image; since ML-1 a small local scikit-learn classifier, trained on the reference photos, reads each head layer's kind and count behind a confidence bar):
    - Head: outer radius; edge type pinked vs smooth; inner concentric rings via radial color profile from the center.
    - Points ring: type (star tips / diamonds / square bows / petals) and count N via an angular color profile at a few radii (count of periodic transitions, FFT peak); rotation offset; inner/outer radius.
    - Center: rose vs plain disc (texture/edge density), radius.
