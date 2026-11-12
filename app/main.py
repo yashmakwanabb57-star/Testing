@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
 
+from rosette import confirmed
 from rosette.model import RosetteModel
 from rosette.pipeline import (RULES_HEAD, UncoloredHead, add_library_head, analyze_with_context, is_flagged, render,
                               use_head)
@@ -46,6 +47,10 @@ class RenderRequest(BaseModel):
     # The head picked on the head card: "rules" or a library candidate's template_id
     # (rosette.pipeline.use_head); the response then carries the switched model.
     head: str | None = None
+
+
+class ConfirmRequest(BaseModel):
+    model: Any
 
 
 class PhotoCache:
@@ -134,6 +139,27 @@ def api_analyze(file: UploadFile) -> dict:
 
 def _holds(model: RosetteModel, tid: str) -> bool:
     return any(q.role == "template" and q.params.get("template_id") == tid for q in model.parts + model.alternatives)
+
+
+@app.post("/api/confirm")
+def api_confirm(req: ConfirmRequest) -> dict:
+    """ML-1: the downloaded model's head layers become local training rows
+    (rosette.confirmed; the app posts here only with "Learn from my downloads" on).
+    {"logged": rows written}; 0 when the photo is no longer in memory or the head is a
+    library head."""
+    try:
+        model = RosetteModel.from_json(req.model)
+    except Exception:
+        raise HTTPException(422, INVALID_MODEL) from None
+    ctx = photos.get(model.photo_token)
+    if ctx is None:
+        return {"logged": 0}
+    try:
+        n = confirmed.append_confirmed(confirmed.confirmed_records(ctx, model))
+    except OSError:
+        log.exception("could not write the confirmed layers")
+        n = 0
+    return {"logged": n}
 
 
 @app.get("/api/library")

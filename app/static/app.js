@@ -98,6 +98,27 @@ export const state = {
   guided: { mode: 'workbench', step: 1, reached: 1 }, // guided mode view state
 };
 
+// ---------------------------------------------------------------- learning setting
+
+// "Learn from my downloads" (ML-1): on unless the user turned it off; kept per browser.
+const LEARN_KEY = 'rosette.learn';
+
+export function learnEnabled() {
+  try {
+    return localStorage.getItem(LEARN_KEY) !== 'off';
+  } catch {
+    return true;
+  }
+}
+
+function setLearn(on) {
+  try {
+    localStorage.setItem(LEARN_KEY, on ? 'on' : 'off');
+  } catch {
+    // storage blocked: the setting lasts for this page only
+  }
+}
+
 // ---------------------------------------------------------------- api
 
 async function request(url, options) {
@@ -123,6 +144,13 @@ export const api = {
     const form = new FormData();
     form.append('file', file, file.name);
     return request('/api/analyze', { method: 'POST', body: form });
+  },
+  confirm(model) {
+    return request('/api/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    });
   },
   render(model, head) {
     return request('/api/render', {
@@ -388,6 +416,9 @@ export const actions = {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+    // ML-1: the confirmed head layers become local training rows (setting on by default)
+    const learn = document.getElementById('learn-toggle');
+    if (learn && learn.checked && state.model) api.confirm(state.model).catch(() => {});
   },
 };
 
@@ -922,6 +953,8 @@ function init() {
   $('source-toggle').addEventListener('change', (ev) => actions.setSim({ source: ev.target.checked }));
   $('model-rose').addEventListener('change', (ev) => actions.setModelRose(ev.target.checked));
   $('download').addEventListener('click', () => actions.download());
+  $('learn-toggle').checked = learnEnabled();
+  $('learn-toggle').addEventListener('change', (ev) => setLearn(ev.target.checked));
   $('convert').addEventListener('click', () => actions.convert());
   views.all();
 }
