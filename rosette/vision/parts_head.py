@@ -131,6 +131,9 @@ LOOP_KEEP, LOOP_PLATEAU, LOOP_SHARE = 0.85, 5 / 9, 0.45
 # A16 (C1): runs of a layer's color outside its full rows (`_runs_beyond_band`): RUNS_MIN..RUNS_MAX
 # per circle (more are a pleated edge's teeth) over at least RUNS_SPAN head radii.
 RUNS_MIN, RUNS_MAX, RUNS_SPAN = 3, 12, 0.15
+# A16 (C8): a layer whose runs (scaled from the visible arc to the circle) stay within RUNCOUNT_TOL
+# of a multiple of its order on RUNCOUNT_ROWS consecutive circles has that many lobes (`_run_count`).
+RUNCOUNT_TOL, RUNCOUNT_ROWS = 1.0, 3
 # A points layer (not a loop or star) whose inner end lies within COVER_GAP_UNITS outside
 # a ring or the center started under it (one pleat depth, RING_MAX_GROWTH_UNITS).
 COVER_GAP_UNITS = 8.0
@@ -433,6 +436,14 @@ def _kind(w: np.ndarray, spacing: np.ndarray | None = None) -> str:
     return "petal"
 
 
+def _harmonic_rotation(ind: np.ndarray, win: np.ndarray, n: int) -> float:
+    """Rotation (deg) of an n-fold (radii, theta) indicator: the phase of its n-th harmonic."""
+    x = ind.astype(np.float32)
+    th = np.linspace(0, 2 * np.pi, x.shape[1], endpoint=False)
+    c = (x[:, win] * np.exp(-1j * n * th[win])[None]).sum()
+    return float((-np.degrees(np.angle(c)) / n) % (360.0 / n))
+
+
 def _runs_beyond_band(ind: np.ndarray, win: np.ndarray, cov: np.ndarray, rr: np.ndarray, fr: Frame,
                       r_units: float) -> tuple[int, int, float, float] | None:
     """A16 (C1): a layer whose rows have no rotational symmetry as a whole (its lobes overlap into
@@ -465,6 +476,38 @@ def _runs_beyond_band(ind: np.ndarray, win: np.ndarray, cov: np.ndarray, rr: np.
     if not (RUNS_MIN <= n <= RUNS_MAX and sc >= SYM_T):
         return None
     return j, n, sc, rot
+
+
+def _run_count(ind: np.ndarray, win: np.ndarray, n: int, rot: float) -> tuple[int, float]:
+    """A16 (C8): (count, rotation) of a points layer of order n whose color forms, on at least
+    RUNCOUNT_ROWS consecutive circles, a number of runs that stays within RUNCOUNT_TOL of k n lobes
+    (k >= 2, under PLEAT_MIN_COUNT; the runs counted on the visible arc and scaled to the circle)
+    and whose turned self-correlation at k n (over the whole layer) reaches SPLIT_FLOOR and lies
+    within SPLIT_MARGIN of the one at n (a true k n-fold layer scores as high at its divisor n;
+    loops' edges and stripes that double the runs do not): the lower star of layered stars
+    shows all its points where the upper one's order (a divisor) won the symmetry (S49-17's 12-point
+    star read as 4). The largest such multiple wins; else (n, rot)."""
+    vis = np.flatnonzero(win)
+    x = ind[:, vis].astype(np.int8)
+    runs = (np.diff(x, axis=1) == 1).sum(axis=1) + x[:, 0]
+    est = runs * ind.shape[1] / max(len(vis), 1)  # lobes on the whole circle
+    x32 = ind.astype(np.float32)
+    sn = _score_at(x32, win, n)
+    for m in sorted((k * n for k in range(2, PLEAT_MIN_COUNT) if k * n < PLEAT_MIN_COUNT), reverse=True):
+        near = np.abs(est - m) <= RUNCOUNT_TOL
+        best, i = 0, 0
+        while i < len(near):
+            j = i
+            while j < len(near) and near[j]:
+                j += 1
+            if j - i > best:
+                best, at = j - i, (i, j)
+            i = j + 1
+        if best >= RUNCOUNT_ROWS:
+            sm = _score_at(x32, win, m)
+            if sm >= SPLIT_FLOOR and sm >= sn - SPLIT_MARGIN:
+                return m, _harmonic_rotation(ind, win, m)
+    return n, rot
 
 
 def _ring_outer(bd: _Band, bands: list[_Band], dom: np.ndarray, cov: np.ndarray, radii: np.ndarray,
@@ -588,6 +631,8 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
                     rb = ra + end
                     ind = pol[ra:rb] == g
                     area = float((cov[ra:rb, g] * 2 * np.pi * radii[ra:rb]).sum() * step)
+            if share >= LOW_SYM:  # A16 (C8): layered stars: the runs show a multiple of the order
+                n, rot = _run_count(ind, win, n, rot)
             if share < LOW_SYM:
                 found = _blob_layer(p, labels, fr, g, radii[a], radii[b - 1] + step, step, ind, win)
                 if found is not None:
