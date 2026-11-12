@@ -227,7 +227,7 @@ def test_a_thin_edge_piece_without_partners_is_dropped():
     frame = (np.abs(xx - 300) <= 34) & (np.abs(yy - 200) <= 19) & ~block.mask  # a thin border
     border = pieces._piece(frame, 0.9, 0.95, 1e9)
     assert pieces._thin(border, p)
-    assert pieces._kept_edge_pieces([disc, block], [border], p, head) == []
+    assert pieces._kept_edge_pieces([border], p, head) == []
     # six such borders at equal steps repeat: kept
     borders = []
     for a in range(0, 360, 60):
@@ -237,7 +237,7 @@ def test_a_thin_edge_piece_without_partners_is_dropped():
                 & ~((np.abs(xx - bx) <= 15) & (np.abs(yy - by) <= 15)))
         borders.append(pieces._piece(ring, 0.9, 0.95, 1e9))
     assert all(pieces._thin(b, p) for b in borders)
-    assert len(pieces._kept_edge_pieces([disc, block], borders, p, head)) == 6
+    assert len(pieces._kept_edge_pieces(borders, p, head)) == 6
 
 
 def _v_piece(shape, head, ang_deg: float, rad: float) -> Piece:
@@ -300,6 +300,123 @@ def test_registered_symmetric_points_find_a_repeat_off_the_ideal_step():
     for v in targets:
         assert any(v.mask[int(round(y)), int(round(x))] for x, y in pts)
     assert all(not f.mask[int(round(y)), int(round(x))] for f in found[1:] for x, y in pts)
+
+
+# ---- fix round 1 ----
+
+def _ring_of(shape, head, angles, rad: float, half: float = 8.0):
+    cx, cy, _r = head
+    out = []
+    for a in angles:
+        t = np.radians(a)
+        out.append(_blob_piece(shape, cx + rad * np.cos(t), cy + rad * np.sin(t), half, half))
+    return out
+
+
+def test_two_pieces_never_fit_steps():
+    head = (200.0, 200.0, 150.0)
+    shape = (400, 400)
+    disc = _disc_piece(shape, head)
+    assert len(pieces.symmetric_prompts([disc] + _ring_of(shape, head, (0, 60), 100.0), head)) == 0
+    assert len(pieces.symmetric_prompts([disc] + _ring_of(shape, head, (0, 180), 100.0), head)) == 0
+    assert pieces._fit_steps([0.0, 60.0]) is None
+
+
+def test_an_outlier_is_dropped_from_the_fit():
+    head = (200.0, 200.0, 150.0)
+    shape = (400, 400)
+    angles = [0.0, 60.0, 120.0, 180.0, 240.0, 300.0, 25.0]
+    n, _off, inliers = pieces._fit_steps(angles)
+    assert n == 6 and list(inliers) == [True] * 6 + [False]
+    found = [_disc_piece(shape, head)] + _ring_of(shape, head, angles, 100.0)
+    assert len(pieces.symmetric_prompts(found, head)) == 0
+
+
+def test_five_of_six_fit_six_steps():
+    head = (200.0, 200.0, 150.0)
+    shape = (400, 400)
+    n, _off, inliers = pieces._fit_steps([0.0, 60.0, 120.0, 180.0, 240.0])
+    assert n == 6 and inliers.all()
+    found = [_disc_piece(shape, head)] + _ring_of(shape, head, (0, 60, 120, 180, 240), 100.0)
+    pts = pieces.symmetric_prompts(found, head)
+    assert len(pts) == 1 and np.hypot(pts[0, 0] - 250.0, pts[0, 1] - (200.0 - 86.6)) <= 2.0
+
+
+def test_thin_is_by_width_not_area():
+    head = (200.0, 200.0, 150.0)
+    shape = (400, 400)
+    yy, xx = np.mgrid[:shape[0], :shape[1]]
+    p = _prepared(shape[0], shape[1], head, 1e9)
+    block = _blob_piece(shape, 300.0, 200.0, 25, 11)  # 51 x 23: 1.7 % of the rosette, 23 px wide
+    assert block.area / p.mask.sum() < 0.02
+    assert not pieces._thin(block, p)
+    assert pieces._kept_edge_pieces([block], p, head) == [block]
+    rr = np.hypot(xx - 200.0, yy - 200.0)
+    ring = pieces._piece((rr >= 40) & (rr <= 44), 0.9, 0.95, 1e9)  # thin, centred, all around
+    assert pieces._kept_edge_pieces([ring], p, head) == [ring]
+    arc = pieces._piece((rr >= 40) & (rr <= 44) & (xx > 200), 0.9, 0.95, 1e9)  # half a ring
+    assert pieces._thin(arc, p) and pieces._kept_edge_pieces([arc], p, head) == []
+
+
+def test_a_thin_edge_piece_on_an_occupied_step_needs_new_partners():
+    head = (200.0, 200.0, 150.0)
+    shape = (400, 400)
+    yy, xx = np.mgrid[:shape[0], :shape[1]]
+    p = _prepared(shape[0], shape[1], head, 1e9)
+
+    def border(a):
+        t = np.radians(a)
+        bx, by = head[0] + 100 * np.cos(t), head[1] + 100 * np.sin(t)
+        m = ((np.abs(xx - bx) <= 19) & (np.abs(yy - by) <= 19)
+             & ~((np.abs(xx - bx) <= 15) & (np.abs(yy - by) <= 15)))
+        return pieces._piece(m, 0.9, 0.95, 1e9)
+
+    one = border(0)
+    assert pieces._kept_edge_pieces([one], p, head) == []
+    assert len(pieces._kept_edge_pieces([border(a) for a in (0, 120, 240)], p, head)) == 3
+
+
+def test_registration_falls_back_when_the_piece_has_the_disc_color():
+    head = (200.0, 200.0, 150.0)
+    shape = (400, 400)
+    p = _prepared(shape[0], shape[1], head, 1e9)  # a red disc; the V pieces are red too
+    found = [_disc_piece(shape, head)] + [_v_piece(shape, head, a, 100.0) for a in (0, 60, 120)]
+    pts, _floors = pieces._symmetric_points(p, found)
+    assert np.allclose(np.sort(pts, axis=0), np.sort(pieces.symmetric_prompts(found, head), axis=0))
+
+
+def _soft(h, w, y0, y1, x0, x1):
+    lg = np.full((h, w), -8.0, np.float32)
+    lg[y0 - 2:y1 + 2, x0 - 2:x1 + 2] = 0.5  # between -1 and 1: lowers the stability
+    lg[y0:y1, x0:x1] = 8.0
+    return lg
+
+
+def test_filtered_keeps_weak_candidates_apart_for_the_completion_pass():
+    import torch
+    h, w = 120, 120
+    p = _prepared(h, w, (60.0, 60.0, 55.0), 1e9)
+    lg = _soft(h, w, 40, 80, 40, 80)  # stability 1600 / 1936 = 0.83
+    logits = torch.from_numpy(lg)[None, None]
+    ious = torch.tensor([[0.75]])
+    assert pieces._filtered(_FakeLoaded(), p, logits, ious, None) == []
+    weak: list = []
+    assert pieces._filtered(_FakeLoaded(), p, logits, ious, None, weak=weak) == []
+    assert len(weak) == 1 and weak[0].area == 1936
+    weak2: list = []
+    pieces._filtered(_FakeLoaded(), p, logits, torch.tensor([[0.65]]), None, weak=weak2)
+    assert weak2 == []
+
+
+def test_a_weak_set_is_kept_only_when_it_repeats_in_one_color():
+    head = (200.0, 200.0, 150.0)
+    shape = (400, 400)
+    p = _prepared(shape[0], shape[1], head, 1e9)
+    three = _ring_of(shape, head, (0, 120, 240), 100.0)
+    assert len(pieces._repeated_weak(three, p)) == 3
+    assert pieces._repeated_weak(three[:2], p) == []
+    p.rgb[three[1].mask] = (30, 40, 200)  # one of them is blue: no longer a repeat in one color
+    assert pieces._repeated_weak(three, p) == []
 
 
 # ---- S70-19 with the weights (slow) ----
@@ -378,10 +495,21 @@ def test_s70_19_pieces_include_the_blocks_chevrons_and_arms(s70_19):
 
 
 @pytest.mark.slow
-@pytest.mark.xfail(reason="SAM 2.1 small is not confident about red on red on S70-19: the border "
-                          "and red star masks it gives score below PRED_IOU_MIN / STABILITY_MIN "
-                          "(Task 3b report)", strict=False)
+@pytest.mark.xfail(reason="SAM 2.1 small is not confident about red on red on S70-19: even the "
+                          "repeat bars (0.70 / 0.75) give at most two red pieces, not a repeating set "
+                          "(Task 3b report, fix round 1)", strict=False)
 def test_s70_19_pieces_include_the_red_borders_or_the_red_star(s70_19):
     p, out, _again = s70_19
     kinds = _kinds(p, out)
     assert len(kinds["border"]) >= 6 or len(kinds["star"]) >= 1, {k: len(v) for k, v in kinds.items()}
+
+
+def test_filtered_drops_a_mask_of_two_significant_parts():
+    import torch
+    h, w = 120, 120
+    p = _prepared(h, w, (60.0, 60.0, 55.0), 1e9)
+    two = np.full((h, w), -8.0, np.float32); two[30:50, 30:50] = 8.0; two[70:90, 70:90] = 8.0
+    speck = np.full((h, w), -8.0, np.float32); speck[30:60, 30:60] = 8.0; speck[80:82, 80:82] = 8.0
+    out = pieces._filtered(_FakeLoaded(), p, torch.from_numpy(np.stack([two, speck]))[:, None],
+                           torch.tensor([[0.95], [0.9]]), None)
+    assert len(out) == 1 and out[0].area == 904
