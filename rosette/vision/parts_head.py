@@ -32,11 +32,13 @@ straight below the center where the tails show:
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, replace
 
 import cv2
 import numpy as np
 from scipy import ndimage
+from scipy.signal import find_peaks
 from shapely import contains_xy, unary_union
 
 from rosette.geometry import disc, pinked_ring, points_ring, ring
@@ -51,6 +53,8 @@ from rosette.vision.parts_trims import (BACK_GAP_UNITS, BACK_MIN_UNITS, BORDER_M
 from rosette.vision.prepare import Prepared
 from rosette.vision.templates import Piece as _Outline
 from rosette.vision.templates import _piece_word
+
+log = logging.getLogger(__name__)
 
 # ML-1 pleated rings: a ring band whose `pleat_texture` is at least PLEAT_TEXTURE is drawn
 # pinked. Measured on the 38 detected rings the dataset labels (tools/build_layer_dataset.py):
@@ -227,11 +231,14 @@ STACK_SHARE, STACK_MIN_UNITS2 = 0.65, 200.0
 NEST_AXIS_DEG, NEST_UNITS = 6.0, 3.0
 # ML-2 (pieces, `_front_pieces`): a SAM 2 piece of the head disc's color that lies in the head and
 # does not touch the rim (under RIM_TOUCH of its border pixels within RIM_LABEL_UNITS of the head
-# circle or beyond it) and whose rows that are not full have an n-fold turned self-correlation
-# (n in STAR_MIN_ORDER..PLEAT_MIN_COUNT - 1, the largest n within SPLIT_MARGIN of the best, which
-# must reach SPLIT_FLOOR) is a front layer in the base color read from its own outline: tips its
-# radial maxima, valleys its minima (medians over the visible axes), rotation the n-th harmonic of
-# the outline. The pieces of one other color that lie inside its convex hull (>= PIECE_INSIDE of
+# circle or beyond it) is read over the full circle (no tail can hide or join a piece inside the
+# head; the tails window is for color labels: A16-17's bottom tip lies in it). Its count n is the
+# strongest harmonic (n in STAR_MIN_ORDER..PLEAT_MIN_COUNT - 1) of its outline's radial profile
+# (A16-17: 12.1 units at 8 against 8.2 at 9); the turned self-correlation of its rows that are not
+# full must reach SPLIT_FLOOR at n, and the outline must show n maxima of PIECE_PROMINENCE_UNITS or
+# more (else the piece is refused, the reason logged). Then it is a front layer in the base color
+# read from its own outline: tips its radial maxima, valleys its minima (medians over the axes),
+# rotation the n-th harmonic of the outline. The pieces of one other color that lie inside its convex hull (>= PIECE_INSIDE of
 # their pixels each), read together, are its inner layer when they have the same n and axes within
 # BACK_TOL_DEG (one layer sewn on another on one set of axes: the nesting rule's tolerance,
 # NEST_AXIS_DEG); the inner layer is drawn on the front's axes, above it. A front piece whose valleys
@@ -239,15 +246,18 @@ NEST_AXIS_DEG, NEST_UNITS = 6.0, 3.0
 # three lobes).
 BACK_TOL_DEG = 6.0
 PIECE_INSIDE = 0.95
+PIECE_PROMINENCE_UNITS = MIN_ZONE_UNITS / 2
 # ML-2 (`stack_votes` with pieces): a piece belongs to the smallest drawn layer of its color whose
 # geometry holds its centroid and at least PIECE_OWN_SHARE of its pixels (the head disc counts as a
 # drawn layer, so the disc's own piece is not given to a star of its color drawn on it).
 PIECE_OWN_SHARE = 0.5
 # ML-2 switches for the two places pieces enter the detector (gates: docs/pipeline.md ML-2).
-# PIECE_STACKING is off: with it on, the pieces-on scoreboard's color agreement fell 0.855 -> 0.854,
-# under its gate (S28-15 1.000 -> 0.967 and S29-15 0.301 -> 0.285, where the visible pieces put the
-# loops over the star, as the designer files do, but the colors scored lower; docs/pipeline.md ML-2).
-# Off, the vote counts the labels as before and a front read from a piece casts no vote (H16).
+# PIECE_STACKING is off: on S29-15 the vote on visible pieces puts the loops over the stars (621 / 238
+# piece pixels; labels 698 / 2624), against the photo, where the stars are whole over the loops: the
+# stars' pieces cover a small part of what they show. On S28-15 it gives the photo's order (star over
+# the loops, 10 / 1010), and the color score drops there through the star's wide body (valleys at
+# 69.5 units), a geometry item. Off, the vote counts the labels as before and a front read from a
+# piece casts no vote (H16). docs/pipeline.md ML-2.
 PIECE_FRONT, PIECE_STACKING = True, False
 # H13: a head without a round outline (no head disc, HEAD_ROUND: tips standing less than about
 # 12 % of the head radius past a round disc keep the disc and get no base) whose silhouette above the
@@ -720,7 +730,7 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame, pieces: list | None 
     layers, meta = split_borders(layers, meta, pol, radii, win, fr)
     layers, meta = fold_specks(layers, meta, bands, head_band, pleated, radii, fr, RING_MAX_GROWTH_UNITS)
     if head is not None and pieces and PIECE_FRONT:  # ML-2: front layers from piece outlines
-        _front_pieces(layers, meta, zones, radii, win, fr, head["label"], p.head, pieces)
+        _front_pieces(layers, meta, zones, radii, fr, head["label"], p.head, pieces)
     # H11: convex "stars" and pleated edges are rings (annuli), flagged / pinked
     keep, paired = [], set()
     for k, lay in enumerate(layers):
@@ -1124,21 +1134,51 @@ def _touches_rim(mask: np.ndarray, cx: float, cy: float, r: float, fr: Frame) ->
     return float((np.hypot(xs - cx, ys - cy) >= r - RIM_LABEL_UNITS * fr.scale).mean()) >= RIM_TOUCH
 
 
-def _piece_order(ind: np.ndarray, win: np.ndarray) -> tuple[int, float] | None:
-    """ML-2: (n, score) of a piece's polar indicator over its rows that are not full: the largest n
-    in STAR_MIN_ORDER..PLEAT_MIN_COUNT - 1 whose turned self-correlation lies within SPLIT_MARGIN of
-    the best; None when the best is under SPLIT_FLOOR or no row is lobed (an annulus, a disc)."""
-    cov = ind[:, win].mean(axis=1)
+def _bridged(out: np.ndarray) -> np.ndarray | None:
+    """The outline with the angles it shows nothing at bridged (periodic); None when it shows < 3."""
+    ok = np.isfinite(out)
+    if ok.sum() < 3:
+        return None
+    return np.interp(np.arange(out.shape[0]), np.flatnonzero(ok), out[ok], period=out.shape[0])
+
+
+def _harmonics(out: np.ndarray) -> dict[int, float]:
+    """Amplitude (px) of the outline's n-th harmonic, n in STAR_MIN_ORDER..PLEAT_MIN_COUNT - 1."""
+    th = np.linspace(0, 2 * np.pi, out.shape[0], endpoint=False)
+    d = out - out.mean()
+    return {n: float(2 * abs((d * np.exp(-1j * n * th)).mean())) for n in range(STAR_MIN_ORDER, PLEAT_MIN_COUNT)}
+
+
+def _maxima(out: np.ndarray, prominence: float, n: int) -> int:
+    """Count of the circular outline's maxima standing at least `prominence` (px) above both sides,
+    at least half an n-step apart (a tip's ragged top is one maximum)."""
+    t = out.shape[0]
+    peaks, _ = find_peaks(np.concatenate([out, out, out]), prominence=prominence, distance=max(1, t // (2 * n)))
+    return int(((peaks >= t) & (peaks < 2 * t)).sum())
+
+
+def _piece_order(ind: np.ndarray, radii: np.ndarray, fr: Frame) -> tuple[int, float] | str:
+    """ML-2: (n, score) of a piece's polar indicator read over the full circle: n the strongest
+    harmonic of its outline, score the turned self-correlation of its rows that are not full at n.
+    A reason (str) instead when no row is lobed (an annulus, a disc), the score is under SPLIT_FLOOR
+    or the outline's maxima (PIECE_PROMINENCE_UNITS) are not n."""
+    full = np.ones(ind.shape[1], bool)
+    cov = ind.mean(axis=1)
     rows = np.flatnonzero((cov > EXTENT_COV) & (cov < FULL_COV))
     if rows.size < 2:
-        return None
-    x = ind[rows[0]:rows[-1] + 1].astype(np.float32)
-    scores = {n: _score_at(x, win, n) for n in range(STAR_MIN_ORDER, PLEAT_MIN_COUNT)}
-    best = max(scores.values())
-    if best < SPLIT_FLOOR:
-        return None
-    n = max(k for k, sc in scores.items() if sc >= best - SPLIT_MARGIN)
-    return n, float(scores[n])
+        return "no lobed rows"
+    out = _bridged(_outline_radii(ind, radii, full))
+    if out is None:
+        return "no outline"
+    amp = _harmonics(out)
+    n = max(amp, key=amp.get)
+    score = _score_at(ind[rows[0]:rows[-1] + 1].astype(np.float32), full, n)
+    if score < SPLIT_FLOOR:
+        return f"symmetry {score:.2f} at n={n} under {SPLIT_FLOOR}"
+    peaks = _maxima(out, PIECE_PROMINENCE_UNITS * fr.scale, n)
+    if peaks != n:
+        return f"{peaks} outline maxima against the strongest harmonic n={n}"
+    return n, float(score)
 
 
 def _outline_radii(ind: np.ndarray, radii: np.ndarray, win: np.ndarray) -> np.ndarray:
@@ -1220,8 +1260,7 @@ def _same_axes(q: dict, n: int, rot: float, tol: float) -> bool:
 
 
 def _front_pieces(layers: list, meta: list[dict], zones: list[tuple[int, int]], radii: np.ndarray,
-                  win: np.ndarray, fr: Frame, base: int, head: tuple[float, float, float],
-                  pieces: list) -> None:
+                  fr: Frame, base: int, head: tuple[float, float, float], pieces: list) -> None:
     """ML-2: front layers in the base color read from SAM 2 pieces, and their inner layers (BACK_TOL_DEG
     and the constants with it). A rules layer the piece path reads again (a front layer of the same
     color on the same axes: count equal, rotation within NEST_AXIS_DEG, not a backing; for the inner
@@ -1229,26 +1268,32 @@ def _front_pieces(layers: list, meta: list[dict], zones: list[tuple[int, int]], 
     way to the piece layer (params source "piece"); a rules layer without a piece counterpart stays.
     Runs after the H15 rule and the border split."""
     cx, cy, r = head
+    win = np.ones(RING_THETA, bool)  # pieces inside the head are read over the full circle
     head_pcs = [pc for pc in pieces if pc.in_head and pc.color_group is not None and pc.color_group >= 0]
+    added: list[tuple[int, float]] = []
 
     def polar_of(mask: np.ndarray) -> np.ndarray:
         return polar_sample(mask.astype(np.uint8), cx, cy, radii, RING_THETA, fill=0) > 0
 
-    for pc in head_pcs:
+    for i, pc in enumerate(head_pcs):
         if pc.color_group != base or _touches_rim(pc.mask, cx, cy, r, fr):
             continue
         ind = polar_of(pc.mask)
-        order = _piece_order(ind, win)
-        if order is None:
+        order = _piece_order(ind, radii, fr)
+        if isinstance(order, str):
+            log.info("piece %d (area %d) is no front layer: %s", i, pc.area, order)
             continue
         n, score = order
         rot = _piece_rotation(_outline_radii(ind, radii, win), n)
+        if any(_same_axes({"count": n2, "rotation_deg": rot2}, n, rot, NEST_AXIS_DEG) for n2, rot2 in added):
+            continue  # a second piece of a front layer already read (M4)
         got = _piece_layer(ind, radii, win, fr, head, n, rot)
         if got is None:
             continue
         front, rb = got
         if float(front["r_inner"]) < MIN_ZONE_UNITS:
             continue  # lobes from the middle: a badge print (S5-15's letters), not a layer on the disc
+        added.append((n, rot))
         ra = int(np.searchsorted(radii, float(front["r_inner"]) * fr.scale))
         hull = np.zeros(pc.mask.shape, np.uint8)
         cv2.fillConvexPoly(hull, cv2.convexHull(cv2.findNonZero(pc.mask.astype(np.uint8))), 1)
@@ -1261,8 +1306,8 @@ def _front_pieces(layers: list, meta: list[dict], zones: list[tuple[int, int]], 
         for h, group in sorted(by_color.items(), key=lambda kv: (-sum(q.area for q in kv[1]), kv[0])):
             mask2 = np.logical_or.reduce([q.mask for q in group])
             ind2 = polar_of(mask2)
-            order2 = _piece_order(ind2, win)
-            if order2 is None or order2[0] != n:
+            order2 = _piece_order(ind2, radii, fr)
+            if isinstance(order2, str) or order2[0] != n:
                 continue
             if not _same_axes({"count": n, "rotation_deg": _piece_rotation(_outline_radii(ind2, radii, win), n)},
                               n, rot, BACK_TOL_DEG):
@@ -1916,9 +1961,10 @@ def stack_votes(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame,
     """H12: (index a, index b, samples of a's label, samples of b's label) over the drawn
     overlap of every pair of non-trim points parts of different colors (STACK_*). A front layer
     in the disc's color does not vote; its backing does (H16, `_front_roles`).
-    ML-2: with SAM 2 pieces, a layer's samples are those on its own visible mask (`_own_pieces`:
-    the pieces whose centroid lies in the smallest drawn layer of their color) instead of those
-    of its color label; a layer no piece belongs to counts its label as before."""
+    ML-2: with SAM 2 pieces, a pair of layers that both have pieces counts the samples on each one's
+    own visible mask (`_own_pieces`: the pieces whose centroid lies in the smallest drawn layer of
+    their color) instead of its color label; when either has no piece, both count their labels as
+    before (like with like: a partial piece set against a full label loses votes it should win)."""
     geoms = {k: _part_geom(q) for k, q in enumerate(parts) if q.role in ("points", "ring", "center", "unknown")}
     own = _own_pieces(parts, geoms, pieces, fr) if pieces else {}
     void, backs = _front_roles(parts, trims, pieces)
@@ -1958,9 +2004,10 @@ def stack_votes(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame,
             if not own:
                 out.append((a, b, int((lab == ga).sum()), int((lab == gb).sum())))
                 continue
-            na = int(own[a][py[ok], px[ok]].sum()) if a in own else int((lab == ga).sum())
-            nb = int(own[b][py[ok], px[ok]].sum()) if b in own else int((lab == gb).sum())
-            out.append((a, b, na, nb))
+            if a in own and b in own:  # like with like: both visible masks, else both labels
+                out.append((a, b, int(own[a][py[ok], px[ok]].sum()), int(own[b][py[ok], px[ok]].sum())))
+            else:
+                out.append((a, b, int((lab == ga).sum()), int((lab == gb).sum())))
     return out
 
 
@@ -2018,7 +2065,10 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
             if (k not in backs and parts[k].id.startswith(FRONT_ID) and qk.get("count") == qf.get("count")
                     and qk.get("rotation_deg") == qf.get("rotation_deg")):
                 edges.append((2.0, b, k))
-    for f in hosts:  # ML-2: an inner layer read from pieces lies on its front piece layer (no backing)
+    under: dict[int, int] = {}  # ML-2: inner layer -> its void piece front
+    for f in [k for k in pts if k not in carried and (k in hosts or k in void)]:
+        # ML-2: an inner layer read from pieces lies on its front piece layer (no backing; the front
+        # is void when the vote has no pieces, and is then placed with H16's rule for a void front)
         qf = parts[f].params
         if qf.get("source") != "piece" or not parts[f].id.startswith(FRONT_ID) or parts[f].color_group != base_of(parts):
             continue
@@ -2028,8 +2078,11 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
                     and parts[k].color_group != parts[f].color_group and qk.get("count") == qf.get("count")
                     and qk.get("rotation_deg") == qf.get("rotation_deg")
                     and float(qk["r_outer"]) < float(qf["r_outer"])):
-                edges.append((2.0, f, k))
-    if not edges and not front_of:
+                if f in hosts:
+                    edges.append((2.0, f, k))
+                else:
+                    under[k] = f  # a void front: drawn just under its inner layer
+    if not edges and not front_of and not under:
         return
     # a backing keeps its front's place in the prior (before H16 it was a trim placed with it)
     zkey = {k: max([parts[k].z] + [parts[f].z for f, b in front_of.items() if b == k]) for k in hosts}
@@ -2071,6 +2124,7 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
     full = []
     for k in order:
         full += [t for t in pts if host_of.get(t) == k and parts[t].z < parts[k].z]
+        full += [f for i, f in under.items() if i == k and f not in full]  # ML-2: under its inner layer
         full.append(k)
         full += [f for f, b in front_of.items() if b == k]  # H16: the front just on its backing
         full += [t for t in pts if host_of.get(t) == k and parts[t].z >= parts[k].z]

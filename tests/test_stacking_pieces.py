@@ -106,12 +106,18 @@ def test_the_disc_piece_is_not_given_to_a_star_of_its_color():
     assert list(own) == [0]
 
 
-def test_a_layer_without_a_piece_votes_with_its_label():
+def test_a_pair_votes_like_with_like():
+    # the labels show the star over the loops; only the star has a piece (cut by the loops), the
+    # loops have none: both layers count their labels, never a partial piece set against a full label
     loops = _pts("points-1", 2, "bow", 45.0, 100.0, 0.0, 20)
     star = _pts("points-2", 1, "star", 45.0, 110.0, 30.0, 21)
     parts = [_head(), loops, star]
-    labels = _painted([star, loops])
-    pieces = [_piece(_mask(star) & ~_mask(loops), 1)]  # only the star has a piece (cut by the loops)
+    labels = _painted([loops, star])
+    pieces = [_piece(_mask(star) & ~_mask(loops), 1)]
     plain = _counts(H.stack_votes(parts, labels, _photo(labels), FR, set()), parts, loops)
     with_pieces = _counts(H.stack_votes(parts, labels, _photo(labels), FR, set(), pieces), parts, loops)
-    assert plain[0] == with_pieces[0] > 0
+    assert with_pieces == plain and plain[1] > 0
+    # with a piece on each side the masks count: the star's cut piece shows less than its label
+    both = _counts(H.stack_votes(parts, labels, _photo(labels), FR, set(), pieces + _lobes(_mask(loops), 2)),
+                   parts, loops)
+    assert both[1] < plain[1] and both[0] > plain[0]

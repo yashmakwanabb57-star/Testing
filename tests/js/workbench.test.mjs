@@ -53,9 +53,9 @@ test('the head checklist item is always present and blocks download until ticked
 
 test('the pieces status is one plain line', () => {
   const on = perceptionText({ status: 'on', pieces: 28, model: 'facebook/sam2.1-hiera-small', device: 'cpu',
-    seconds: 76.3, message: 'pieces computed' });
+    seconds: 76.3, cached: false, message: 'pieces computed' });
   assert.equal(on, 'Pieces: 28 found by sam2.1-hiera-small on cpu (76.3 s).');
-  assert.match(perceptionText({ status: 'on', pieces: 3, model: 'm', device: 'cpu', seconds: 1, message: 'cached pieces' }), /\(cached\)/);
+  assert.match(perceptionText({ status: 'on', pieces: 3, model: 'm', device: 'cpu', seconds: 1, cached: true }), /\(cached\)/);
   assert.match(perceptionText({ status: 'off' }), /^Pieces: off - /);
   const missing = perceptionText({ status: 'missing', message: 'Fetch them once with: tools/fetch_models.py --model small' });
   assert.match(missing, /fetch_models\.py/);

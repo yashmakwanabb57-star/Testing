@@ -10,7 +10,7 @@ from app.main import app
 from rosette.perception.pieces import Piece, Pieces
 
 PHOTO = Path(__file__).resolve().parent.parent / "reference" / "photos" / "S46-15.png"
-KEYS = {"device", "model", "pieces", "seconds", "status", "message"}
+KEYS = {"device", "model", "pieces", "seconds", "cached", "status", "message"}
 client = TestClient(app)
 
 
@@ -49,6 +49,27 @@ def test_a_failed_run_is_reported_and_the_rules_read_the_head(monkeypatch):
     assert body["model"]["parts"] == off.to_json()["parts"]
 
 
+def test_a_fault_in_the_piece_path_falls_back_to_the_rules(monkeypatch):
+    import rosette.vision.parts_head as H
+    monkeypatch.setenv("ROSETTE_SAM2", "small")
+
+    def fake(p, settings, cache_dir=None):
+        mask = np.zeros(p.mask.shape, bool)
+        mask[:10, :10] = True
+        return Pieces([Piece(mask=mask, score=0.9, stability=0.95, area=100, bbox=(0, 0, 9, 9), in_head=True)],
+                      "m", "cpu", 1.0, True)
+
+    def broken(*args, **kwargs):
+        raise ValueError("bad piece")
+    monkeypatch.setattr(pl, "segment", fake)
+    monkeypatch.setattr(H, "_own_pieces", broken)
+    monkeypatch.setattr(H, "PIECE_STACKING", True)
+    body = _analyze()
+    assert body["perception"]["status"] == "failed" and "bad piece" in body["perception"]["message"]
+    monkeypatch.setenv("ROSETTE_SAM2", "off")
+    assert body["model"]["parts"] == pl.analyze_with_fit(PHOTO.read_bytes())[0].to_json()["parts"]
+
+
 def test_pieces_on_are_counted_and_colored(monkeypatch):
     monkeypatch.setenv("ROSETTE_SAM2", "small")
     seen = []
@@ -62,5 +83,5 @@ def test_pieces_on_are_counted_and_colored(monkeypatch):
     monkeypatch.setattr(pl, "segment", fake)
     body = _analyze()
     assert body["perception"] == {"device": "cpu", "model": "facebook/sam2.1-hiera-small", "pieces": 1,
-                                  "seconds": 1.23, "status": "on", "message": "cached pieces"}
+                                  "seconds": 1.23, "cached": True, "status": "on", "message": "cached pieces"}
     assert seen[0].color_group is None  # the photo's corner is background (label -1)

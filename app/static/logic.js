@@ -151,7 +151,7 @@ export function perceptionText(p) {
   if (!p) return '';
   if (p.status === 'on') {
     const model = String(p.model || 'SAM 2').replace(/^.*\//, '');
-    const how = p.message === 'cached pieces' ? 'cached' : `${Number(p.seconds).toFixed(1)} s`;
+    const how = p.cached ? 'cached' : `${Number(p.seconds).toFixed(1)} s`;
     return `Pieces: ${p.pieces} found by ${model} on ${p.device} (${how}).`;
   }
   if (p.status === 'off') return 'Pieces: off - the rules alone read the head.';

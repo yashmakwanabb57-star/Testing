@@ -248,3 +248,33 @@ def test_without_pieces_the_rules_layers_stand():
     a = [(q.id, q.params, q.z) for q in detect_parts(_photo(labels), labels) if q.role != "tail_stripe"]
     b = [(q.id, q.params, q.z) for q in detect_parts(_photo(labels), labels, pieces=None) if q.role != "tail_stripe"]
     assert a == b and not any("source" in p for _, p, _ in a)
+
+
+def test_a_piece_tip_in_the_tails_sector_still_counts():
+    # A16-17: a piece inside the head is read over the full circle (the tails window is for labels);
+    # an 8-point star with a tip straight down reads 8, not 9
+    yy, xx, dx, dy, r, th = _grid()
+    labels = base_head(white=False, red_star=False)
+    star = (r <= _star(th, 8, 90, 0.4 * R, 0.7 * R)) & (r > 0.3 * R)
+    parts = [q for q in detect_parts(_photo(labels), labels, pieces=[_piece(star, 0)]) if q.role != "tail_stripe"]
+    front = [q for q in parts if q.role == "points" and q.color_group == 0]
+    assert len(front) == 1 and front[0].params["count"] == 8 and front[0].params["source"] == "piece"
+    assert abs((front[0].params["rotation_deg"] + 22.5) % 45 - 22.5) < 3  # a tip on 90 deg
+    assert abs(front[0].params["r_outer"] - 0.7 * UNIT) < 5 and abs(front[0].params["r_inner"] - 0.4 * UNIT) < 5
+
+
+def test_an_inner_piece_lies_on_its_front_piece_without_a_backing():
+    # no backing (no white border beyond the red tips): with the vote on labels the front is void
+    # and is drawn just under its inner layer
+    yy, xx, dx, dy, r, th = _grid()
+    labels = base_head(white=False, red_star=False)
+    inner = (r <= _star(th, 6, 30, 0.35 * R, 0.55 * R)) & (r > 0.3 * R)
+    labels[inner] = 1
+    red = (r <= _star(th, 6, 30, 0.4 * R, 0.75 * R)) & (r > 0.3 * R) & ~inner
+    parts = [q for q in detect_parts(_photo(labels), labels, pieces=[_piece(red, 0), _piece(inner, 1)])
+             if q.role != "tail_stripe"]
+    f = [q for q in parts if q.role == "points" and q.color_group == 0]
+    w = [q for q in parts if q.role == "points" and q.color_group == 1]
+    assert len(f) == 1 and len(w) == 1 and w[0].params.get("source") == "piece"
+    blocks = [q for q in parts if q.role == "points" and q.color_group == 2]
+    assert f[0].z < w[0].z and all(b.z < f[0].z for b in blocks)

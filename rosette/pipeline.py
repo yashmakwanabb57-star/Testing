@@ -688,10 +688,11 @@ def perception(p: Prepared, labels: np.ndarray, env=None) -> tuple[list | None, 
     """ML-2: (pieces or None, status) of the prepared photo. The pieces come from
     rosette.perception.pieces.segment (cached per photo), each with its color_group set to the
     majority label inside its mask (label -1 ignored; None when the mask holds no label).
-    status: {"device", "model", "pieces", "seconds", "status", "message"} with status "on",
+    status: {"device", "model", "pieces", "seconds", "cached", "status", "message"} with status "on",
     "off" (ROSETTE_SAM2=off), "missing" (no weights; the message holds the fetch command) or
     "failed" (the error text). Never raises: without pieces the rules path runs alone."""
-    out = {"device": None, "model": None, "pieces": 0, "seconds": 0.0, "status": "off", "message": PIECES_OFF}
+    out = {"device": None, "model": None, "pieces": 0, "seconds": 0.0, "cached": False, "status": "off",
+           "message": PIECES_OFF}
     try:
         settings = perception_settings.load(env)
         if settings.model == "off":
@@ -706,7 +707,8 @@ def perception(p: Prepared, labels: np.ndarray, env=None) -> tuple[list | None, 
         pc.color_group = g if g >= 0 else None
     message = "cached pieces" if result.cached else "pieces computed"
     return result.pieces, {"device": result.device, "model": result.model_id, "pieces": len(result.pieces),
-                           "seconds": round(float(result.seconds), 2), "status": "on", "message": message}
+                           "seconds": round(float(result.seconds), 2), "cached": bool(result.cached), "status": "on",
+                           "message": message}
 
 
 def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -> Detection:
@@ -718,8 +720,15 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     merged_print: list = []
     labels, groups = pixel_groups(p, merged=merged_print)
     pieces, seen = perception(p, labels)
+    try:
+        found = detect_parts(p, labels, groups, pieces)
+    except Exception as exc:  # noqa: BLE001 - a fault in the piece path: the rules read the head alone
+        if pieces is None:
+            raise
+        seen = dict(seen, status="failed", message=f"SAM 2 pieces failed in the detector - {type(exc).__name__}: {exc}")
+        found = detect_parts(p, labels, groups)
     tidy = merge_tail_slivers(drop_two_point_layers(drop_specks(
-        RosetteModel(parts=detect_parts(p, labels, groups, pieces)), head_r=Frame.of(p).d(p.head[2]))))
+        RosetteModel(parts=found), head_r=Frame.of(p).d(p.head[2]))))
     parts = tidy.parts
     tidy.warnings.extend(pleat_warnings(parts, p, labels))  # ML-1: rings near the pleat bar
     used = {q.color_group for q in parts}
