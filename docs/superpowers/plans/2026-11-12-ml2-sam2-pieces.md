@@ -152,6 +152,24 @@ def test_s70_19_pieces_include_the_blocks_and_stars():
 - [ ] **Step 4: Run tests** (fast, then `-m slow -k s70`); pass.
 - [ ] **Step 5: Commit** `feat: ML-2 - pieces: SAM 2.1 grid prompting over the head and tails with one image embedding, predicted-IoU and stability filters, NMS, and a per-photo cache`.
 
+### Task 3b: piece completion (symmetry, same-color borders, all hypotheses)
+
+**Files:**
+- Modify: `rosette/perception/pieces.py`
+- Test: `tests/test_perception_pieces.py`
+
+**Why:** on S70-19 the first pass (Task 3) found the disc, ring, rose, the six blue blocks, the six inner white star arms and only three of the six outer white chevrons; it found no red star and none of the red borders around the blocks (both in the disc's color). The user checks completeness piece by piece.
+
+**Interfaces:**
+- Consumes: `_run_model`, `_decode`, `_filtered`, `nms`, `Piece`, `default_key`.
+- Produces: `PIECES_VERSION = 2` folded into `default_key` (so Task 3 caches are not served); `_decode` returns all three hypotheses per point (logits (n, 3, h', w'), ious (n, 3)) and `_filtered` treats each hypothesis as a candidate (the predicted-IoU, stability, area filters and NMS then decide; a hypothesis that duplicates another point's mask is removed by NMS as before); `symmetric_prompts(pieces: list[Piece], head: tuple[float, float, float]) -> np.ndarray[(k, 2)]`: head pieces grouped by `color_group` is unknown at this stage, so group by area (within 35 %) and radius of the centroid from the head center (within 15 % of R); for a group of m >= 2 pieces whose centroid angles fit n equal steps (n in 3..16, every piece within `SYM_TOL_DEG = 6` of a step; the smallest n that fits), the prompts are the centroids at the missing steps (rotated about the head center at the group's mean radius); `edge_prompts(pieces, head) -> np.ndarray[(k, 2)]`: for each head piece that is not the largest (the disc) and not ring-like, points `EDGE_UNITS = 4` units (R / 150) outside its outline at the midpoints of its sides that face the head center and face away from it (the two ends of a block) and at its two long sides; `complete(p, loaded, pieces, original_sizes) -> list[Piece]`: runs `symmetric_prompts` and `edge_prompts` through `_decode` once (one extra pass, at most `MAX_EXTRA_POINTS = 160` points), filters and NMS-merges the result into `pieces`; `segment` calls it after the first pass and reports `seconds` for both passes.
+- A piece kept from an edge prompt must repeat: a thin piece (bbox fill ratio < 0.35 or area < 2 % of the rosette) is kept only when `symmetric_prompts` finds at least 3 pieces of its group at equal steps; otherwise dropped (`SYM_MIN_GROUP = 3`).
+
+- [ ] **Step 1: Failing tests:** (a) `symmetric_prompts` on three synthetic pieces at 0, 60, 120 degrees of equal area at radius 0.7 R -> three prompts at 180, 240, 300 within 2 px of the rotated centroids; (b) `edge_prompts` on one rectangular block piece gives 4 points, each 4 units outside the mask and not inside any other piece; (c) `_filtered` with a fake three-hypothesis output keeps a large hypothesis that passes the filters even when the best-IoU hypothesis is a small one (synthetic logits); (d) a thin edge piece without symmetric partners is dropped; (e) `default_key` changes with `PIECES_VERSION`.
+- [ ] **Step 2: Run; fail. Step 3: Implement. Step 4: Run; pass; fast suite passes.**
+- [ ] **Step 5: S70-19 (slow test, weights):** at least 6 outer white chevron pieces, 6 inner white arm pieces, 6 blue blocks, and either 6 red border pieces around the blocks or one red star piece; record the pieces and the two-pass time. Render the overlay (photo | pieces outlined and numbered, as the controller's script in the Task 3 report folder does) into the plan workspace as `s70-19-pieces-v2.png`.
+- [ ] **Step 6: Commit** `feat: ML-2 - piece completion: all three mask hypotheses as candidates, symmetric re-prompting at the missing steps of a repeated piece, edge prompts for same-color borders kept only when they repeat; cache key carries the pieces version`.
+
 ### Task 4: evaluation tool and overlays on the 76 photos
 
 **Files:**
