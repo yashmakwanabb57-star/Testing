@@ -52,6 +52,7 @@ def test_nms_drops_near_duplicates():
     b = a.copy(); b[2, 2] = False
     c = np.zeros((20, 20), bool); c[14:19, 14:19] = True
     assert nms(np.stack([a, b, c]), np.array([0.9, 0.8, 0.7])) == [0, 2]
+    assert nms([a, b, c], np.array([0.9, 0.8, 0.7])) == [0, 2]  # a plain list, as _filtered passes
 
 
 def test_stability_of_a_sharp_mask_is_one():

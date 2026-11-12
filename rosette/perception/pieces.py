@@ -102,9 +102,9 @@ def nms(masks, scores: np.ndarray, iou: float = NMS_IOU) -> list[int]:
     n = len(masks)
     if n == 0:
         return []
-    flat = masks.reshape(n, -1)
-    areas = flat.sum(axis=1)
-    boxes = [_bbox(m) for m in masks]
+    flat = [np.asarray(m).reshape(-1) for m in masks]  # a list or a stacked array
+    areas = [int(f.sum()) for f in flat]
+    boxes = [_bbox(np.asarray(m)) for m in masks]
     kept: list[int] = []
     for i in np.argsort(-np.asarray(scores), kind="stable"):
         dup = False
