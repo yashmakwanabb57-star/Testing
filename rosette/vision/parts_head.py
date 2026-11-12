@@ -637,9 +637,11 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
     layers, meta = split_borders(layers, meta, pol, radii, win, fr)
     layers, meta = fold_specks(layers, meta, bands, head_band, pleated, radii, fr, RING_MAX_GROWTH_UNITS)
     # H11: convex "stars" and pleated edges are rings (annuli), flagged / pinked
-    keep = []
+    keep, paired = [], set()
     for k, lay in enumerate(layers):
         role, g, share, params = lay[:4]
+        if k in paired:
+            continue  # A16 (C6): the other color of a two-tone pleated edge drawn as one ring
         if role == "points" and not meta[k].get("trim"):
             convex = _convex_star(params)
             if convex:  # its valleys are hidden under the layers inside its zone
@@ -655,8 +657,15 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame) -> list[Part]:
                             layers[j] = (lay2[0], lay2[1], lay2[2], q2) + tuple(lay2[4:])
                     keep.append(k)
                     continue
-            if convex or (_pleat_layer(params, meta[k]["zone"], bands)
-                          and not _alternating(k, layers, meta)):
+            pleat = not convex and _pleat_layer(params, meta[k]["zone"], bands)
+            j = _alternate_partner(k, layers, meta) if pleat else None
+            if j is not None:  # A16 (C6): one pinked ring in the color holding more of the edge
+                paired.add(j)
+                if j in keep:
+                    keep.remove(j)
+                if layers[j][4] > lay[4]:
+                    g, share = layers[j][1], layers[j][2]
+            if convex or pleat:
                 i0 = int(np.searchsorted(radii, float(params["r_inner"]) * fr.scale))
                 i1 = min(len(radii), int(np.searchsorted(radii, float(params["r_outer"]) * fr.scale)) + 1)
                 if i1 > i0:
@@ -1377,7 +1386,14 @@ def _hidden_valleys(params: dict, zone_start: float) -> dict | None:
 def _alternating(k: int, layers: list, meta: list[dict]) -> bool:
     """H11: layer k and another points layer of the same zone, count and radii (within
     ALT_RADIUS_UNITS) whose lobes sit between each other's: a two-tone pleated edge whose
-    colors alternate, kept as points (as rings one color would hide the other)."""
+    colors alternate. A16 (C6, ruling): drawn as one pinked ring in the color holding more of
+    it (`_alternate_partner`); a one-color pleated ring's highlights or shadows read as a
+    second color (S6-15, S69-19)."""
+    return _alternate_partner(k, layers, meta) is not None
+
+
+def _alternate_partner(k: int, layers: list, meta: list[dict]) -> int | None:
+    """Index of the points layer alternating with layer k (`_alternating`), or None."""
     q = layers[k][3]
     n = int(q["count"])
     for j, lay in enumerate(layers):
@@ -1388,8 +1404,8 @@ def _alternating(k: int, layers: list, meta: list[dict]) -> bool:
             continue
         off = (float(p2["rotation_deg"]) - float(q["rotation_deg"])) % (360.0 / n) / (360.0 / n)
         if abs(off - 0.5) <= ALT_OFFSET:
-            return True
-    return False
+            return j
+    return None
 
 
 def _pleat_layer(params: dict, zone: tuple[int, int], bands: list[_Band]) -> bool:
