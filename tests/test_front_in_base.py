@@ -100,3 +100,14 @@ def test_a_border_that_ends_at_the_wedge_tips_is_not_a_backing():
     parts = _head(base_head(white_tip=0.72))
     assert not [q for q in parts if q.role == "points" and q.color_group == 0]
 
+
+
+def test_a_border_color_that_is_not_an_n_fold_layer_of_its_own_gives_no_front_layer():
+    # S68-19: the lilac along the purple "wedges" is irregular stacked chevrons, read as unknown
+    # parts, not a backing star; here a white patch over one side breaks the white star's symmetry
+    labels = base_head()
+    yy, xx, dx, dy, r, th = _grid()
+    d = np.degrees(th) % 360
+    labels[(d > 190) & (d < 260) & (r > 0.45 * R) & (r < 0.7 * R) & (labels != 0)] = 1
+    parts = _head(labels)
+    assert not [q for q in parts if q.role == "points" and q.color_group == 0]

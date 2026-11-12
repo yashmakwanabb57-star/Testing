@@ -768,7 +768,9 @@ def _front_in_base(layers: list, meta: list[dict], zones: list[tuple[int, int]],
     of the sides) is a points layer of the base color in front: a star of n lobes from the
     zone's start (the ring or center it meets) to the last row its border runs along, and the
     border color, when it shows at least BACK_MIN_UNITS beyond those tips, is its backing (a trim: the star wider by the border on each side, reaching
-    the border's tips behind it). A layer of the border color on the same axes inside that
+    the border's tips behind it). The border color must be read as a points layer of its own
+    in the zone with n lobes or a multiple of n (S68-19's irregular lilac chevrons, read as
+    unknown parts, are not a backing star). A layer of the border color on the same axes inside that
     reach (the border's tips read alone) gives way to the backing. S70-19: a red 6-point star
     on a white star over blue loops on the red pleated disc; the white showed as chevrons."""
     t = pol.shape[1]
@@ -791,6 +793,9 @@ def _front_in_base(layers: list, meta: list[dict], zones: list[tuple[int, int]],
         if best is None:
             continue
         frac, h, mark = best
+        if not any(lay[0] == "points" and lay[1] == h and meta[k]["zone"] == (a, b) and not meta[k].get("trim")
+                   and int(lay[3]["count"]) % n == 0 for k, lay in enumerate(layers)):
+            continue  # the border color is no n-fold layer of its own: not a backing star (S68-19)
         marked = np.flatnonzero(mark.any(axis=1))
         tip = int(marked[-1]) + 1
         r_in, r_out = fr.d(radii[a]), fr.d(radii[tip - 1])
