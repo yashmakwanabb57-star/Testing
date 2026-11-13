@@ -2521,17 +2521,21 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
     front. R19: with the vote on labels (`pieces` None), `loose_pieces` given, a loose front's
     unanimous piece votes (`_loose_votes`) decide its pairs, and such a front is a host."""
     pts = [k for k, q in enumerate(parts) if q.role == "points"]
+    _clear_votes(parts)  # ML-4: this run's verdicts only (`_record_votes`)
     if len(pts) < 2:
         return
     edges = []  # (strength, lower, upper)
     decided = set()
     front_of, backs = _front_roles(parts, trims, pieces)
     carried = _carried_fronts(parts, trims, backs)
+    tally: dict[tuple[int, int], list[int]] = {}  # ML-4: samples per voted pair, for the candidates
     for a, b, na, nb in stack_votes(parts, labels, p, fr, trims, pieces):
         a, b = carried.get(a, a), carried.get(b, b)  # ML-2: a piece front votes for its backing
         if a == b:
             continue
-        _record_vote(parts, a, b, na, nb)  # ML-4: the verdict per pair, for the candidates
+        t = tally.setdefault((min(a, b), max(a, b)), [0, 0])
+        t[a > b] += na
+        t[a < b] += nb
         n = na + nb
         if n < STACK_MIN_UNITS2:
             continue
@@ -2611,6 +2615,7 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
 
     # strongest first; R19: ties by the vote's samples (a small unanimous piece vote after a large
     # unanimous label vote); the H16 / ML-2 placements (2.0) and the nested rule have no samples
+    _record_votes(parts, tally)
     for e in sorted(edges, key=lambda e: (-e[0], -(e[3] if len(e) > 3 else 0))):
         lo, up = e[1], e[2]
         if not reaches(up, lo):
@@ -2646,15 +2651,24 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
         parts[k].z = z
 
 
-def _record_vote(parts: list[Part], a: int, b: int, na: int, nb: int) -> None:
-    """ML-4: the H12 verdict of a voted pair on both parts' params (`vote_<other id>`: "over" when
-    that part lies on top at STACK_SHARE, "under", or "undecided" below the share or STACK_MIN_UNITS2),
+def _clear_votes(parts: list[Part]) -> None:
+    """ML-4: drop the verdicts of an earlier `photo_stacking` run (R17 re-votes after geometry changed)."""
+    for q in parts:
+        for k in [k for k in q.params if k.startswith("vote_")]:
+            del q.params[k]
+
+
+def _record_votes(parts: list[Part], tally: dict[tuple[int, int], list[int]]) -> None:
+    """ML-4: the H12 verdict of every voted pair, once, from its summed samples (a carried front and
+    its backing can vote the same pair), on both parts' params (`vote_<other id>`: "over" when that
+    part lies on top at STACK_SHARE, "under", or "undecided" below the share or STACK_MIN_UNITS2),
     read by `candidates.open_decisions`. The drawing never reads these keys."""
-    n = na + nb
-    v = ("undecided" if n < STACK_MIN_UNITS2 else "over" if na / n >= STACK_SHARE
-         else "under" if na / n <= 1 - STACK_SHARE else "undecided")
-    parts[a].params[f"vote_{parts[b].id}"] = v
-    parts[b].params[f"vote_{parts[a].id}"] = {"over": "under", "under": "over"}.get(v, v)
+    for (a, b), (na, nb) in tally.items():
+        n = na + nb
+        v = ("undecided" if n < STACK_MIN_UNITS2 else "over" if na / n >= STACK_SHARE
+             else "under" if na / n <= 1 - STACK_SHARE else "undecided")
+        parts[a].params[f"vote_{parts[b].id}"] = v
+        parts[b].params[f"vote_{parts[a].id}"] = {"over": "under", "under": "over"}.get(v, v)
 
 
 def _carried_fronts(parts: list[Part], trims: set[int], backs: set[int]) -> dict[int, int]:

@@ -9,9 +9,9 @@ from rosette.vision.groups import Group
 
 
 def _points(pid: str, kind: str, count: int, r0: float, r1: float, color: int, z: int,
-            rot: float = 0.0) -> Part:
+            rot: float = 0.0, conf: float = 0.9) -> Part:
     return Part(pid, "points", {"cx": 300.0, "cy": 200.0, "kind": kind, "count": count, "r_inner": r0,
-                                "r_outer": r1, "rotation_deg": rot, "width_ratio": 0.5}, color, z, 0.9)
+                                "r_outer": r1, "rotation_deg": rot, "width_ratio": 0.5}, color, z, conf)
 
 
 def _model(*points: Part, center: bool = True, rose: bool = False) -> RosetteModel:
@@ -118,7 +118,8 @@ def test_kind_disagreement_alone_is_one_candidate_not_a_silent_change():
 
 
 def test_decisions_are_capped_at_four_and_candidates_at_twenty_four():
-    layers = [_points(f"l{k}", "diamond", 6, 10 + 25 * k, 30 + 25 * k, k + 1, 10 + k) for k in range(5)]
+    # axes 7 deg apart: no layer follows another's count
+    layers = [_points(f"l{k}", "diamond", 6, 10 + 25 * k, 30 + 25 * k, k + 1, 10 + k, rot=7.0 * k) for k in range(5)]
     rules = _model(*layers)
     # five count decisions of three options each, and a kind disagreement after them
     grps = [_group("block", 10 + 25 * k, 30 + 25 * k, k + 1, 8, alts=(12,)) for k in range(5)]
@@ -138,18 +139,122 @@ def test_decisions_are_capped_at_four_and_candidates_at_twenty_four():
     assert len(cd.candidate_heads(rules, decisions, limit=5)) == 5
 
 
-def test_a_nested_stack_the_pieces_contradict_makes_a_nested_decision():
-    host, nest = _points("host", "star", 6, 20, 120, 1, 10), _points("nest", "star", 6, 20, 80, 2, 11)
+def _r19_stack():
+    """A host star and an R19 nested star on its axes: the host's r_inner, count and rotation, z assumed
+    (confidence at most BLOB_UNCONFIRMED_CONF)."""
+    host = _points("host", "star", 6, 20, 120, 1, 10)
+    nest = _points("nest", "star", 6, 20, 80, 2, 11, conf=0.5)
+    return host, nest
+
+
+def test_a_nested_stack_the_pieces_name_otherwise_makes_a_nested_decision():
+    host, nest = _r19_stack()
     rules = _model(host, nest)
     grps = [_group("block", 30, 80, 2, 6)]  # the model reads the nested star's band as blocks
     decisions = cd.open_decisions(rules, grps, _reading())
-    assert [(d.kind, d.part_ids, d.options) for d in decisions] == [("nested", ("nest", "host"),
-                                                                       ("with", "without"))]
+    assert [(d.kind, d.part_ids, d.options) for d in decisions] == [
+        ("nested", ("nest", "host"), ("with", "without")), ("layer_kind", ("nest",), ("star", "diamond"))]
     heads = cd.candidate_heads(rules, decisions)
-    assert [[q.id for q in h.parts if q.role == "points"] for h in heads] == [["host", "nest"], ["host"]]
-    # chevrons there support the stack; an unanswered piece says nothing
-    assert cd.open_decisions(rules, [_group("chevron", 30, 80, 2, 6)], _reading()) == []
+    assert [[(q.id, q.params["kind"]) for q in h.parts if q.role == "points"] for h in heads] == [
+        [("host", "star"), ("nest", "star")], [("host", "star"), ("nest", "diamond")], [("host", "star")]]
+    # chevrons there: keep or remove the stack, no kind to change
+    d = cd.open_decisions(rules, [_group("chevron", 30, 80, 2, 6)], _reading())
+    assert [(x.kind, x.options) for x in d] == [("nested", ("with", "without"))]
+    # a star reading agrees; an unanswered piece says nothing
+    assert cd.open_decisions(rules, [_group("star", 30, 80, 2, 6)], _reading()) == []
     assert cd.open_decisions(rules, [_group("other", 30, 80, 2, 6)], _reading()) == []
+
+
+def test_only_stacks_the_rules_drew_as_stacks_open_a_nested_decision():
+    # two concentric stars of one count and axes, but the inner one is no R19 or H16 stack: a kind only
+    host, inner = _points("host", "star", 6, 20, 120, 1, 10), _points("inner", "star", 6, 30, 80, 2, 11)
+    rules = _model(host, inner)
+    d = cd.open_decisions(rules, [_group("block", 30, 80, 2, 6)], _reading())
+    assert [(x.kind, x.part_ids) for x in d] == [("layer_kind", ("inner",))]
+    assert cd.open_decisions(rules, [_group("chevron", 30, 80, 2, 6)], _reading()) == []
+    # H16: an inner star (a front layer) on another front layer's axes is a stack whatever its confidence
+    front, inner = _points("front-1", "star", 6, 20, 120, 1, 10), _points("front-2", "star", 6, 30, 80, 2, 11)
+    d = cd.open_decisions(_model(front, inner), [_group("chevron", 30, 80, 2, 6)], _reading())
+    assert [(x.kind, x.part_ids) for x in d] == [("nested", ("front-2", "front-1"))]
+
+
+def test_a_count_candidate_scales_the_width_and_moves_the_layers_on_its_axes():
+    host, nest = _r19_stack()
+    other = _points("other", "petal", 5, 20, 60, 3, 12)  # another count: stays
+    tilted = _points("tilted", "diamond", 6, 20, 50, 4, 13, rot=30.0)  # same count, other axes: stays
+    rules = _model(host, nest, other, tilted)
+    decisions = cd.open_decisions(rules, [_group("star", 20, 120, 1, 8)], _reading())
+    assert [(d.kind, d.part_ids, d.options) for d in decisions] == [("count", ("host",), (6, 8))]
+    heads = cd.candidate_heads(rules, decisions)
+    q = {p.id: p.params for p in heads[1].parts}
+    assert (q["host"]["count"], q["nest"]["count"]) == (8, 8)
+    assert q["host"]["width_ratio"] == q["nest"]["width_ratio"] == 0.375  # 0.5 * 6 / 8
+    assert q["host"]["rotation_deg"] == 0.0 and q["host"]["r_outer"] == 120
+    assert (q["other"]["count"], q["tilted"]["count"], q["tilted"]["width_ratio"]) == (5, 6, 0.5)
+    # axes compared modulo the step: 59.0 deg is 1 deg from 0 for six points
+    nest.params["rotation_deg"] = 59.0
+    heads = cd.candidate_heads(rules, decisions)
+    assert next(p for p in heads[1].parts if p.id == "nest").params["count"] == 8
+
+
+def test_count_options_stay_within_the_drawable_counts():
+    rules = _model(_points("blocks", "diamond", 6, 60, 100, 2, 20))
+    d = cd.open_decisions(rules, [_group("block", 58, 102, 2, 8, alts=(40, 1))], _reading())
+    assert [x.options for x in d] == [(6, 8)]
+    assert cd.open_decisions(rules, [_group("block", 58, 102, 2, 30)], _reading()) == []
+
+
+def test_identical_candidates_are_dropped_before_the_cap():
+    host, nest = _r19_stack()
+    rules = _model(host, nest)
+    # count, nested and kind on the nest: with the nest removed its kind no longer matters
+    decisions = cd.open_decisions(rules, [_group("block", 30, 80, 2, 8)], _reading())
+    assert [d.kind for d in decisions] == ["count", "nested", "layer_kind"]
+    heads = cd.candidate_heads(rules, decisions)
+    keys = [str(h.to_json()) for h in heads]
+    assert len(set(keys)) == len(keys) == 6
+    assert len(cd.candidate_choices(rules, decisions)) == 6
+
+
+def test_an_equal_z_order_swap_keeps_the_z_values():
+    star, blocks, grps = _two_layers()
+    star.z = blocks.z = 20  # equal z: the later part (blocks) is on top
+    third = _points("third", "petal", 6, 10, 30, 3, 21)
+    rules = _model(star, blocks, third)
+    star.params["vote_blocks"], blocks.params["vote_star-a"] = "undecided", "undecided"
+    decisions = cd.open_decisions(rules, grps, _reading([PairAnswer(1, 2, "a")], marks={1: 0, 2: 1}))
+    assert [(d.kind, d.options) for d in decisions] == [("order", ("blocks", "star-a"))]
+    h = cd.candidate_heads(rules, decisions)[1]
+    assert sorted(q.z for q in h.parts) == sorted(q.z for q in rules.parts)  # no new z, none out of range
+    ids = [q.id for q in h.parts]
+    assert ids.index("star-a") > ids.index("blocks") and next(q.z for q in h.parts if q.id == "star-a") == 20
+
+
+def test_with_badge_and_rose_read_the_larger_centre_group_decides():
+    rules = _model(_points("blocks", "diamond", 6, 60, 100, 2, 20), rose=False)
+    small_rose, big_badge = _group("rose", 0, 10, 7, 1), _group("badge", 0, 25, 7, 1)
+    assert cd.open_decisions(rules, [small_rose, big_badge], _reading()) == []
+    big_rose, small_badge = _group("rose", 0, 25, 7, 1), _group("badge", 0, 10, 7, 1)
+    d = cd.open_decisions(rules, [small_badge, big_rose], _reading())
+    assert [(x.kind, x.options) for x in d] == [("center", ("badge", "rose"))]
+
+
+def test_photo_stacking_records_the_final_verdict_once_per_pair(monkeypatch):
+    star, blocks = _points("star-a", "star", 6, 40, 120, 1, 10), _points("blocks", "diamond", 6, 60, 100, 2, 20)
+    third = _points("third", "petal", 6, 30, 50, 3, 30)
+    parts = [star, blocks, third]
+    half = int(parts_head.STACK_MIN_UNITS2) // 2 + 1
+    # one pair voted twice (a carried front and its backing): the samples add up to one verdict
+    votes = [(0, 1, half, 0), (1, 0, 0, half), (0, 2, 3 * half, 0)]
+    monkeypatch.setattr(parts_head, "stack_votes", lambda *a, **k: votes)
+    parts_head.photo_stacking(parts, None, None, None, set())
+    assert (star.params["vote_blocks"], blocks.params["vote_star-a"]) == ("over", "under")
+    assert star.params["vote_third"] == "over"
+    # the re-vote no longer sees the star against the third layer: no stale verdict is left
+    votes[:] = [(0, 1, 2 * half, 0)]
+    parts_head.photo_stacking(parts, None, None, None, set())
+    assert "vote_third" not in star.params and "vote_star-a" not in third.params
+    assert star.params["vote_blocks"] == "over"
 
 
 def test_a_centre_the_model_reads_otherwise_makes_a_center_decision():

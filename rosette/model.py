@@ -28,7 +28,9 @@ def check_params(params: dict) -> None:
     ints in 1..MAX_COUNT (indices 0..MAX_COUNT), numbers must be finite, stripe lists short.
     Geometry must not be degenerate: radii, width_ratio and tail widths > 0, r_inner <
     r_outer, top_y < bottom_y, and the center (cx, cy) on the 600x850 canvas. Every
-    analyze output on the 76 reference photos passes these rules."""
+    analyze output on the 76 reference photos passes these rules. Points parts may also carry
+    informational `vote_<other part id>` strings (over | under | undecided: the H12 photo vote,
+    `parts_head._record_votes`, read by `candidates.open_decisions`); nothing draws from them."""
     for k, v in params.items():
         if k in _COUNT_PARAMS:
             lo = 0 if k.endswith("index") else 1
