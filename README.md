@@ -36,6 +36,22 @@ Three settings, environment variables read at each analysis (set them before sta
 
 A photo's pieces take about a minute on this CPU the first time; they are cached in `.cache/pieces/` (git-ignored), so the same photo is fast afterwards.
 
+### ML-4 reader (optional)
+
+The reader names the SAM 2.1 head pieces with a local vision-language model (docs/superpowers/specs/2026-11-13-ml4-piece-reader-design.md). It needs the SAM 2 weights above and, once, these downloads (all git-ignored under `models/`):
+
+- llama.cpp release b12342, the Windows CPU x64 zip (`llama-b12342-bin-win-cpu-x64.zip`) from the llama.cpp GitHub releases page, unpacked so that `models/llama-cpp/llama-server.exe` exists. Zip SHA-256: `ef7d483be13b34dd0de2a4accec2b7b180606113ccf805a0abd8774c663683f8`.
+- From the Hugging Face repo `ggml-org/Qwen3.5-4B-GGUF` (Apache-2.0), into `models/Qwen__Qwen3.5-4B-GGUF/`:
+  - `mmproj-Qwen3.5-4B-Q8_0.gguf`, SHA-256 `5a5ba634d46f9888599963bfc52194eadf099e1efdbee46d71957d911cf62654`.
+  - `Qwen3.5-4B-Q8_0.gguf` (about 4.5 GB; the default). SHA-256: not recorded yet (the file was still downloading when this was written; run `certutil -hashfile <file> SHA256`).
+  - `Qwen3.5-4B-Q4_K_M.gguf` (about 3 GB; the fallback used, and said so in the status line, when the Q8_0 file is absent), SHA-256 `217002fa8008ef4fc6d548353a3aebef055a96e6ff8e0e2c0953ef8254a89c14`.
+
+Check a file with `certutil -hashfile <file> SHA256`. Without the executable or the weights the reader reports `missing` with this install line and the pipeline runs without it. The tool starts `llama-server` on 127.0.0.1 itself and stops it afterwards; answers are cached per photo in `.cache/reader/`. Three settings, environment variables read at each analysis:
+
+- `ROSETTE_READER`: `auto` (default: on when the files exist), `on` or `off`. The tests run with it off.
+- `ROSETTE_READER_PORT`: the local port (default `8089`).
+- `ROSETTE_READER_THREADS`: CPU threads for the model (default `14`).
+
 ## Run
 
 Double-click `run.bat`, or run:

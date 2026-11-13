@@ -6,3 +6,8 @@ import pytest
 @pytest.fixture(autouse=True)
 def _pieces_off(monkeypatch):
     monkeypatch.setenv("ROSETTE_SAM2", "off")
+
+
+@pytest.fixture(autouse=True)
+def _reader_off(monkeypatch):
+    monkeypatch.setenv("ROSETTE_READER", "off")

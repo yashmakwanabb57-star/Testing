@@ -1,0 +1,55 @@
+{
+ "id": "S43-15",
+ "pairs": [
+  [
+   1,
+   10
+  ],
+  [
+   1,
+   12
+  ],
+  [
+   1,
+   4
+  ],
+  [
+   1,
+   9
+  ],
+  [
+   4,
+   6
+  ],
+  [
+   7,
+   10
+  ],
+  [
+   2,
+   11
+  ],
+  [
+   3,
+   12
+  ],
+  [
+   1,
+   11
+  ],
+  [
+   9,
+   10
+  ],
+  [
+   6,
+   9
+  ],
+  [
+   4,
+   11
+  ]
+ ],
+ "q1": "[{\"mark\": 1, \"kind\": \"rose\", \"texture\": \"plain\", \"repeats\": 1}, {\"mark\": 2, \"kind\": \"block\", \"texture\": \"glitter\", \"repeats\": 4}, {\"mark\": 3, \"kind\": \"block\", \"texture\": \"glitter\", \"repeats\": 4}, {\"mark\": 4, \"kind\": \"star\", \"texture\": \"plain\", \"repeats\": 4}, {\"mark\": 5, \"kind\": \"block\", \"texture\": \"glitter\", \"repeats\": 4}, {\"mark\": 6, \"kind\": \"block\", \"texture\": \"glitter\", \"repeats\": 4}, {\"mark\": 7, \"kind\": \"block\", \"texture\": \"glitter\", \"repeats\": 4}, {\"mark\": 8, \"kind\": \"block\", \"texture\": \"glitter\", \"repeats\": 4}, {\"mark\": 9, \"kind\": \"star\", \"texture\": \"plain\", \"repeats\": 4}, {\"mark\": 10, \"kind\": \"star\", \"texture\": \"plain\", \"repeats\": 4}, {\"mark\": 11, \"kind\": \"star\", \"texture\": \"plain\", \"repeats\": 4}, {\"mark\": 12, \"kind\": \"star\", \"texture\": \"plain\", \"repeats\": 4}]",
+ "q2": "[{\"a\": 1, \"b\": 10, \"on_top\": \"a\"}, {\"a\": 1, \"b\": 12, \"on_top\": \"a\"}, {\"a\": 1, \"b\": 4, \"on_top\": \"a\"}, {\"a\": 1, \"b\": 9, \"on_top\": \"a\"}, {\"a\": 4, \"b\": 6, \"on_top\": \"b\"}, {\"a\": 7, \"b\": 10, \"on_top\": \"b\"}, {\"a\": 2, \"b\": 11, \"on_top\": \"b\"}, {\"a\": 3, \"b\": 12, \"on_top\": \"b\"}, {\"a\": 1, \"b\": 11, \"on_top\": \"a\"}, {\"a\": 9, \"b\": 10, \"on_top\": \"b\"}, {\"a\": 6, \"b\": 9, \"on_top\": \"b\"}, {\"a\": 4, \"b\": 11, \"on_top\": \"b\"}]"
+}
