@@ -270,6 +270,15 @@ PIECE_OWN_SHARE = 0.5
 # 69.5 units), a geometry item. Off, the vote counts the labels as before and a front read from a
 # piece casts no vote (H16). docs/pipeline.md ML-2.
 PIECE_FRONT, PIECE_STACKING = True, False
+# R19 (`_loose_votes`): with PIECE_STACKING off a front in the disc's color read from pieces with no
+# backing (a loose front, `_loose_piece_fronts`) casts no label vote: its label cannot be told from
+# the disc's. Its own pieces still decide its pair with a layer that has pieces when the piece vote is
+# unanimous (every sample on one mask) and holds at least PIECE_UNANIMOUS_MIN samples (canvas
+# units^2). Mined on the 76 photos (docs/pipeline.md R19): of the 35 pairs voted with pieces on
+# both sides, the only unanimous vote under STACK_MIN_UNITS2 is S43-15's (13 / 0, the turquoise
+# arms over the glitter blocks, as on the photo); the other small votes are split (S18-15B 6 / 31,
+# S3-15 1 / 9, S32-15 14 / 5).
+PIECE_UNANIMOUS_MIN = 10
 # R17 (`_tip_lobes`, `_tips_to_stars`): a points layer read as blocks, kites or petals whose lobes
 # are the TIPS of a star whose body is covered by other layers is that star. Its outermost lobe (the
 # last run of rows its label holds through the lobe axes, the median over the visible axes) must
@@ -291,6 +300,21 @@ TIP_CUT_WIDE, TIP_SIDE, TIP_WALK_UNITS = 0.6, 0.9, 20.0
 # not drawn), so the whole star shows its color where that layer lies. The new-image color mean fell
 # 0.855 -> 0.854 (S37-15 0.949 -> 0.921, S45-15 0.935 -> 0.930) against its gate. docs/pipeline.md R17.
 TIP_CUT_A = False
+# R19 (`_axis_runs`, `_nested_runs`): stars nested on one set of axes (s44-15: gold, black, gold and
+# black 4-point stars on the black disc, each sewn on the last; H15 reads the outer two as a front and
+# its backing). Along the visible axes of every drawn star (count >= STAR_MIN_ORDER) the label held by
+# the most axes on each row, in runs (shorter than MIN_BAND_UNITS joined to the run inside), is read
+# from the middle out to the star's tips. A run is a star of its own color, the star's count and axes,
+# when it spans >= MIN_ZONE_UNITS and ends >= BACK_MIN_UNITS inside the star's tips, the axes agree on
+# it (>= BORDER_MIN_SIDES of them per row, mean), its rows are n-fold (SPLIT_FLOOR) and no full band
+# (the color's mean coverage of those rows under FULL_COV: a pleated ring or a star's body, S80-22),
+# it does not lie on a drawn ring or center of its color (>= RING_MAJORITY of its span), the next run
+# out is of another color, n-fold, held by the axes and >= BACK_MIN_UNITS long (a run that meets the
+# background or an unordered band is no tip: S15-15), a run of the star's own color has a run of that
+# color outside it (else it is the star itself: A15-17, S58-17, s39-15), and no drawn layer of its
+# color on those axes ends within MIN_ZONE_UNITS of it. Each is drawn from the star's r_inner to the
+# run's end, straight-sided (`_straight_valley`, H16), on top of the drawn layers on those axes, the
+# shorter above (H12 nested rule). Mined on the 76 photos: docs/pipeline.md R19.
 # H13: a head without a round outline (no head disc, HEAD_ROUND: tips standing less than about
 # 12 % of the head radius past a round disc keep the disc and get no base) whose silhouette above the
 # tails has an n-fold lobed outline (n >= STAR_MIN_ORDER by the outline's turned
@@ -844,11 +868,12 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame, pieces: list | None 
             rp["pinked"] = 1  # ML-1: a pleated ribbon band (the files draw these pinked)
         parts.append(Part(f"ring-{depth}", "ring", rp, label, min(49, 30 + depth), r3(conf)))
     head_label = head["label"] if head else -2
-    pre_cover = _finish_points(parts, labels, p, fr, pol, radii, win, head_label, trims,
-                               pieces if PIECE_STACKING else None)
+    vote = pieces if PIECE_STACKING else None
+    loose = pieces if PIECE_FRONT and not PIECE_STACKING else None  # R19: the loose fronts' pieces
+    pre_cover = _finish_points(parts, labels, p, fr, pol, radii, win, head_label, trims, vote, loose)
     if _tips_to_stars(parts, pol, radii, win, fr, trims, pieces, p):  # R17: tips of covered stars
-        _revote(parts, labels, p, fr, pol, radii, win, head_label, trims, pre_cover,
-                pieces if PIECE_STACKING else None)
+        _revote(parts, labels, p, fr, pol, radii, win, head_label, trims, pre_cover, vote, loose)
+    _nested_runs(parts, pol, radii, win, fr)  # R19: stars nested along a drawn star's axes
     if head is None:
         _base_star(parts, p, labels, fr, win, trims)
     return parts
@@ -1572,13 +1597,14 @@ def _base_star(parts: list[Part], p: Prepared, labels: np.ndarray, fr: Frame, wi
 
 def _finish_points(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame, pol: np.ndarray,
                    radii: np.ndarray, win: np.ndarray, head_label: int, trims: set[int],
-                   pieces: list | None = None) -> dict[int, tuple]:
+                   pieces: list | None = None, loose: list | None = None) -> dict[int, tuple]:
     """Points layers start at the cover over them (H4), are stacked as the photo shows
     them (H12) and then start under the layers drawn above them (H11 _cover_start, which
     reads z: it runs on the final order). Returns {id(points part): (r_inner, width_ratio)}
-    before `_cover_start`, so a later re-vote that changes z (R17) can recompute the starts."""
+    before `_cover_start`, so a later re-vote that changes z (R17) can recompute the starts.
+    `loose`: the pieces for the loose fronts' unanimous votes (R19, `photo_stacking`)."""
     _points_start_at_cover(parts)
-    photo_stacking(parts, labels, p, fr, trims, pieces)
+    photo_stacking(parts, labels, p, fr, trims, pieces, loose)
     pre_cover = {id(q): (q.params["r_inner"], q.params["width_ratio"]) for q in parts if q.role == "points"}
     _cover_start(parts, pol, radii, win, fr, head_label, trims)
     return pre_cover
@@ -1586,19 +1612,119 @@ def _finish_points(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
 
 def _revote(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame, pol: np.ndarray,
             radii: np.ndarray, win: np.ndarray, head_label: int, trims: set[int],
-            pre_cover: dict[int, tuple], pieces: list | None = None) -> None:
+            pre_cover: dict[int, tuple], pieces: list | None = None, loose: list | None = None) -> None:
     """R17: the photo vote again after layers changed geometry (`_tips_to_stars`). The H11 cover
     starts read z, so when the vote changes any z every non-star points layer gets back its start
     from before `_cover_start` (`pre_cover`, from `_finish_points`) and the cover starts are read
     again on the new order."""
     z0 = [q.z for q in parts]
-    photo_stacking(parts, labels, p, fr, trims, pieces)
+    photo_stacking(parts, labels, p, fr, trims, pieces, loose)
     if [q.z for q in parts] == z0:
         return
     for q in parts:
         if id(q) in pre_cover and q.params.get("kind") != "star":
             q.params["r_inner"], q.params["width_ratio"] = pre_cover[id(q)]
     _cover_start(parts, pol, radii, win, fr, head_label, trims)
+
+
+def _axis_runs(pol: np.ndarray, cols: list[int], rows: int, minlen: int) -> list[tuple[int, int, int, float]]:
+    """R19: runs [(label, first row, end row, mean agreement)] of the label held by the most of the
+    polar columns `cols` on each of the first `rows` rows (agreement: the share of the columns holding
+    it); a run shorter than `minlen` rows is joined to the run inside it, and runs of one label that
+    meet are one run."""
+    sub = pol[:rows][:, cols]
+    mode = np.full(sub.shape[0], -1)
+    agree = np.zeros(sub.shape[0])
+    for i, row in enumerate(sub):
+        v = row[row >= 0]
+        if v.size:
+            mode[i] = int(np.bincount(v).argmax())
+            agree[i] = float((row == mode[i]).mean())
+    runs: list[list[int]] = []
+    i = 0
+    while i < len(mode):
+        j = i
+        while j < len(mode) and mode[j] == mode[i]:
+            j += 1
+        if runs and (j - i < minlen or runs[-1][0] == mode[i]):
+            runs[-1][2] = j
+        else:
+            runs.append([int(mode[i]), i, j])
+        i = j
+    return [(g, a, b, float(agree[a:b].mean())) for g, a, b in runs]
+
+
+def _nested_runs(parts: list[Part], pol: np.ndarray, radii: np.ndarray, win: np.ndarray, fr: Frame) -> None:
+    """R19: the stars nested on a drawn star's axes, each read from one color run along them (the
+    conditions with the constants: R19 above). The new stars lie on top of the drawn layers on those
+    axes, the shorter above, and the points layers above those move up with them; none is added when
+    the points layers would then reach the rings' z (30)."""
+    t = pol.shape[1]
+    n_groups = int(pol.max()) + 1
+    if n_groups <= 0:
+        return
+    cov = np.stack([(pol[:, win] == g).mean(axis=1) for g in range(n_groups)], axis=1)
+    minlen, gap = _rows(MIN_BAND_UNITS, radii, fr), _rows(BACK_MIN_UNITS, radii, fr)
+    unit = lambda i: fr.d(radii[min(i, len(radii) - 1)])  # noqa: E731 - radius row -> canvas units
+    pts = [q for q in parts if q.role == "points"]
+    rings = [q for q in parts if q.role in ("ring", "center")]
+    hosts = sorted((q for q in pts if q.params.get("kind") == "star" and int(q.params["count"]) >= STAR_MIN_ORDER),
+                   key=lambda q: -float(q.params["r_outer"]))
+    new: list[tuple[Part, Part]] = []  # (host, new star)
+    for host in hosts:
+        hp = host.params
+        n, rot = int(hp["count"]), float(hp["rotation_deg"])
+        cols = [c for c in _axis_cols(hp, t) if win[c]]
+        if len(cols) < 2:
+            continue
+        tip = min(len(radii), int(np.searchsorted(radii, float(hp["r_outer"]) * fr.scale)) + 1)
+        runs = [run for run in _axis_runs(pol, cols, min(len(radii), tip + gap), minlen) if run[0] >= 0]
+        for k, (g, a, b, agr) in enumerate(runs):
+            r_out = unit(b - 1)
+            if (r_out - unit(a) < MIN_ZONE_UNITS or r_out > float(hp["r_outer"]) - BACK_MIN_UNITS
+                    or agr < BORDER_MIN_SIDES or cov[a:b, g].mean() >= FULL_COV):
+                continue
+            nxt = runs[k + 1] if k + 1 < len(runs) else None
+            if (nxt is None or nxt[0] == g or nxt[3] < BORDER_MIN_SIDES or nxt[2] - nxt[1] < gap
+                    or _score_at((pol[nxt[1]:nxt[2]] == nxt[0]).astype(np.float32), win, n) < SPLIT_FLOOR):
+                continue  # no tip: the run meets the background or a band
+            if g == host.color_group and not any(run[0] == g for run in runs[k + 1:]):
+                continue  # the star itself
+            if any(q.color_group == g and min(r_out, float(q.params.get("r_outer", q.params.get("r", 0.0))))
+                   - max(unit(a), float(q.params.get("r_inner", 0.0))) >= RING_MAJORITY * (r_out - unit(a))
+                   for q in rings):
+                continue  # a drawn ring or center of its color
+            if any(q.color_group == g and _same_axes(q.params, n, rot, NEST_AXIS_DEG)
+                   and abs(float(q.params["r_outer"]) - r_out) <= MIN_ZONE_UNITS
+                   for q in pts + [x[1] for x in new]):
+                continue  # drawn already
+            sym = _score_at((pol[a:b] == g).astype(np.float32), win, n)
+            r_in = float(hp["r_inner"])
+            ra = max(a, int(np.searchsorted(radii, r_in * fr.scale)))
+            if sym < SPLIT_FLOOR or r_out - r_in < MIN_ZONE_UNITS or b - ra < 2:
+                continue
+            cap = _star_halfangle(radii[ra:b], float(hp["r_outer"]) * fr.scale, r_in * fr.scale, n)
+            v = _straight_valley(pol, radii, range(ra, b), g, hp, win, cap)
+            v = r_in if v is None else max(r_in, fr.d(v))
+            params = {"cx": hp["cx"], "cy": hp["cy"], "kind": "star", "count": n, "r_inner": r3(r_in),
+                      "r_outer": r3(r_out), "rotation_deg": hp["rotation_deg"],
+                      "width_ratio": r3(2 * np.pi * v / n / max(r_out - r_in, 1e-6))}
+            new.append((host, Part(f"points-{len(parts) + len(new)}", "points", params, g, 0, r3(min(agr, sym)))))
+    if not new:
+        return
+    under = [q for q in pts if any(_same_axes(q.params, int(h.params["count"]), float(h.params["rotation_deg"]),
+                                              NEST_AXIS_DEG) for h, _ in new)]
+    top = max(q.z for q in under)
+    add = sorted((q for _, q in new), key=lambda q: -float(q.params["r_outer"]))
+    if max(q.z for q in pts) + len(add) >= 30:
+        log.info("R19: no z left under the rings for %d nested stars", len(add))
+        return
+    for q in pts:
+        if q.z > top:
+            q.z += len(add)
+    for k, q in enumerate(add):
+        q.z = top + 1 + k
+        parts.append(q)
 
 
 def _covering(parts: list[Part], q: Part, lab: int, r: float) -> set[str]:
@@ -2364,12 +2490,13 @@ def stack_votes(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame,
 
 
 def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame, trims: set[int],
-                   pieces: list | None = None) -> None:
+                   pieces: list | None = None, loose_pieces: list | None = None) -> None:
     """H12: points layers re-stacked as the photo shows them where they overlap (STACK_*);
     only their z values change. ML-2: with SAM 2 pieces the votes count visible pieces
     (`stack_votes`); a front read from a piece with a backing on its axes lies just on that
     backing and votes for it (`_carried_fronts`), and an inner layer read from pieces lies on its
-    front."""
+    front. R19: with the vote on labels (`pieces` None), `loose_pieces` given, a loose front's
+    unanimous piece votes (`_loose_votes`) decide its pairs, and such a front is a host."""
     pts = [k for k, q in enumerate(parts) if q.role == "points"]
     if len(pts) < 2:
         return
@@ -2393,6 +2520,15 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
             continue
         decided.add(frozenset((a, b)))
     loose = _loose_piece_fronts(parts, trims, pieces, front_of)
+    if loose and loose_pieces and not pieces:  # R19: a loose front's unanimous piece votes decide
+        voters = {k for k in pts if (id(parts[k]) not in trims or k in backs)
+                  and k not in front_of and k not in carried and k not in loose}
+        free = loose - set(carried)  # a front carried by its backing (ML-2) is placed with it
+        for a, b, na, nb in _loose_votes(parts, labels, p, fr, trims, loose_pieces, free):
+            if a in voters or b in voters:
+                edges.append((1.0, b, a) if na else (1.0, a, b))
+                decided.add(frozenset((a, b)))
+                loose -= {a, b}
     hosts = [k for k in pts if (id(parts[k]) not in trims or k in backs)
              and k not in front_of and k not in carried and k not in loose]
     nested = [(b, a) for a, b in nested_pairs(parts, hosts) if frozenset((a, b)) not in decided]
@@ -2513,6 +2649,29 @@ def _loose_piece_fronts(parts: list[Part], trims: set[int], pieces: list | None,
     return {k for k, q in enumerate(parts)
             if q.role == "points" and q.id.startswith(FRONT_ID) and q.params.get("source") == "piece"
             and q.color_group == base and id(q) not in trims and k not in front_of}
+
+
+def _loose_votes(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame, trims: set[int],
+                 pieces: list, loose: set[int]) -> list[tuple[int, int, int, int]]:
+    """R19: the piece votes (`stack_votes` with pieces: a loose front votes there) of the pairs of
+    a loose front and a layer that is neither loose nor its inner piece layer (placed on it by
+    ML-2), both with pieces (`_own_pieces`), the vote unanimous and of at least
+    PIECE_UNANIMOUS_MIN samples."""
+    geoms = {k: _part_geom(q) for k, q in enumerate(parts) if q.role in ("points", "ring", "center", "unknown")}
+    own = _own_pieces(parts, geoms, pieces, fr)
+    if not any(k in own for k in loose):
+        return []
+
+    def inner_of(f: int, k: int) -> bool:  # ML-2: an inner layer read from pieces lies on its front
+        qf, qk = parts[f].params, parts[k].params
+        return (qk.get("source") == "piece" and parts[k].id.startswith(FRONT_ID)
+                and qk.get("count") == qf.get("count") and qk.get("rotation_deg") == qf.get("rotation_deg")
+                and float(qk["r_outer"]) < float(qf["r_outer"]))
+
+    return [(a, b, na, nb) for a, b, na, nb in stack_votes(parts, labels, p, fr, trims, pieces)
+            if ((a in loose and b not in loose and not inner_of(a, b))
+                or (b in loose and a not in loose and not inner_of(b, a)))
+            and a in own and b in own and min(na, nb) == 0 and na + nb >= PIECE_UNANIMOUS_MIN]
 
 
 def base_of(parts: list[Part]) -> int | None:
