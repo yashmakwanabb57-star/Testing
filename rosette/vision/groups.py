@@ -8,14 +8,19 @@ one whose span holds its centroid radius (the nearest span when both or neither 
 straddling two bands is counted once. Disc, ring, badge and rose pieces are single groups with count
 1; the disc group (the largest piece named pleated disc or covering DISC_COVER of the head) reaches
 the middle (r_inner 0). Pieces the reader left unanswered are grouped by span alone as "other" with
-confidence UNANSWERED_CONF.
+confidence UNANSWERED_CONF; they never merge with pieces the reader named "other" (a different
+confidence), though both groups come out as kind "other".
 
 A group's count comes from the signal (spec ruling 6): the number of its pieces when their angular
 steps (`pieces._fit_steps` on their interior points) fit one equal step with no empty step, else the
 strongest harmonic of the union's outline over the full circle (`parts_head.harmonic_count`), which
 holds a ring with hidden members (8 arms, 2 behind the badge: 6 pieces, 8 lobes). The harmonic's
 second peak at 2n or n/2 and the model's repeats (when they differ and lie in REPEATS_MIN..REPEATS_MAX)
-are kept as alternatives for the judge, at most MAX_ALTERNATIVES.
+are kept as alternatives for the judge, at most MAX_ALTERNATIVES. A group of fewer than
+SYM_MIN_GROUP pieces of a member kind (FEW_KINDS: one piece per petal, loop, block or chevron) is
+counted by its pieces ("pieces-few", FEW_CONF) with the model's repeats (from FEW_REPEATS_MIN) and, for
+two pieces, the harmonic of their union as alternatives (one piece's harmonic reads its own shape); one star piece is usually the whole star layer and keeps the harmonic. A
+group whose union shows no outline is counted by its pieces ("fallback").
 """
 from __future__ import annotations
 
@@ -24,7 +29,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from rosette.perception.pieces import Piece, _centroid, _fit_steps, _interior_point
+from rosette.perception.pieces import SYM_MIN_GROUP, Piece, _centroid, _fit_steps, _interior_point
 from rosette.perception.reader import Reading
 from rosette.vision.parts_common import polar_sample
 from rosette.vision.parts_head import MIN_ZONE_UNITS, RING_THETA, _harmonics, harmonic_count
@@ -38,6 +43,9 @@ SINGLE_CONF = 0.9  # a single part named by the reader
 HARMONIC_CONF_CAP = 0.9  # a count read from the harmonic is never surer than this
 REPEATS_MIN, REPEATS_MAX = 3, 16  # the model's repeats kept as an alternative only in this range
 MAX_ALTERNATIVES = 2  # with the count itself: at most three options per group
+FEW_KINDS = ("petal", "loop", "block", "chevron")  # one piece per member: few pieces, few members
+FEW_CONF = 0.3
+FEW_REPEATS_MIN = 2  # a bow's two loops: the model's 2 is an option for a few-piece group
 
 
 @dataclass
@@ -49,7 +57,7 @@ class Group:
     r_inner: float  # canvas units
     r_outer: float
     count: int
-    count_source: str  # "pieces" | "harmonic" | "single"
+    count_source: str  # "pieces" | "pieces-few" | "harmonic" | "fallback" | "single"
     alternatives: list[int] = field(default_factory=list)
     rotation_deg: float = 0.0
     confidence: float = 0.0
@@ -95,18 +103,19 @@ def _outline(group: Group, pieces: list[Piece], head: tuple[float, float, float]
     return out
 
 
-def _alternatives(count: int, n2: int | None, repeats: int | None) -> list[int]:
+def _alternatives(count: int, n2: int | None, repeats: int | None,
+                  repeats_min: int = REPEATS_MIN) -> list[int]:
     alts: list[int] = []
     if n2 is not None and (n2 == 2 * count or 2 * n2 == count):
         alts.append(n2)
-    if repeats is not None and repeats != count and REPEATS_MIN <= repeats <= REPEATS_MAX and repeats not in alts:
+    if repeats is not None and repeats != count and repeats_min <= repeats <= REPEATS_MAX and repeats not in alts:
         alts.append(repeats)
     return alts[:MAX_ALTERNATIVES]
 
 
-def _steps_fit(group: Group, pieces: list[Piece], head) -> tuple[int, float] | None:
-    """(n, inlier share) when the pieces' angles fit one equal step of n with every step taken by
-    exactly one inlier, else None."""
+def _steps_fit(group: Group, pieces: list[Piece], head) -> tuple[int, float, float] | None:
+    """(n, inlier share, offset in degrees) when the pieces' angles fit one equal step of n with
+    every step taken by exactly one inlier, else None."""
     angles = [_angle(pieces[i], head) for i in group.pieces]
     fit = _fit_steps(angles)
     if fit is None:
@@ -116,24 +125,33 @@ def _steps_fit(group: Group, pieces: list[Piece], head) -> tuple[int, float] | N
     steps = [int(round((a - off) / step)) % n for a, keep in zip(angles, inl) if keep]
     if len(steps) != n or len(set(steps)) != n:
         return None
-    return n, float(inl.mean())
+    return n, float(inl.mean()), float(off)
 
 
-def _count(group: Group, pieces: list[Piece], head, repeats: int | None) -> tuple[int, str, list[int], float]:
-    """(count, source, alternatives, confidence) of a repeat group."""
+def _count(group: Group, pieces: list[Piece], head, repeats: int | None
+           ) -> tuple[int, str, list[int], float, float | None]:
+    """(count, source, alternatives, confidence, rotation from the step fit or None) of a repeat group."""
+    k = len(group.pieces)
+    if group.kind in FEW_KINDS and k < SYM_MIN_GROUP:
+        alts = _alternatives(k, None, repeats, FEW_REPEATS_MIN)
+        out = _outline(group, pieces, head) if k > 1 else None  # one piece's harmonic is its own shape
+        if out is not None:
+            n = harmonic_count(out)[0]
+            if n != k and n not in alts:
+                alts.append(n)
+        return k, "pieces-few", alts[:MAX_ALTERNATIVES], FEW_CONF, None
     fit = _steps_fit(group, pieces, head)
     if fit is not None:
-        n, share = fit
-        return n, "pieces", _alternatives(n, None, repeats), share
+        n, share, off = fit
+        return n, "pieces", _alternatives(n, None, repeats), share, off % (360.0 / n)
     out = _outline(group, pieces, head)
     if out is None:
-        k = len(group.pieces)
-        return k, "pieces", _alternatives(k, None, repeats), UNANSWERED_CONF
+        return k, "fallback", _alternatives(k, None, repeats), UNANSWERED_CONF, None
     n, amp, n2 = harmonic_count(out)
     rest = sorted((v for k, v in _harmonics(out).items() if k != n), reverse=True)
     second = rest[0] if rest else 0.0
     conf = amp / (amp + second) if amp + second > 0 else 0.0
-    return n, "harmonic", _alternatives(n, n2, repeats), min(HARMONIC_CONF_CAP, conf)
+    return n, "harmonic", _alternatives(n, n2, repeats), min(HARMONIC_CONF_CAP, conf), None
 
 
 def group_count(group: Group, pieces: list[Piece], head: tuple[float, float, float],
@@ -144,12 +162,13 @@ def group_count(group: Group, pieces: list[Piece], head: tuple[float, float, flo
     group (disc, ring, badge, rose) is (1, "single", [])."""
     if group.count_source == "single":
         return 1, "single", []
-    n, source, alts, _conf = _count(group, pieces, head, repeats)
+    n, source, alts, _conf, _rot = _count(group, pieces, head, repeats)
     return n, source, alts
 
 
 def _rotation(group: Group, pieces: list[Piece], head) -> float:
-    """Circular mean of the pieces' interior-point angles modulo one step (360 / count), degrees."""
+    """Circular mean of the pieces' interior-point angles modulo one step (360 / count), degrees
+    (used when the count does not come from a step fit, whose offset is exact)."""
     if group.count <= 1:
         return 0.0
     k = group.count
@@ -210,9 +229,9 @@ def piece_groups(reading: Reading, pieces: list[Piece], head: tuple[float, float
         grp.color_group = _mode([pieces[i].color_group for i in grp.pieces])
         grp.r_inner = min(spans[i][0] for i in grp.pieces)
         grp.r_outer = max(spans[i][1] for i in grp.pieces)
-        n, source, alts, conf = _count(grp, pieces, head, _mode(reps))
+        n, source, alts, conf, rot = _count(grp, pieces, head, _mode(reps))
         grp.count, grp.count_source, grp.alternatives = n, source, alts
         grp.confidence = conf if key else UNANSWERED_CONF
-        grp.rotation_deg = _rotation(grp, pieces, head)
+        grp.rotation_deg = round(rot, 3) if rot is not None else _rotation(grp, pieces, head)
         out.append(grp)
     return out

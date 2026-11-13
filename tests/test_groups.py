@@ -112,6 +112,7 @@ def test_a_piece_joins_one_group_only():
     si, so = groups._span(inner[0], HEAD, SCALE), groups._span(outer[0], HEAD, SCALE)
     assert abs(s0 - si[0]) + abs(s1 - si[1]) < abs(s0 - so[0]) + abs(s1 - so[1])
     assert set(holding[0].pieces) == set(range(6)) | {12}
+    assert abs(holding[0].rotation_deg - 30.0) < 1.0  # the fit's offset: the straddler is an outlier
     other = next(g for g in gs if g is not holding[0])
     assert set(other.pieces) == set(range(6, 12)) and other.count == 6 and other.count_source == "pieces"
 
@@ -138,3 +139,42 @@ def test_unanswered_pieces_group_by_span_as_other_with_low_confidence():
     pcs = [_arm(k * 60.0) for k in range(6)]
     g = groups.piece_groups(_reading([None] * 6), pcs, HEAD, SCALE)
     assert len(g) == 1 and g[0].kind == "other" and g[0].count == 6 and g[0].confidence == 0.3
+
+
+def test_one_loop_piece_counts_one_with_the_models_two_as_alternative():
+    g = groups.piece_groups(_reading(["loop"], [2]), [_arm(0.0)], HEAD, SCALE)[0]
+    assert (g.count, g.count_source, g.alternatives, g.confidence) == (1, "pieces-few", [2], 0.3)
+
+
+def test_two_block_pieces_count_two_with_repeats_and_harmonic_as_alternatives():
+    pcs = [_sector(0.0, 40, 90, 15), _sector(180.0, 40, 90, 15)]
+    g = groups.piece_groups(_reading(["block"] * 2, [6, 6]), pcs, HEAD, SCALE)[0]
+    assert (g.count, g.count_source, g.confidence) == (2, "pieces-few", 0.3)
+    n = groups.harmonic_count(groups._outline(g, pcs, HEAD))[0]
+    assert g.alternatives == ([6] if n in (2, 6) else [6, n])
+
+
+def test_one_star_piece_keeps_the_harmonic_path():
+    cx, cy, _ = HEAD
+    a = np.radians(np.arange(10) * 36.0)
+    rad = np.where(np.arange(10) % 2 == 0, 200.0, 90.0)  # a five-armed star outline
+    m = np.zeros((SIZE, SIZE), np.uint8)
+    cv2.fillPoly(m, [np.c_[cx + rad * np.cos(a), cy + rad * np.sin(a)].astype(np.int32)], 1)
+    g = groups.piece_groups(_reading(["star"], [5]), [_piece(m > 0)], HEAD, SCALE)[0]
+    assert (g.count, g.count_source, g.alternatives) == (5, "harmonic", [])
+
+
+def test_two_inliers_on_one_step_fall_back_to_the_harmonic():
+    pcs = [_arm(k * 60.0, half_deg=5.0) for k in range(6)] + [_arm(3.0, half_deg=5.0)]
+    g = groups.piece_groups(_reading(["star"] * 7, [6] * 7), pcs, HEAD, SCALE)[0]
+    assert len(g.pieces) == 7
+    assert (g.count, g.count_source) == (6, "harmonic")
+
+
+def test_a_group_without_an_outline_is_a_fallback():
+    g = groups.Group(kind="petal", texture="plain", color_group=1, pieces=[0, 1, 2], r_inner=0.0,
+                     r_outer=1.0, count=0, count_source="")
+    far = np.zeros((SIZE, SIZE), bool)
+    far[0, 0] = True  # outside the sampled radii: no outline
+    pcs = [_piece(far)] * 3
+    assert groups.group_count(g, pcs, HEAD, repeats=4) == (3, "fallback", [4])
