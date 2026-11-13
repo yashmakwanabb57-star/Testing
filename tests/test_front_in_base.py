@@ -117,7 +117,7 @@ def test_a_border_color_that_is_not_an_n_fold_layer_of_its_own_gives_no_front_la
     labels = base_head()
     yy, xx, dx, dy, r, th = _grid()
     d = np.degrees(th) % 360
-    labels[(d > 190) & (d < 260) & (r > 0.42 * R) & (r < 0.7 * R) & (labels != 0)] = 1
+    labels[(d > 190) & (d < 260) & (r > 0.45 * R) & (r < 0.7 * R) & (labels != 0)] = 1
     parts = _head(labels)
     assert not [q for q in parts if q.role == "points" and q.color_group == 0]
 
@@ -404,8 +404,8 @@ def test_a_band_of_the_disc_color_inside_the_arms_span_is_the_front_body():
     """The arms meet in a red band from the white center (0.3 R) to the valleys (0.4 R): with the
     front drawn it is the star's own body, not a ring."""
     labels, star, blocks, d = _red_star_over_blocks(core_white=True)
-    labels[(np.hypot(*np.mgrid[:labels.shape[0], :labels.shape[1]][::-1] - np.array([CX, CY])[:, None, None]) <= 0.4 * R)
-           & (labels != 1)] = 0
+    r = _grid()[4]
+    labels[(r <= 0.4 * R) & (labels != 1)] = 0
     plain = [q for q in detect_parts(_photo(labels), labels) if q.role != "tail_stripe"]
     assert any(q.role == "ring" and q.color_group == 0 for q in plain)  # the rules read a band
     parts = [q for q in detect_parts(_photo(labels), labels, pieces=_arms(star, d) + _block_pieces(blocks, d))
@@ -413,3 +413,12 @@ def test_a_band_of_the_disc_color_inside_the_arms_span_is_the_front_body():
     assert len(_fronts(parts)) == 1
     assert not any(q.role == "ring" and q.color_group == 0 for q in parts)
 
+
+def test_arm_groups_do_not_chain_through_intermediate_spans_to_the_rim():
+    """Six arms (50-100 .. 55-105), pieces of intermediate span (62-114, 70-122) and rim bits (78-130):
+    single linkage chains them all; the median cap keeps the arms and drops the rest."""
+    m = np.zeros((2, 2), bool)
+    arms = [(m, 50.0 + k, 100.0 + k) for k in range(6)]
+    others = [(m, 62.0, 114.0), (m, 70.0, 122.0), (m, 78.0, 130.0), (m, 79.0, 131.0)]
+    groups = H._arm_sets(arms + others)
+    assert groups == [list(range(6))]

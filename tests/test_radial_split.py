@@ -349,3 +349,33 @@ def test_the_cover_step_reads_the_order_the_photo_gives():
     H._finish_points(parts, labels, _photo(labels), fr, pol, radii, win, -2, set())
     assert cover.z > petals.z
     assert petals.params["r_inner"] == 50.0
+
+
+
+def test_cover_starts_are_read_again_when_the_r17_revote_changes_z():
+    """R17 (`_revote`): wide petals (1) whose bases the photo shows under narrow loop blocks (4)
+    start under the blocks, at the ring (50, not 70). Then the blocks' layer changes geometry, as a
+    `_tips_to_stars` conversion does (same color, count and axes: a star with tips at 125 and its
+    valleys hidden at 100); on that geometry the photo vote puts the petals on top (the star's body
+    lies where the photo shows petals), so the petals no longer start under it: their start from
+    before `_cover_start` comes back."""
+    fr = Frame(axis_x=CX, top=float(CY - R), scale=2.0)
+    cy = 25.0 + R / 2
+    ring = Part("ring-0", "ring", {"cx": 300.0, "cy": cy, "r_inner": 30.0, "r_outer": 50.0}, 0, 30, 0.9)
+    petals = _pts(1, "petal", 12, 70.0, 120.0, 0.0, 1.0, 22)
+    cover = _pts(4, "bow", 12, 50.0, 125.0, 0.0, 0.12, 21)
+    for q in (petals, cover):
+        q.params["cy"] = cy
+    labels = _painted([petals, cover, ring], fr)
+    radii = np.arange(0.5, 150, 1.0) * fr.scale
+    pol = polar_sample(labels, CX, fr.py(cy), radii, H.RING_THETA, fill=-1)
+    theta = np.degrees(np.linspace(0, 2 * np.pi, H.RING_THETA, endpoint=False))
+    win = np.abs(theta - 90.0) > H.TAIL_SECTOR_DEG
+    parts = [ring, petals, cover]
+    pre = H._finish_points(parts, labels, _photo(labels), fr, pol, radii, win, -2, set())
+    assert cover.z > petals.z and petals.params["r_inner"] == 50.0
+    assert pre[id(petals)] == (70.0, 1.0)
+    cover.params.update(kind="star", r_inner=100.0, r_outer=125.0)
+    H._revote(parts, labels, _photo(labels), fr, pol, radii, win, -2, set(), pre)
+    assert petals.z > cover.z
+    assert (petals.params["r_inner"], petals.params["width_ratio"]) == (70.0, 1.0)

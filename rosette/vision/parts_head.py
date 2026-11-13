@@ -251,7 +251,8 @@ PIECE_INSIDE = 0.95
 # one lobe against a 3-fold harmonic). The disc-color head pieces refused alone that do not touch the
 # rim and do not hold the middle (their ARM_SPAN_PCT percentile radius beyond MIN_ZONE_UNITS) are
 # grouped by their radial span (single linkage: inner and outer radius, ARM_SPAN_PCT and
-# 100 - ARM_SPAN_PCT percentiles, each within MIN_ZONE_UNITS of a member's); a group of
+# 100 - ARM_SPAN_PCT percentiles, each within MIN_ZONE_UNITS of a member's, then each within
+# MIN_ZONE_UNITS of the group's median); a group of
 # STAR_MIN_ORDER or more is read together as one piece through the same bars. A base-color ring
 # inside a piece front's span (from its first lobed row to its tips) is the front's own body read as
 # a band and is not drawn (S42-15, S43-15: the turquoise band where the arms meet).
@@ -843,16 +844,11 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame, pieces: list | None 
             rp["pinked"] = 1  # ML-1: a pleated ribbon band (the files draw these pinked)
         parts.append(Part(f"ring-{depth}", "ring", rp, label, min(49, 30 + depth), r3(conf)))
     head_label = head["label"] if head else -2
-    starts = _finish_points(parts, labels, p, fr, pol, radii, win, head_label, trims,
-                            pieces if PIECE_STACKING else None)
+    pre_cover = _finish_points(parts, labels, p, fr, pol, radii, win, head_label, trims,
+                               pieces if PIECE_STACKING else None)
     if _tips_to_stars(parts, pol, radii, win, fr, trims, pieces, p):  # R17: tips of covered stars
-        z0 = [q.z for q in parts]
-        photo_stacking(parts, labels, p, fr, trims, pieces if PIECE_STACKING else None)
-        if [q.z for q in parts] != z0:  # the cover starts read z: recompute them on the new order
-            for q in parts:
-                if id(q) in starts and q.params.get("kind") != "star":
-                    q.params["r_inner"], q.params["width_ratio"] = starts[id(q)]
-            _cover_start(parts, pol, radii, win, fr, head_label, trims)
+        _revote(parts, labels, p, fr, pol, radii, win, head_label, trims, pre_cover,
+                pieces if PIECE_STACKING else None)
     if head is None:
         _base_star(parts, p, labels, fr, win, trims)
     return parts
@@ -1211,12 +1207,17 @@ def _harmonics(out: np.ndarray) -> dict[int, float]:
     return {n: float(2 * abs((d * np.exp(-1j * n * th)).mean())) for n in range(STAR_MIN_ORDER, PLEAT_MIN_COUNT)}
 
 
-def _maxima(out: np.ndarray, prominence: float, n: int) -> int:
-    """Count of the circular outline's maxima standing at least `prominence` (px) above both sides,
-    at least half an n-step apart (a tip's ragged top is one maximum)."""
+def _peaks(out: np.ndarray, prominence: float, n: int) -> np.ndarray:
+    """Columns of the circular outline's maxima standing at least `prominence` (px) above both
+    sides, at least half an n-step apart (a tip's ragged top is one maximum)."""
     t = out.shape[0]
     peaks, _ = find_peaks(np.concatenate([out, out, out]), prominence=prominence, distance=max(1, t // (2 * n)))
-    return int(((peaks >= t) & (peaks < 2 * t)).sum())
+    return peaks[(peaks >= t) & (peaks < 2 * t)] - t
+
+
+def _maxima(out: np.ndarray, prominence: float, n: int) -> int:
+    """Count of the circular outline's maxima (`_peaks`)."""
+    return int(_peaks(out, prominence, n).size)
 
 
 def _piece_order(ind: np.ndarray, radii: np.ndarray, fr: Frame) -> tuple[int, float] | str:
@@ -1247,11 +1248,10 @@ def _piece_order(ind: np.ndarray, radii: np.ndarray, fr: Frame) -> tuple[int, fl
 
 
 def _maxima_on_axes(out: np.ndarray, prominence: float, n: int) -> bool:
-    """R18: every maximum of the outline (as `_maxima` counts them) lies within BACK_TOL_DEG of an
-    axis of its n-th harmonic (`_piece_rotation`)."""
+    """R18: every maximum of the outline (`_peaks`) lies within BACK_TOL_DEG of an axis of its
+    n-th harmonic (`_piece_rotation`)."""
     t = out.shape[0]
-    peaks, _ = find_peaks(np.concatenate([out, out, out]), prominence=prominence, distance=max(1, t // (2 * n)))
-    peaks = peaks[(peaks >= t) & (peaks < 2 * t)] - t
+    peaks = _peaks(out, prominence, n)
     rot, step = _piece_rotation(out, n), 360.0 / n
     off = (peaks * 360.0 / t - rot) % step
     return bool(peaks.size) and bool((np.minimum(off, step - off) <= BACK_TOL_DEG).all())
@@ -1338,7 +1338,12 @@ def _same_axes(q: dict, n: int, rot: float, tol: float) -> bool:
 def _arm_sets(cand: list[tuple[np.ndarray, float, float]]) -> list[list[int]]:
     """R18: indices of the candidate arm pieces [(mask, inner radius, outer radius) in canvas units]
     grouped by single linkage on their radial span (inner and outer radius each within
-    MIN_ZONE_UNITS of a member's); groups of STAR_MIN_ORDER or more, in candidate order."""
+    MIN_ZONE_UNITS of a member's), then capped: while a member's inner or outer radius lies more
+    than MIN_ZONE_UNITS from the group's median, the farthest one leaves the group. Single linkage
+    alone can chain arms through pieces of intermediate span to rim bits, and the union's outline
+    (the outermost radius per angle) would then be the rim bits'. Complete linkage (every pair
+    within MIN_ZONE_UNITS) would split S43-15's six arms (outer radii 94.8-105.9); the median cap
+    keeps them and S42-15's. Groups of STAR_MIN_ORDER or more, in candidate order."""
     left, out = list(range(len(cand))), []
     while left:
         grp = [left.pop(0)]
@@ -1351,6 +1356,13 @@ def _arm_sets(cand: list[tuple[np.ndarray, float, float]]) -> list[list[int]]:
                     grp.append(k)
                     left.remove(k)
                     grown = True
+        while len(grp) >= STAR_MIN_ORDER:
+            m0 = float(np.median([cand[k][1] for k in grp]))
+            m1 = float(np.median([cand[k][2] for k in grp]))
+            far = max(grp, key=lambda k: max(abs(cand[k][1] - m0), abs(cand[k][2] - m1)))
+            if max(abs(cand[far][1] - m0), abs(cand[far][2] - m1)) <= MIN_ZONE_UNITS:
+                break
+            grp.remove(far)
         if len(grp) >= STAR_MIN_ORDER:
             out.append(sorted(grp))
     return out
@@ -1567,9 +1579,26 @@ def _finish_points(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
     before `_cover_start`, so a later re-vote that changes z (R17) can recompute the starts."""
     _points_start_at_cover(parts)
     photo_stacking(parts, labels, p, fr, trims, pieces)
-    starts = {id(q): (q.params["r_inner"], q.params["width_ratio"]) for q in parts if q.role == "points"}
+    pre_cover = {id(q): (q.params["r_inner"], q.params["width_ratio"]) for q in parts if q.role == "points"}
     _cover_start(parts, pol, radii, win, fr, head_label, trims)
-    return starts
+    return pre_cover
+
+
+def _revote(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame, pol: np.ndarray,
+            radii: np.ndarray, win: np.ndarray, head_label: int, trims: set[int],
+            pre_cover: dict[int, tuple], pieces: list | None = None) -> None:
+    """R17: the photo vote again after layers changed geometry (`_tips_to_stars`). The H11 cover
+    starts read z, so when the vote changes any z every non-star points layer gets back its start
+    from before `_cover_start` (`pre_cover`, from `_finish_points`) and the cover starts are read
+    again on the new order."""
+    z0 = [q.z for q in parts]
+    photo_stacking(parts, labels, p, fr, trims, pieces)
+    if [q.z for q in parts] == z0:
+        return
+    for q in parts:
+        if id(q) in pre_cover and q.params.get("kind") != "star":
+            q.params["r_inner"], q.params["width_ratio"] = pre_cover[id(q)]
+    _cover_start(parts, pol, radii, win, fr, head_label, trims)
 
 
 def _covering(parts: list[Part], q: Part, lab: int, r: float) -> set[str]:
