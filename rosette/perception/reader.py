@@ -21,6 +21,7 @@ from scipy import ndimage as ndi
 
 from rosette.perception.pieces import Piece, _interior_point, default_key
 from rosette.perception.settings import Settings
+from rosette.vision.prepare import Prepared
 
 PROMPT_VERSION = "ml4-1"
 DEFAULT_READER_CACHE = Path(__file__).resolve().parents[2] / ".cache" / "reader"
@@ -96,16 +97,20 @@ class Reading:
     note: str = ""  # status line: the weights used when it is the Q4 fallback
 
 
-def choose_pieces(p, pieces: list[Piece]) -> list[int]:
+def choose_pieces(p: Prepared, pieces: list[Piece]) -> list[int]:
     """Indices into `pieces` of the head pieces of at least 0.4 % of the head area, largest first
     (ties keep the list order), at most MAX_PIECES."""
+    return _eligible(p, pieces)[:MAX_PIECES]
+
+
+def _eligible(p: Prepared, pieces: list[Piece]) -> list[int]:
     area = float(np.pi * p.head[2] ** 2)
     idx = [i for i, pc in enumerate(pieces) if pc.in_head and pc.area >= FLOOR_SHARE * area]
     idx.sort(key=lambda i: -pieces[i].area)
-    return idx[:MAX_PIECES]
+    return idx
 
 
-def marks_image(p, pieces: list[Piece], chosen: list[int], side: int = 640,
+def marks_image(p: Prepared, pieces: list[Piece], chosen: list[int], side: int = 640,
                 first: int = 1) -> tuple[Image.Image, list[dict]]:
     """The head crop (1.08 radii around the centre) at side x side with each chosen piece's outline in its own
     colour and its number (first, first + 1, ...) in a filled circle at its interior point.
@@ -210,15 +215,19 @@ class ReaderServer:
             raise RuntimeError(f"port {self.settings.reader_port} already answers; only one model process at a time")
         log = self.log_path or (DEFAULT_READER_CACHE / "server.err")
         log.parent.mkdir(parents=True, exist_ok=True)
-        with open(log, "ab") as err:
+        with open(log, "wb") as err:  # truncated on each start
             self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=err)
-        deadline = time.time() + HEALTH_WAIT_S
-        while time.time() < deadline:
-            if self._healthy():
-                return self
-            if self.proc.poll() is not None:
-                raise RuntimeError(f"llama-server exited with {self.proc.returncode}; see {log}")
-            time.sleep(2)
+        try:
+            deadline = time.time() + HEALTH_WAIT_S
+            while time.time() < deadline:
+                if self._healthy():
+                    return self
+                if self.proc.poll() is not None:
+                    raise RuntimeError(f"llama-server exited with {self.proc.returncode}; see {log}")
+                time.sleep(2)
+        except BaseException:  # an interrupt must not orphan the server (__exit__ does not run when __enter__ raises)
+            self.stop()
+            raise
         self.stop()
         raise RuntimeError(f"llama-server was not healthy after {HEALTH_WAIT_S} s; see {log}")
 
@@ -238,6 +247,14 @@ class ReaderServer:
 
     def __exit__(self, *exc) -> None:
         self.stop()
+
+
+def weights_tag(settings: Settings) -> str:
+    """Quantisation of the weights that would answer (Q8_0, Q4_K_M), or "none" when they are absent."""
+    try:
+        return ReaderServer(settings).resolve().model.stem.removeprefix("Qwen3.5-4B-")
+    except MissingReader:
+        return "none"
 
 
 def _http_post(url: str, body: dict) -> dict:
@@ -309,32 +326,43 @@ def _from_json(d: dict) -> Reading:
                    images=int(d["images"]), note=d.get("note", ""))
 
 
-def read(p, pieces: list[Piece], settings: Settings, cache_dir: Path | None = DEFAULT_READER_CACHE,
+def read(p: Prepared, pieces: list[Piece], settings: Settings, cache_dir: Path | None = DEFAULT_READER_CACHE,
          post: Callable[[str, dict], dict] | None = None) -> Reading:
     """Ask the model about the head pieces. Per image of at most 12 marks (global ids): one question on the marks
     (kind, texture, repeats) and, when pieces touch, one on the touching pairs (which is on top); pairs whose pieces
     sit in different images are not asked. A mark the model skipped is absent from `answers` (ids never shift).
     No head pieces: an empty Reading, no model. `post(url, body) -> dict` is the HTTP call (default: urllib to the
     local server, which is started and stopped here when `post` is None and the cache is cold: MissingReader when
-    the executable or weights are absent). Cached at <cache_dir>/<pieces key>-<PROMPT_VERSION>.json."""
-    chosen = choose_pieces(p, pieces)
+    the executable or weights are absent). Cached at <cache_dir>/<pieces key>-<PROMPT_VERSION>-<weights>.json (weights: Q8_0, Q4_K_M, ...: a reading by
+    the fallback weights is not served once the default arrives). A read in which an image got no usable answer
+    for any of its marks is returned with `note` naming it and is never cached; a partial answer is cached."""
+    eligible = _eligible(p, pieces)
+    chosen = eligible[:MAX_PIECES]
     if not chosen:
         return Reading([], {}, {}, [], 0.0, False, 0)
     path = None
     if cache_dir is not None:
-        path = Path(cache_dir) / f"{default_key(p, settings)}-{PROMPT_VERSION}.json"
+        path = Path(cache_dir) / f"{default_key(p, settings)}-{PROMPT_VERSION}-{weights_tag(settings)}.json"
         if path.exists():
             try:
                 return _from_json(json.loads(path.read_text(encoding="utf-8")))
             except (ValueError, KeyError, TypeError):
                 pass  # a damaged cache file is asked again
+    notes: list[str] = []
     if post is None:
         with ReaderServer(settings) as srv:
-            reading = _ask(p, pieces, chosen, lambda body: _http_post(srv.url + "/v1/chat/completions", body))
-            reading.note = srv.note
+            reading, failed = _ask(p, pieces, chosen, lambda body: _http_post(srv.url + "/v1/chat/completions", body))
+            if srv.note:
+                notes.append(srv.note)
     else:
-        reading = _ask(p, pieces, chosen, lambda body: post(f"http://127.0.0.1:{settings.reader_port}/v1/chat/completions", body))
-    if path is not None:
+        url = f"http://127.0.0.1:{settings.reader_port}/v1/chat/completions"
+        reading, failed = _ask(p, pieces, chosen, lambda body: post(url, body))
+    if len(eligible) > len(chosen):
+        notes.append(f"{len(eligible) - len(chosen)} pieces over the floor were not asked (cap {MAX_PIECES})")
+    if failed:
+        notes.append("reader failed: no usable answer for image " + ", ".join(str(i) for i in failed))
+    reading.note = "; ".join(notes)
+    if path is not None and not failed:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(_to_json(reading), indent=1), encoding="utf-8")
@@ -342,11 +370,14 @@ def read(p, pieces: list[Piece], settings: Settings, cache_dir: Path | None = DE
     return reading
 
 
-def _ask(p, pieces: list[Piece], chosen: list[int], send: Callable[[dict], dict]) -> Reading:
+def _ask(p: Prepared, pieces: list[Piece], chosen: list[int],
+         send: Callable[[dict], dict]) -> tuple[Reading, list[int]]:
+    """The Reading and the 1-based numbers of the images for which no mark got a usable answer."""
     t0 = time.perf_counter()
     answers: dict[int, MarkAnswer] = {}
     pairs: list[PairAnswer] = []
     images = 0
+    failed: list[int] = []
     for start in range(0, len(chosen), MAX_MARKS):
         chunk = chosen[start:start + MAX_MARKS]
         lo, hi = start + 1, start + len(chunk)
@@ -356,11 +387,14 @@ def _ask(p, pieces: list[Piece], chosen: list[int], send: Callable[[dict], dict]
         b64 = base64.b64encode(buf.getvalue()).decode()
         images += 1
         marks = list(range(lo, hi + 1))
-        answers.update(_parse_marks(_content(send(_body(b64, Q1.format(first=lo, n=hi), _s1(marks), 700))), lo, hi))
+        got = _parse_marks(_content(send(_body(b64, Q1.format(first=lo, n=hi), _s1(marks), 700))), lo, hi)
+        if not got:
+            failed.append(images)
+        answers.update(got)
         local = touching_pairs(pieces, chunk)
         asked = [(a + start, b + start) for a, b in local]
         if asked:
             text = Q2.format(pairs=", ".join(f"({a},{b})" for a, b in asked))
             pairs.extend(_parse_pairs(_content(send(_body(b64, text, _s2(len(asked), lo, hi), 600))), asked))
     return Reading(marks=list(range(1, len(chosen) + 1)), piece_index={k: i for k, i in enumerate(chosen, 1)},
-                   answers=answers, pairs=pairs, seconds=time.perf_counter() - t0, cached=False, images=images)
+                   answers=answers, pairs=pairs, seconds=time.perf_counter() - t0, cached=False, images=images), failed

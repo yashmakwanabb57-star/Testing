@@ -132,7 +132,7 @@ def test_read_uses_the_cache_on_the_second_call(tmp_path):
     assert len(post.calls) == n and first.cached is False and second.cached is True
     assert second.answers == first.answers and second.pairs == first.pairs and second.marks == first.marks
     assert second.piece_index == first.piece_index
-    assert len(list(tmp_path.glob(f"*-{reader.PROMPT_VERSION}.json"))) == 1
+    assert len(list(tmp_path.glob(f"*-{reader.PROMPT_VERSION}-*.json"))) == 1
 
 
 def test_short_answers_leave_marks_unanswered(tmp_path):
@@ -226,3 +226,120 @@ def test_more_than_twelve_pieces_use_a_second_image_with_global_ids(tmp_path):
     # pairs keep global ids and stay inside their image
     assert r.pairs and all((x.a <= 12) == (x.b <= 12) for x in r.pairs)
     assert any(x.a > 12 for x in r.pairs)
+
+
+def test_the_cache_key_names_the_weights_that_answered(tmp_path):
+    _install(tmp_path / "m", q4=True)
+    s = load({"ROSETTE_MODELS_DIR": str(tmp_path / "m")})
+    p, pieces, post = _prepared(8), _ring_head()[:4], FakePost()
+    read(p, pieces, s, cache_dir=tmp_path / "c", post=post)
+    assert [f.name.endswith(f"-{reader.PROMPT_VERSION}-Q4_K_M.json") for f in (tmp_path / "c").glob("*.json")] == [True]
+    n = len(post.calls)
+    assert read(p, pieces, s, cache_dir=tmp_path / "c", post=post).cached is True and len(post.calls) == n
+    (tmp_path / "m" / "Qwen__Qwen3.5-4B-GGUF" / "Qwen3.5-4B-Q8_0.gguf").write_bytes(b"x")  # Q8 arrives
+    again = read(p, pieces, s, cache_dir=tmp_path / "c", post=post)
+    assert again.cached is False and len(post.calls) > n  # the Q4 reading is not served for Q8
+    assert len(list((tmp_path / "c").glob("*-Q8_0.json"))) == 1
+
+
+def _garbage_post(body_text):
+    def post(url, body):
+        return {"choices": [{"message": {"content": body_text}}]}
+    return post
+
+
+@pytest.mark.parametrize("junk", ["not json at all", "[]", "{}", '[{"mark": 1}]'])
+def test_a_failed_read_is_not_cached_and_says_so(tmp_path, junk):
+    p, pieces = _prepared(9), _ring_head()[:4]
+    r = read(p, pieces, load({}), cache_dir=tmp_path, post=_garbage_post(junk))
+    assert r.cached is False and r.answers == {} and "failed" in r.note and "image 1" in r.note
+    assert not list(tmp_path.glob("*.json"))
+    good = read(p, pieces, load({}), cache_dir=tmp_path, post=FakePost())  # the next call asks again
+    assert good.cached is False and len(good.answers) == 4 and len(list(tmp_path.glob("*.json"))) == 1
+
+
+def test_a_partial_answer_is_cached_as_it_is(tmp_path):
+    p, pieces = _prepared(10), _ring_head()[:6]
+    first = read(p, pieces, load({}), cache_dir=tmp_path, post=FakePost(drop=(3, 5)))
+    assert sorted(first.answers) == [1, 2, 4, 6] and "failed" not in first.note
+    second = read(p, pieces, load({}), cache_dir=tmp_path, post=_garbage_post("x"))
+    assert second.cached is True and sorted(second.answers) == [1, 2, 4, 6]
+
+
+def test_pieces_beyond_the_cap_are_counted_in_the_note(tmp_path):
+    pieces = [_disc(60 + 40 * (k % 6), 80 + 40 * (k // 6), 16) for k in range(27)]  # 27 grid pieces, all over the floor
+    assert len(reader.choose_pieces(_prepared(), pieces)) == reader.MAX_PIECES
+    r = read(_prepared(11), pieces, load({}), cache_dir=tmp_path, post=FakePost())
+    assert r.marks == list(range(1, 25)) and r.images == 2
+    assert "3 pieces" in r.note and "24" in r.note
+
+
+def test_a_swapped_pair_answer_is_flipped_to_the_asked_order():
+    out = reader._parse_pairs([{"a": 2, "b": 1, "on_top": "a"}, {"a": 4, "b": 3, "on_top": "unclear"},
+                               {"a": 9, "b": 9, "on_top": "a"}], [(1, 2), (3, 4)])
+    assert out == [reader.PairAnswer(1, 2, "b"), reader.PairAnswer(3, 4, "unclear")]
+
+
+def test_read_stops_the_server_when_a_request_raises(tmp_path, monkeypatch):
+    events = []
+
+    def start(self):
+        events.append("start")
+        self.note = ""
+        return self
+
+    monkeypatch.setattr(ReaderServer, "start", start)
+    monkeypatch.setattr(ReaderServer, "stop", lambda self: events.append("stop"))
+
+    def boom(url, body):
+        raise OSError("connection reset")
+    monkeypatch.setattr(reader, "_http_post", boom)
+    with pytest.raises(OSError):
+        read(_prepared(12), _ring_head()[:3], load({}), cache_dir=tmp_path)
+    assert events == ["start", "stop"] and not list(tmp_path.glob("*.json"))
+
+
+def test_an_interrupt_while_waiting_for_health_stops_the_server(tmp_path, monkeypatch):
+    _install(tmp_path, q8=True)
+    s = load({"ROSETTE_MODELS_DIR": str(tmp_path)})
+    stopped = []
+
+    class Proc:
+        returncode = None
+
+        def poll(self):
+            return None if not stopped else 0
+
+        def terminate(self):
+            stopped.append("terminate")
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(reader.subprocess, "Popen", lambda *a, **k: Proc())
+    monkeypatch.setattr(ReaderServer, "_healthy", lambda self: False)
+
+    def interrupt(_s):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(reader.time, "sleep", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        ReaderServer(s, log_path=tmp_path / "log" / "server.err").start()
+    assert stopped == ["terminate"]
+
+
+def test_the_server_log_is_truncated_on_each_start(tmp_path, monkeypatch):
+    _install(tmp_path, q8=True)
+    s = load({"ROSETTE_MODELS_DIR": str(tmp_path)})
+    log = tmp_path / "server.err"
+    log.write_bytes(b"old noise " * 1000)
+
+    class Proc:
+        returncode = 1
+
+        def poll(self):
+            return 1
+    monkeypatch.setattr(reader.subprocess, "Popen", lambda *a, **k: Proc())
+    monkeypatch.setattr(ReaderServer, "_healthy", lambda self: False)
+    with pytest.raises(RuntimeError):
+        ReaderServer(s, log_path=log).start()
+    assert log.stat().st_size == 0

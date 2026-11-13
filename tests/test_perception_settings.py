@@ -69,3 +69,10 @@ def test_reader_settings_are_read_and_bad_numbers_name_the_variable():
     assert (s.reader, s.reader_port, s.reader_threads) == ("on", 9000, 6)
     with pytest.raises(ValueError, match="ROSETTE_READER_PORT"):
         load({"ROSETTE_READER_PORT": "eighty"})
+
+
+def test_reader_port_must_be_an_unprivileged_port():
+    for bad in ("80", "70000"):
+        with pytest.raises(ValueError, match="ROSETTE_READER_PORT"):
+            load({"ROSETTE_READER_PORT": bad})
+    assert load({"ROSETTE_READER_PORT": "1024"}).reader_port == 1024

@@ -29,7 +29,7 @@ def _choice(env: Mapping[str, str], name: str, allowed: tuple[str, ...], default
     return value
 
 
-def _int(env: Mapping[str, str], name: str, default: int) -> int:
+def _int(env: Mapping[str, str], name: str, default: int, low: int = 1, high: int | None = None) -> int:
     raw = env.get(name, "").strip()
     if not raw:
         return default
@@ -37,8 +37,9 @@ def _int(env: Mapping[str, str], name: str, default: int) -> int:
         value = int(raw)
     except ValueError:
         raise ValueError(f"{name}={raw!r} is invalid; expected a whole number") from None
-    if value < 1:
-        raise ValueError(f"{name}={raw!r} is invalid; expected a positive number")
+    if value < low or (high is not None and value > high):
+        span = f"{low} to {high}" if high is not None else f"at least {low}"
+        raise ValueError(f"{name}={raw!r} is invalid; expected a whole number {span}")
     return value
 
 
@@ -50,6 +51,6 @@ def load(env: Mapping[str, str] | None = None) -> Settings:
         model=_choice(env, "ROSETTE_SAM2", MODELS, "small"),
         models_dir=Path(raw_dir) if raw_dir else DEFAULT_MODELS_DIR,
         reader=_choice(env, "ROSETTE_READER", READER_MODES, "auto"),
-        reader_port=_int(env, "ROSETTE_READER_PORT", 8089),
+        reader_port=_int(env, "ROSETTE_READER_PORT", 8089, 1024, 65535),
         reader_threads=_int(env, "ROSETTE_READER_THREADS", 14),
     )
