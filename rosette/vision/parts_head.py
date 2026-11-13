@@ -258,6 +258,9 @@ PIECE_INSIDE = 0.95
 # a band and is not drawn (S42-15, S43-15: the turquoise band where the arms meet).
 ARM_SPAN_PCT = 2.0
 PIECE_PROMINENCE_UNITS = MIN_ZONE_UNITS / 2
+# ML-4 (`harmonic_count`): an outline's second strongest harmonic is reported when its amplitude
+# reaches this share of the first (a 2n or n/2 count the judge may try).
+HARMONIC_SECOND = 0.6
 # ML-2 (`stack_votes` with pieces): a piece belongs to the smallest drawn layer of its color whose
 # geometry holds its centroid and at least PIECE_OWN_SHARE of its pixels (the head disc counts as a
 # drawn layer, so the disc's own piece is not given to a star of its color drawn on it).
@@ -1234,6 +1237,19 @@ def _harmonics(out: np.ndarray) -> dict[int, float]:
     return {n: float(2 * abs((d * np.exp(-1j * n * th)).mean())) for n in range(STAR_MIN_ORDER, PLEAT_MIN_COUNT)}
 
 
+def harmonic_count(out: np.ndarray) -> tuple[int, float, int | None]:
+    """ML-4: (n, amplitude, n2) of an outline in polar form: n the strongest harmonic (`_harmonics`,
+    the lowest n on a tie), its amplitude (px), and the second strongest harmonic n2 when its
+    amplitude is at least HARMONIC_SECOND of the first, else None."""
+    amp = _harmonics(out)
+    n = max(amp, key=amp.get)
+    rest = {k: v for k, v in amp.items() if k != n}
+    n2 = max(rest, key=rest.get) if rest else None
+    if n2 is None or amp[n] <= 0 or rest[n2] < HARMONIC_SECOND * amp[n]:
+        n2 = None
+    return n, amp[n], n2
+
+
 def _peaks(out: np.ndarray, prominence: float, n: int) -> np.ndarray:
     """Columns of the circular outline's maxima standing at least `prominence` (px) above both
     sides, at least half an n-step apart (a tip's ragged top is one maximum)."""
@@ -1261,8 +1277,7 @@ def _piece_order(ind: np.ndarray, radii: np.ndarray, fr: Frame) -> tuple[int, fl
     out = _bridged(_outline_radii(ind, radii, full))
     if out is None:
         return "no outline"
-    amp = _harmonics(out)
-    n = max(amp, key=amp.get)
+    n = harmonic_count(out)[0]
     score = _score_at(ind[rows[0]:rows[-1] + 1].astype(np.float32), full, n)
     if score < SPLIT_FLOOR:
         return f"symmetry {score:.2f} at n={n} under {SPLIT_FLOOR}"
