@@ -246,6 +246,16 @@ NEST_AXIS_DEG, NEST_UNITS = 6.0, 3.0
 # three lobes).
 BACK_TOL_DEG = 6.0
 PIECE_INSIDE = 0.95
+# R18 (`_arm_sets`, `_front_pieces`): a star or petal layer in the disc's own color with no border is
+# often cut by SAM 2 into one piece per arm (S42-15, S43-15: six turquoise arms, each refused alone,
+# one lobe against a 3-fold harmonic). The disc-color head pieces refused alone that do not touch the
+# rim and do not hold the middle (their ARM_SPAN_PCT percentile radius beyond MIN_ZONE_UNITS) are
+# grouped by their radial span (single linkage: inner and outer radius, ARM_SPAN_PCT and
+# 100 - ARM_SPAN_PCT percentiles, each within MIN_ZONE_UNITS of a member's); a group of
+# STAR_MIN_ORDER or more is read together as one piece through the same bars. A base-color ring
+# inside a piece front's span (from its first lobed row to its tips) is the front's own body read as
+# a band and is not drawn (S42-15, S43-15: the turquoise band where the arms meet).
+ARM_SPAN_PCT = 2.0
 PIECE_PROMINENCE_UNITS = MIN_ZONE_UNITS / 2
 # ML-2 (`stack_votes` with pieces): a piece belongs to the smallest drawn layer of its color whose
 # geometry holds its centroid and at least PIECE_OWN_SHARE of its pixels (the head disc counts as a
@@ -818,6 +828,10 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame, pieces: list | None 
         i0, i1, label, conf, pinked, alt = tuple(ring) + (0, None)[len(ring) - 4:]
         found.append([i1, i0, i1, label, conf, pinked, alt])
     _rings_by_dominance(found, dom, domc, fr, radii, center_band)
+    if head is not None:  # R18: a base-color band inside a piece front's span is the front's body
+        bodies = [m["body"] for m in meta if m.get("body")]
+        found = [t for t in found if t[3] != head["label"] or not any(
+            lo - MIN_BAND_UNITS <= unit(t[1]) and unit(t[2]) <= hi for lo, hi in bodies)]
     found.sort(key=lambda t: t[0])
     for depth, (_, i0, i1, label, conf, pinked, alt) in enumerate(reversed(found)):  # outermost first, inner on top
         rp = {"cx": r3(ccx), "cy": r3(ccy), "r_outer": r3(unit(i1)), "r_inner": r3(unit(i0))}
@@ -1209,7 +1223,8 @@ def _piece_order(ind: np.ndarray, radii: np.ndarray, fr: Frame) -> tuple[int, fl
     """ML-2: (n, score) of a piece's polar indicator read over the full circle: n the strongest
     harmonic of its outline, score the turned self-correlation of its rows that are not full at n.
     A reason (str) instead when no row is lobed (an annulus, a disc), the score is under SPLIT_FLOOR
-    or the outline's maxima (PIECE_PROMINENCE_UNITS) are not n."""
+    or the outline's maxima (PIECE_PROMINENCE_UNITS) are not n (R18: n - 1 maxima all on the
+    harmonic's axes within BACK_TOL_DEG count as n: one tip cut by a block, the badge or the rim)."""
     full = np.ones(ind.shape[1], bool)
     cov = ind.mean(axis=1)
     rows = np.flatnonzero((cov > EXTENT_COV) & (cov < FULL_COV))
@@ -1224,9 +1239,22 @@ def _piece_order(ind: np.ndarray, radii: np.ndarray, fr: Frame) -> tuple[int, fl
     if score < SPLIT_FLOOR:
         return f"symmetry {score:.2f} at n={n} under {SPLIT_FLOOR}"
     peaks = _maxima(out, PIECE_PROMINENCE_UNITS * fr.scale, n)
+    if peaks == n - 1 and _maxima_on_axes(out, PIECE_PROMINENCE_UNITS * fr.scale, n):
+        peaks = n  # R18: one tip cut (by a block, the badge or the rim), the others on the axes
     if peaks != n:
         return f"{peaks} outline maxima against the strongest harmonic n={n}"
     return n, float(score)
+
+
+def _maxima_on_axes(out: np.ndarray, prominence: float, n: int) -> bool:
+    """R18: every maximum of the outline (as `_maxima` counts them) lies within BACK_TOL_DEG of an
+    axis of its n-th harmonic (`_piece_rotation`)."""
+    t = out.shape[0]
+    peaks, _ = find_peaks(np.concatenate([out, out, out]), prominence=prominence, distance=max(1, t // (2 * n)))
+    peaks = peaks[(peaks >= t) & (peaks < 2 * t)] - t
+    rot, step = _piece_rotation(out, n), 360.0 / n
+    off = (peaks * 360.0 / t - rot) % step
+    return bool(peaks.size) and bool((np.minimum(off, step - off) <= BACK_TOL_DEG).all())
 
 
 def _outline_radii(ind: np.ndarray, radii: np.ndarray, win: np.ndarray) -> np.ndarray:
@@ -1307,6 +1335,27 @@ def _same_axes(q: dict, n: int, rot: float, tol: float) -> bool:
     return min(d, 360.0 / n - d) <= tol
 
 
+def _arm_sets(cand: list[tuple[np.ndarray, float, float]]) -> list[list[int]]:
+    """R18: indices of the candidate arm pieces [(mask, inner radius, outer radius) in canvas units]
+    grouped by single linkage on their radial span (inner and outer radius each within
+    MIN_ZONE_UNITS of a member's); groups of STAR_MIN_ORDER or more, in candidate order."""
+    left, out = list(range(len(cand))), []
+    while left:
+        grp = [left.pop(0)]
+        grown = True
+        while grown:
+            grown = False
+            for k in list(left):
+                if any(abs(cand[k][1] - cand[m][1]) <= MIN_ZONE_UNITS
+                       and abs(cand[k][2] - cand[m][2]) <= MIN_ZONE_UNITS for m in grp):
+                    grp.append(k)
+                    left.remove(k)
+                    grown = True
+        if len(grp) >= STAR_MIN_ORDER:
+            out.append(sorted(grp))
+    return out
+
+
 def _front_pieces(layers: list, meta: list[dict], zones: list[tuple[int, int]], radii: np.ndarray,
                   fr: Frame, base: int, head: tuple[float, float, float], pieces: list) -> None:
     """ML-2: front layers in the base color read from SAM 2 pieces, and their inner layers (BACK_TOL_DEG
@@ -1314,7 +1363,10 @@ def _front_pieces(layers: list, meta: list[dict], zones: list[tuple[int, int]], 
     color on the same axes: count equal, rotation within NEST_AXIS_DEG, not a backing; for the inner
     layer also a layer of its color on those axes reaching no further than it, MIN_BAND_UNITS) gives
     way to the piece layer (params source "piece"); a rules layer without a piece counterpart stays.
-    Runs after the H15 rule and the border split."""
+    R18: the base-color pieces refused alone are then grouped into arm sets (`_arm_sets`,
+    ARM_SPAN_PCT) and each set is read as one piece; a front's meta holds its span (`body`, canvas
+    units: the first lobed row to the tips) for the ring check in `detect_head`. Runs after the H15
+    rule and the border split."""
     cx, cy, r = head
     win = np.ones(RING_THETA, bool)  # pieces inside the head are read over the full circle
     head_pcs = [pc for pc in pieces if pc.in_head and pc.color_group is not None and pc.color_group >= 0]
@@ -1323,28 +1375,26 @@ def _front_pieces(layers: list, meta: list[dict], zones: list[tuple[int, int]], 
     def polar_of(mask: np.ndarray) -> np.ndarray:
         return polar_sample(mask.astype(np.uint8), cx, cy, radii, RING_THETA, fill=0) > 0
 
-    for i, pc in enumerate(head_pcs):
-        if pc.color_group != base or _touches_rim(pc.mask, cx, cy, r, fr):
-            continue
-        ind = polar_of(pc.mask)
+    def read(mask: np.ndarray, ind: np.ndarray, what: str) -> bool:
+        """Read one piece (or an arm set's union) as a front layer; False when it is none."""
         order = _piece_order(ind, radii, fr)
         if isinstance(order, str):
-            log.info("piece %d (area %d) is no front layer: %s", i, pc.area, order)
-            continue
+            log.info("%s is no front layer: %s", what, order)
+            return False
         n, score = order
         rot = _piece_rotation(_outline_radii(ind, radii, win), n)
         if any(_same_axes({"count": n2, "rotation_deg": rot2}, n, rot, NEST_AXIS_DEG) for n2, rot2 in added):
-            continue  # a second piece of a front layer already read (M4)
+            return True  # a second piece of a front layer already read (M4)
         got = _piece_layer(ind, radii, win, fr, head, n, rot)
         if got is None:
-            continue
+            return False
         front, rb = got
         if float(front["r_inner"]) < MIN_ZONE_UNITS:
-            continue  # lobes from the middle: a badge print (S5-15's letters), not a layer on the disc
+            return False  # lobes from the middle: a badge print (S5-15's letters), not a layer on the disc
         added.append((n, rot))
         ra = int(np.searchsorted(radii, float(front["r_inner"]) * fr.scale))
-        hull = np.zeros(pc.mask.shape, np.uint8)
-        cv2.fillConvexPoly(hull, cv2.convexHull(cv2.findNonZero(pc.mask.astype(np.uint8))), 1)
+        hull = np.zeros(mask.shape, np.uint8)
+        cv2.fillConvexPoly(hull, cv2.convexHull(cv2.findNonZero(mask.astype(np.uint8))), 1)
         hull = hull > 0
         by_color: dict[int, list] = {}
         for pc2 in head_pcs:
@@ -1377,13 +1427,36 @@ def _front_pieces(layers: list, meta: list[dict], zones: list[tuple[int, int]], 
             del layers[k]
             del meta[k]
         zone = next(((a, b) for a, b in zones if a <= ra < b), (ra, rb))
+        cov = ind.mean(axis=1)
+        first = int(np.flatnonzero((cov > EXTENT_COV) & (cov < FULL_COV))[0])  # where the lobes start
         zone_meta = dict(zone=zone, rows=(ra, rb), eats=None, inner=None, front=True)
         layers.append(("points", base, r3(min(1.0, score)), front, 0.0, rb))
-        meta.append(zone_meta)
+        meta.append(dict(zone_meta, body=(fr.d(radii[first]), float(front["r_outer"]))))
         if inner is not None:
             h, q, rb2, conf2 = inner
             layers.append(("points", h, conf2, q, 0.0, rb2))
             meta.append(dict(zone_meta, rows=(ra, rb2)))
+        return True
+
+    arms: list[tuple[np.ndarray, float, float]] = []
+    arm_ind: list[np.ndarray] = []
+    for i, pc in enumerate(head_pcs):
+        if pc.color_group != base or _touches_rim(pc.mask, cx, cy, r, fr):
+            continue
+        ind = polar_of(pc.mask)
+        if read(pc.mask, ind, f"piece {i} (area {pc.area})"):
+            continue
+        ys, xs = np.nonzero(pc.mask)
+        if len(ys) == 0:
+            continue
+        rr = fr.d(np.hypot(xs - cx, ys - cy))
+        r0, r1 = float(np.percentile(rr, ARM_SPAN_PCT)), float(np.percentile(rr, 100 - ARM_SPAN_PCT))
+        if r0 > MIN_ZONE_UNITS:  # R18: a candidate arm (a piece holding the middle is no arm)
+            arms.append((pc.mask, r0, r1))
+            arm_ind.append(ind)
+    for grp in _arm_sets(arms):  # R18: arms of one layer read together
+        read(np.logical_or.reduce([arms[k][0] for k in grp]), np.logical_or.reduce([arm_ind[k] for k in grp]),
+             f"arm set of {len(grp)} pieces")
 
 
 def _head_outline(p: Prepared, fr: Frame) -> np.ndarray:

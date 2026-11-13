@@ -117,7 +117,7 @@ def test_a_border_color_that_is_not_an_n_fold_layer_of_its_own_gives_no_front_la
     labels = base_head()
     yy, xx, dx, dy, r, th = _grid()
     d = np.degrees(th) % 360
-    labels[(d > 190) & (d < 260) & (r > 0.45 * R) & (r < 0.7 * R) & (labels != 0)] = 1
+    labels[(d > 190) & (d < 260) & (r > 0.42 * R) & (r < 0.7 * R) & (labels != 0)] = 1
     parts = _head(labels)
     assert not [q for q in parts if q.role == "points" and q.color_group == 0]
 
@@ -320,3 +320,96 @@ def test_an_inner_piece_lies_on_its_front_piece_without_a_backing():
     assert len(f) == 1 and len(w) == 1 and w[0].params.get("source") == "piece"
     blocks = [q for q in parts if q.role == "points" and q.color_group == 2]
     assert f[0].z < w[0].z and all(b.z < f[0].z for b in blocks)
+
+
+# R18: a star in the disc's own color with no border, cut by SAM 2 into one piece per arm (S42-15,
+# S43-15), or one star piece with a tip cut away.
+
+def _red_star_over_blocks(core_white=False):
+    """base_head without the white star: a red (0) 6-point star on 30 + 60 k (valleys 0.4 R, tips
+    0.75 R) lies over the six blue loops; core_white: the middle is a white center to 0.3 R (no
+    red ring), so the star's body shows as a red band from 0.3 R to its valleys."""
+    yy, xx, dx, dy, r, th = _grid()
+    labels = base_head(white=False, red_star=False)
+    star = (r <= _star(th, 6, 30, 0.4 * R, 0.75 * R)) & (r > 0.3 * R)
+    labels[star] = 0
+    if core_white:
+        labels[r <= 0.3 * R] = 1
+    blocks = _blocks(dx, dy, 6, 0, 0.3 * R, 0.75 * R, 0.16 * R) & ~star & (r > 0.3 * R)
+    return labels, star, blocks, np.degrees(th) % 360
+
+
+def _arms(star, d):
+    return [_piece(star & (np.abs((d - 30 - 60 * k + 180) % 360 - 180) <= 30), 0) for k in range(6)]
+
+
+def _block_pieces(blocks, d):
+    return [_piece(blocks & (np.abs((d - 60 * k + 180) % 360 - 180) <= 30), 2) for k in range(6)]
+
+
+def _fronts(parts):
+    return [q for q in parts if q.role == "points" and q.color_group == 0]
+
+
+def test_one_piece_per_arm_reads_as_one_front_star():
+    labels, star, blocks, d = _red_star_over_blocks()
+    pieces = _arms(star, d) + _block_pieces(blocks, d)
+    for pc in pieces[:1]:  # one arm alone is no layer
+        assert isinstance(H._piece_order(H.polar_sample(pc.mask.astype(np.uint8), CX, CY, np.arange(1.0, R, 2.0),
+                                                        H.RING_THETA, fill=0) > 0, np.arange(1.0, R, 2.0),
+                                         Frame.of(_photo(labels))), str)
+    parts = [q for q in detect_parts(_photo(labels), labels, pieces=pieces) if q.role != "tail_stripe"]
+    f = _fronts(parts)
+    assert len(f) == 1 and f[0].params["source"] == "piece"
+    assert f[0].params["count"] == 6 and f[0].params["kind"] == "star"
+    assert abs(f[0].params["rotation_deg"] % 60 - 30) < 3
+    assert abs(f[0].params["r_outer"] - 0.75 * UNIT) < 5
+    # the red ring 0.22-0.3 R inside the arms' start stays
+    assert any(q.role == "ring" and q.color_group == 0 for q in parts)
+
+
+def test_arm_pieces_need_three_of_one_span():
+    labels, star, blocks, d = _red_star_over_blocks()
+    parts = [q for q in detect_parts(_photo(labels), labels, pieces=_arms(star, d)[:2]) if q.role != "tail_stripe"]
+    assert not any(q.params.get("source") == "piece" for q in _fronts(parts))
+
+
+def test_a_star_piece_with_one_tip_cut_is_still_n_fold():
+    """One star piece whose tip on 90 deg is cut away (a block over it): 5 maxima, all on the
+    6-fold harmonic's axes."""
+    labels, star, blocks, d = _red_star_over_blocks()
+    yy, xx, dx, dy, r, th = _grid()
+    cut = star & ~((np.abs((d - 90 + 180) % 360 - 180) <= 30) & (r > 0.42 * R))
+    parts = [q for q in detect_parts(_photo(labels), labels, pieces=[_piece(cut, 0)]) if q.role != "tail_stripe"]
+    f = _fronts(parts)
+    assert len(f) == 1 and f[0].params["count"] == 6 and f[0].params["source"] == "piece"
+    assert abs(f[0].params["r_outer"] - 0.75 * UNIT) < 5
+
+
+def test_n_minus_one_maxima_off_the_axes_are_refused():
+    t = H.RING_THETA
+    th = np.linspace(0, 2 * np.pi, t, endpoint=False)
+    out = 100 + 30 * np.maximum(0, np.cos(6 * th)) ** 2
+    deg = np.degrees(th)
+    on = out.copy()
+    on[np.abs(deg - 60) < 20] = 100  # one tip cut: 5 maxima, on the axes
+    assert H._maxima(on, 5.0, 6) == 5 and H._maxima_on_axes(on, 5.0, 6)
+    off = on.copy()
+    off[np.abs(deg - 120) < 20] = 100
+    off += 30 * np.exp(-((deg - 135) / 4) ** 2)  # one tip moved 15 deg off its axis
+    assert H._maxima(off, 5.0, 6) == 5 and not H._maxima_on_axes(off, 5.0, 6)
+
+
+def test_a_band_of_the_disc_color_inside_the_arms_span_is_the_front_body():
+    """The arms meet in a red band from the white center (0.3 R) to the valleys (0.4 R): with the
+    front drawn it is the star's own body, not a ring."""
+    labels, star, blocks, d = _red_star_over_blocks(core_white=True)
+    labels[(np.hypot(*np.mgrid[:labels.shape[0], :labels.shape[1]][::-1] - np.array([CX, CY])[:, None, None]) <= 0.4 * R)
+           & (labels != 1)] = 0
+    plain = [q for q in detect_parts(_photo(labels), labels) if q.role != "tail_stripe"]
+    assert any(q.role == "ring" and q.color_group == 0 for q in plain)  # the rules read a band
+    parts = [q for q in detect_parts(_photo(labels), labels, pieces=_arms(star, d) + _block_pieces(blocks, d))
+             if q.role != "tail_stripe"]
+    assert len(_fronts(parts)) == 1
+    assert not any(q.role == "ring" and q.color_group == 0 for q in parts)
+
