@@ -135,7 +135,8 @@ def api_analyze(file: UploadFile) -> dict:
     result = render(model)
     return {"model": model.to_json(), "svg": result.svg, "issues": _issues(result.issues),
             "flagged": is_flagged(model, result.issues), "filename": download_name(name),
-            "head_fit": asdict(fit) if fit else None, "perception": ctx.perception}
+            "head_fit": asdict(fit) if fit else None, "perception": ctx.perception,
+            "reader": ctx.reader}
 
 
 def _holds(model: RosetteModel, tid: str) -> bool:

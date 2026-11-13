@@ -7,7 +7,7 @@ import {
   MAX_COUNT, POINT_KINDS, errorText, hex, flagItems,
   downloadBlockers as blockersFor, groupColor, tailGroups, parseValue, tailCheckKey, sourceNotice,
   convertBlocker, resetForFile, checklistItems, paramShown, automaticHeadText, renderBody, templateText, usesGroup,
-  confirmBody, perceptionText,
+  confirmBody, perceptionText, readerText,
 } from './logic.js';
 
 export { errorText, flagItems, parseValue, tailGroups, hex };
@@ -80,6 +80,7 @@ export const state = {
   flagged: false, // server is_flagged of the last render
   headFit: null, // head fit measured at conversion (information, not a flag)
   perception: null, // the SAM 2 pieces' status at conversion (ML-2; one line under the photo)
+  reader: null, // the ML-4 piece reader's status at conversion (one line under the pieces line)
   headDefault: null, // the head the conversion chose ('rules' or a template_id)
   confirmed: new Set(), // flag keys the user confirmed
   invalid: new Set(), // input field keys holding an invalid value
@@ -195,6 +196,7 @@ export const actions = {
       Object.assign(state, {
         model: res.model, svg: res.svg, issues: res.issues || [], flagged: !!res.flagged,
         filename: res.filename, headFit: res.head_fit || null, perception: res.perception || null,
+        reader: res.reader || null,
         headDefault: (res.model.parts.find((p) => p.role === 'template') || { params: { template_id: 'rules' } })
           .params.template_id,
       });
@@ -661,6 +663,9 @@ export const views = {
     const line = perceptionText(state.perception);
     $('perception').textContent = line;
     $('perception').hidden = !line;
+    const read = readerText(state.reader);
+    $('reader').textContent = read;
+    $('reader').hidden = !read;
   },
 
   simControls() {

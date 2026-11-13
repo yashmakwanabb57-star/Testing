@@ -28,7 +28,10 @@ render(model): build -> write_svg -> validate. build may add warnings to the mod
 """
 from __future__ import annotations
 
+import atexit
 import copy
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -37,12 +40,16 @@ import numpy as np
 from .assign import FLAG_BELOW, FLAGGED_CONF, assign, hex_rgb
 from .build import build
 from .model import Part, RosetteModel
+from .perception import reader as reader_mod
 from .perception import settings as perception_settings
 from .perception.pieces import DEFAULT_CACHE_DIR, segment
 from .perception.sam2 import MissingModel
 from .roles import PAD_FRAC, render_categories
 from .tidy import drop_specks, drop_two_point_layers, merge_tail_slivers
 from .validate import Issue, validate
+from .vision import candidates as vcandidates
+from .vision import groups as vgroups
+from .vision import judge as vjudge
 from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_groups
 from .vision.layer_classify import classify_head_layers
 from .vision.parts import detect_parts
@@ -604,6 +611,8 @@ class PhotoContext:
     detected: RosetteModel | None = None
     # ML-2: the SAM 2 pieces' status (`perception`), sent by the API.
     perception: dict | None = None
+    # ML-4: the piece reader's status (`reader`, see reader_step), sent by the API.
+    reader: dict | None = None
 
 
 def add_library_head(model: RosetteModel, tid: str, ctx: PhotoContext) -> RosetteModel:
@@ -677,6 +686,7 @@ class Detection:
     merged_print: list
     rules_model: RosetteModel | None = None  # before the learned classifier (ML-1)
     perception: dict | None = None  # ML-2: the SAM 2 pieces' status (`perception`)
+    reader: dict | None = None  # ML-4: the piece reader's status (reader_step)
 
 
 PIECES_OFF = "SAM 2 pieces are off (ROSETTE_SAM2=off): the rules alone read the head."
@@ -711,11 +721,125 @@ def perception(p: Prepared, labels: np.ndarray, env=None) -> tuple[list | None, 
                            "message": message}
 
 
+READER_OFF = "ML-4 reader is off (ROSETTE_READER=off): the rules head stands."
+READER_ABSENT = "ML-4 reader is off (ROSETTE_READER=auto and the model files are absent)."
+# One llama-server per process (ML-4): started on the first cold read, stopped at exit, so a batch
+# run (tools/score.py, the comparison pages) pays the start once.
+_READER_SERVER = None
+_READER_ATEXIT = False
+_READER_LOCK = threading.Lock()
+
+
+def _resolve_reader(settings) -> "reader_mod.Resolved":
+    """The executable and weights the reader would use; MissingReader when absent."""
+    return reader_mod.ReaderServer(settings).resolve()
+
+
+def _stop_reader_server() -> None:
+    global _READER_SERVER
+    with _READER_LOCK:
+        srv, _READER_SERVER = _READER_SERVER, None
+    if srv is not None:
+        srv.stop()
+
+
+def _reader_post(settings) -> Callable[[str, dict], dict]:
+    """reader.read's `post`: the process's llama-server, started lazily on the first request (a warm
+    cache never starts it) and kept for the next photos; restarted when it exited or the settings
+    changed; stopped at exit (atexit)."""
+    def post(url: str, body: dict) -> dict:
+        global _READER_SERVER, _READER_ATEXIT
+        with _READER_LOCK:
+            srv = _READER_SERVER
+            alive = srv is not None and srv.proc is not None and srv.proc.poll() is None
+            if not alive or srv.settings != settings:
+                _READER_SERVER = None
+                if srv is not None:
+                    srv.stop()
+                srv = reader_mod.ReaderServer(settings).start()
+                _READER_SERVER = srv
+                if not _READER_ATEXIT:
+                    atexit.register(_stop_reader_server)
+                    _READER_ATEXIT = True
+        return reader_mod._http_post(srv.url + "/v1/chat/completions", body)
+    return post
+
+
+def _candidate_labels(decisions: list, choices: list[tuple[int, ...]]) -> list[str]:
+    """One description per candidate: "rules head" for candidate 0, else the options it takes."""
+    out = []
+    for combo in choices:
+        taken = [f"{d.kind} {'/'.join(d.part_ids)} {d.options[i]}" for d, i in zip(decisions, combo) if i]
+        out.append(", ".join(taken) or "rules head")
+    return out
+
+
+def reader_step(p: Prepared, labels: np.ndarray, pieces: list | None, model: RosetteModel, env=None,
+                merged: dict[int, int] | None = None) -> tuple[RosetteModel, dict]:
+    """ML-4: read the head pieces (rosette.perception.reader), group them (vision.groups), open the
+    head decisions and span the candidates (vision.candidates; candidate 0 is `model`), render and
+    judge them against the photo (vision.judge) and write the verdict on the chosen head
+    (judge.flag). Runs only when `pieces` is not None and ROSETTE_READER resolves on ("auto": on
+    when the executable and the weights resolve). Returns (model, status); when the reader does not
+    run, reads nothing, opens no decision or fails, `model` itself comes back untouched.
+    status: {"status", "message", "seconds", "cached", "images", "decisions", "winner", "margin",
+    "note", "tie", "removed"} with status "on", "off", "missing" (the install line), "skipped" (no
+    pieces, or no head piece to read) or "failed" (the error text); message is the judge's line
+    when it judged. Never raises. The candidates change counts, z, kinds and the centre state only,
+    never a colour group, so the chosen head needs no second assign."""
+    t0 = time.perf_counter()
+    out = {"status": "off", "message": READER_OFF, "seconds": 0.0, "cached": False, "images": 0, "decisions": 0,
+           "winner": None, "margin": None, "note": "", "tie": [], "removed": []}
+
+    def done(**kw) -> dict:
+        return {**out, "seconds": round(time.perf_counter() - t0, 2), **kw}
+    try:
+        settings = perception_settings.load(env)
+        if settings.reader == "off":
+            return model, out
+        try:
+            resolved = _resolve_reader(settings)
+        except reader_mod.MissingReader as exc:
+            if settings.reader == "auto":
+                return model, dict(out, message=READER_ABSENT)
+            return model, done(status="missing", message=str(exc))
+        if pieces is None:
+            return model, done(status="skipped", message="no pieces")
+        reading = reader_mod.read(p, pieces, settings, cache_dir=reader_mod.DEFAULT_READER_CACHE,
+                                  post=_reader_post(settings))
+        note = "; ".join(x for x in (resolved.note, reading.note) if x)
+        seen = {"cached": bool(reading.cached), "images": int(reading.images), "note": note}
+        if not reading.marks:
+            return model, done(status="skipped", message="no head pieces to read", **seen)
+        found = vgroups.piece_groups(reading, pieces, p.head, Frame.of(p).scale)
+        decisions = vcandidates.open_decisions(model, found, reading)
+        if not decisions:
+            return model, done(status="on", message="no open decisions: the rules head stands", winner=0, **seen)
+        choices = vcandidates.candidate_choices(model, decisions)
+        heads = vcandidates.candidate_heads(model, decisions)
+        verdict = vjudge.judge(heads, p, labels, pieces, decisions=_candidate_labels(decisions, choices),
+                               merged=merged)
+        chosen = vjudge.flag(heads[verdict.winner], verdict)
+        base = heads[verdict.winner]
+        lines = chosen.warnings[len(base.warnings):] + chosen.info[len(base.info):]
+        if verdict.note:
+            seen["note"] = "; ".join(x for x in (note, verdict.note) if x)
+        return chosen, done(status="on", message=lines[0] if lines else "the rules head stands",
+                            decisions=len(decisions), winner=int(verdict.winner),
+                            margin=round(float(verdict.margin), 4), tie=list(verdict.tie),
+                            removed=list(verdict.removed), **seen)
+    except reader_mod.MissingReader as exc:
+        return model, done(status="missing", message=str(exc))
+    except Exception as exc:  # noqa: BLE001 - the reader is optional: the rules head stands
+        return model, done(status="failed", message=f"ML-4 reader failed - {type(exc).__name__}: {exc}")
+
+
 def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -> Detection:
     """prepare -> pixel_groups -> detect_parts -> tidy -> RosetteModel -> assign -> the
-    learned layer classifier (ML-1; classify=False: the rules alone, as the classifier's
-    training data needs; exclude_key: the classifier trained without that design, for
-    leave-one-out evaluation only)."""
+    learned layer classifier (ML-1) -> the piece reader (ML-4, reader_step). classify=False:
+    the rules alone, neither classifier nor reader (Detection.reader None), as the
+    classifier's training data needs; exclude_key: the classifier trained without that
+    design, for leave-one-out evaluation only."""
     p = prepare(data)
     merged_print: list = []
     labels, groups = pixel_groups(p, merged=merged_print)
@@ -742,9 +866,12 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
               if a.color_group != b.color_group}
     # ML-1: the learned classifier's count, and its kind where it is sure (layer_classify)
     rules_model = copy.deepcopy(out)
+    read_status = None
     if classify:
         out.warnings.extend(classify_head_layers(p, labels, out, merged, exclude_key=exclude_key))
-    return Detection(p, labels, groups, out, merged, merged_print, rules_model, seen)
+        # ML-4: the reader's candidates against this head (candidate 0); off: `out` itself, untouched
+        out, read_status = reader_step(p, labels, pieces, out, merged=merged)
+    return Detection(p, labels, groups, out, merged, merged_print, rules_model, seen, read_status)
 
 
 def analyze_with_fit(data: bytes, template: bool = True,
@@ -760,7 +887,7 @@ def analyze_with_context(data: bytes, template: bool = True,
     """analyze_with_fit, plus the PhotoContext add_library_head needs later."""
     d = detect(data, exclude_key=exclude_key)
     p, labels, groups, out, merged, merged_print = d.prepared, d.labels, d.groups, d.model, d.merged, d.merged_print
-    ctx = PhotoContext(p, labels, groups, merged, copy.deepcopy(out), d.rules_model, d.perception)
+    ctx = PhotoContext(p, labels, groups, merged, copy.deepcopy(out), d.rules_model, d.perception, d.reader)
     used = {q.color_group for q in out.parts} | set(merged)
     lib = None
     if template:

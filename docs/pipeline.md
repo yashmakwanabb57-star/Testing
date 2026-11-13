@@ -981,6 +981,10 @@ The table does not support the brief's premise on six of the eight: the color gr
 
 **Constants.** `rosette/vision/parts_head.py`: `STACK_SHARE` for the loose-front vote (with `MIN_BAND_UNITS`, `MIN_ZONE_UNITS`, `BACK_MIN_UNITS`, `BORDER_MIN_SIDES`, `SPLIT_FLOOR`, `FULL_COV`, `RING_MAJORITY`, `NEST_AXIS_DEG`, `STAR_MIN_ORDER`, `STACK_MIN_UNITS2`).
 
+## ML-4: the piece reader settles the open head decisions
+
+**Wiring (`pipeline.reader_step`, after the learned classifier in `detect`).** With SAM 2 pieces and `ROSETTE_READER` resolving on (`auto`: on when `models/llama-cpp/llama-server.exe` and the Qwen3.5-4B GGUF weights resolve), the head pieces are read (`perception.reader.read`, cached in `.cache/reader/`), grouped (`vision.groups.piece_groups`), the open decisions span at most 24 candidate heads with the detected head as candidate 0 (`vision.candidates`), and the judge renders them against the photo and writes its verdict on the chosen head (`vision.judge.judge`, `flag`). One llama-server per process, started on the first cold read and stopped at exit. Any fault keeps candidate 0 with status `failed`; the status (`Detection.reader`, `/api/analyze` field `reader`) is one line in the workbench under the pieces line. `ROSETTE_READER=off`: the step returns the head untouched. Results and gates: Task 6.
+
 ## Final state (Task 16)
 
 ### Stages, modules and tuning constants

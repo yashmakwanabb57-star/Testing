@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   HEAD_CHECK, LOOP_BASE, SOURCE_NOT_READY, checklistItems, confirmBody, paramShown, convertBlocker, headFitText, downloadBlockers, errorText, flagItems, parseValue, resetForFile, sourceNotice,
-  perceptionText,
+  perceptionText, readerText,
 } from '../../app/static/logic.js';
 import { applyConfig } from '../../app/static/simulator.js';
 
@@ -62,6 +62,25 @@ test('the pieces status is one plain line', () => {
   assert.match(perceptionText({ status: 'failed', message: 'boom' }), /failed.*boom/);
   for (const t of [on, missing]) assert.ok(!/[\u2013\u2014]/.test(t));
   assert.equal(perceptionText(null), '');
+});
+
+test('the reader status is one plain line', () => {
+  const on = readerText({ status: 'on', decisions: 3, winner: 2, margin: 0.0342, seconds: 95.4, cached: false,
+    images: 1, note: '', message: 'judge: rules head -> count S1 16 (margin 0.034)', tie: [], removed: [] });
+  assert.equal(on, 'Reader: on, 3 decisions, winner 2 (margin 0.034), 95 s');
+  assert.equal(readerText({ status: 'on', decisions: 1, winner: 0, margin: 0.02, seconds: 3, cached: true, note: '' }),
+    'Reader: on, 1 decision, winner 0 (margin 0.020), cached');
+  assert.equal(readerText({ status: 'on', decisions: 0, winner: 0, margin: null, seconds: 61.2, cached: false, note: '' }),
+    'Reader: on, no open decisions, 61 s');
+  assert.equal(readerText({ status: 'on', decisions: 2, winner: 0, margin: 0, seconds: 1, cached: true,
+    note: 'judge skipped: more than 4 colours' }), 'Reader: on, 2 decisions, winner 0 (margin 0.000), cached - judge skipped: more than 4 colours');
+  assert.equal(readerText({ status: 'off', message: 'x' }), 'Reader: off');
+  const missing = readerText({ status: 'missing', message: 'llama-server.exe not found. ML-4 reader: install llama.cpp release b12342' });
+  assert.equal(missing, 'Reader: missing - llama-server.exe not found. ML-4 reader: install llama.cpp release b12342');
+  assert.equal(readerText({ status: 'skipped', message: 'no pieces' }), 'Reader: skipped - no pieces');
+  assert.equal(readerText({ status: 'failed', message: 'RuntimeError: boom' }), 'Reader: failed - RuntimeError: boom');
+  for (const t of [on, missing]) assert.ok(!/[–—]/.test(t));
+  assert.equal(readerText(null), '');
 });
 
 test('head fit is shown as information, plain hyphens', () => {

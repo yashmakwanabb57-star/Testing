@@ -159,6 +159,22 @@ export function perceptionText(p) {
   return `Pieces: failed - the rules alone read the head. ${p.message || ''}`.trim();
 }
 
+// The ML-4 piece reader's status at conversion (api/analyze reader): one plain line under the
+// pieces line. Plain hyphens.
+export function readerText(r) {
+  if (!r) return '';
+  if (r.status === 'on') {
+    const n = Number(r.decisions) || 0;
+    const how = r.cached ? 'cached' : `${Math.round(Number(r.seconds) || 0)} s`;
+    const what = n === 0 ? 'no open decisions'
+      : `${n} decision${n === 1 ? '' : 's'}, winner ${r.winner} (margin ${Number(r.margin || 0).toFixed(3)})`;
+    const line = `Reader: on, ${what}, ${how}`;
+    return r.note ? `${line} - ${r.note}` : line;
+  }
+  if (r.status === 'off') return 'Reader: off';
+  return `Reader: ${r.status} - ${r.message || ''}`.trim();
+}
+
 export function checklistItems(s) {
   if (!s.model) return [];
   return [{ ...HEAD_CHECK, info: headFitText(s.headFit) }];
@@ -181,7 +197,7 @@ export function resetForFile(s) {
   s.render.seq++;
   Object.assign(s.render, { dirty: false, inFlight: false, error: null });
   Object.assign(s, { filename: null, model: null, svg: null, issues: [], flagged: false, analyzing: false, photoFrame: null, headFit: null,
-    perception: null });
+    perception: null, reader: null });
   s.confirmed.clear();
   s.invalid.clear();
   s.sim.tried.clear();

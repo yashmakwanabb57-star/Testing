@@ -27,6 +27,13 @@ def test_pieces_off_is_reported():
     assert body["svg"].startswith("<svg")
 
 
+def test_analyze_returns_the_reader_status():
+    body = _analyze()  # tests/conftest.py: ROSETTE_READER=off
+    assert set(body["reader"]) == {"status", "message", "seconds", "cached", "images", "decisions", "winner",
+                                   "margin", "note", "tie", "removed"}
+    assert body["reader"]["status"] == "off"
+
+
 def test_missing_weights_are_reported_with_the_fetch_command(monkeypatch, tmp_path):
     monkeypatch.setenv("ROSETTE_SAM2", "small")
     monkeypatch.setenv("ROSETTE_MODELS_DIR", str(tmp_path / "models"))

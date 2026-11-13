@@ -165,3 +165,184 @@ def test_uncertain_head_circle_is_warned_and_flagged(monkeypatch):
     model = analyze(_photo("S46-15"))
     assert pl.CIRCLE_UNCERTAIN in model.warnings
     assert is_flagged(model, render(model).issues)
+
+
+# ------------------------------------------------------------ ML-4 reader step
+
+import types  # noqa: E402
+
+import rosette.perception.reader as R  # noqa: E402
+import rosette.pipeline as pl  # noqa: E402
+import rosette.vision.candidates as C  # noqa: E402
+import rosette.vision.judge as J  # noqa: E402
+
+READER_KEYS = {"status", "message", "seconds", "cached", "images", "decisions", "winner", "margin", "note", "tie",
+               "removed"}
+
+
+@pytest.fixture(scope="module")
+def s46():
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("ROSETTE_SAM2", "off")
+        mp.setenv("ROSETTE_READER", "off")
+        return pl.detect(_photo("S46-15"))
+
+
+def _reader_on(monkeypatch):
+    monkeypatch.setenv("ROSETTE_READER", "on")
+    monkeypatch.setattr(pl, "_resolve_reader", lambda settings: R.Resolved(Path("x"), Path("y"), Path("z"), ""))
+
+
+def _reading(marks=()):
+    marks = list(marks)
+    return R.Reading(marks=marks, piece_index={m: m - 1 for m in marks},
+                     answers={m: R.MarkAnswer(m, "badge", "plain", 1) for m in marks}, pairs=[], seconds=12.5,
+                     cached=False, images=1 if marks else 0)
+
+
+def _one_decision(monkeypatch, decision):
+    monkeypatch.setattr(R, "read", lambda *a, **k: _reading([1]))
+    monkeypatch.setattr(pl.vgroups, "piece_groups", lambda *a, **k: [])
+    monkeypatch.setattr(C, "open_decisions", lambda rules, groups, reading: [decision] if decision else [])
+
+
+def test_reader_off_leaves_detect_unchanged(monkeypatch, s46):
+    assert s46.reader is not None and set(s46.reader) == READER_KEYS
+    assert s46.reader["status"] == "off"
+    monkeypatch.setattr(pl, "reader_step", lambda p, labels, pieces, model, env=None, merged=None: (model, None))
+    plain = pl.detect(_photo("S46-15"))
+    assert plain.reader is None  # the step really was left out of this run
+    assert s46.model.to_json() == plain.model.to_json()
+    # off: the step hands the very model back, untouched
+    m = s46.model
+    monkeypatch.undo()
+    monkeypatch.setenv("ROSETTE_READER", "off")
+    assert pl.reader_step(s46.prepared, s46.labels, [], m)[0] is m
+
+
+def test_the_rules_alone_never_run_the_reader(monkeypatch):
+    def no_reader(*a, **k):
+        raise AssertionError("the reader ran for the classifier's training data")
+    monkeypatch.setattr(pl, "reader_step", no_reader)
+    assert pl.detect(_photo("S46-15"), classify=False).reader is None
+
+
+def test_reader_on_without_pieces_is_skipped(monkeypatch, s46):
+    _reader_on(monkeypatch)
+    out, st = pl.reader_step(s46.prepared, s46.labels, None, s46.model)
+    assert out is s46.model and st["status"] == "skipped" and st["message"] == "no pieces"
+
+
+def test_reader_auto_without_the_files_is_off(monkeypatch, tmp_path, s46):
+    monkeypatch.setenv("ROSETTE_READER", "auto")
+    monkeypatch.setenv("ROSETTE_MODELS_DIR", str(tmp_path))
+    out, st = pl.reader_step(s46.prepared, s46.labels, [], s46.model)
+    assert out is s46.model and st["status"] == "off"
+
+
+def test_reader_on_without_the_files_is_missing_with_the_install_line(monkeypatch, tmp_path, s46):
+    monkeypatch.setenv("ROSETTE_READER", "on")
+    monkeypatch.setenv("ROSETTE_MODELS_DIR", str(tmp_path))
+    out, st = pl.reader_step(s46.prepared, s46.labels, [], s46.model)
+    assert out is s46.model and st["status"] == "missing" and "b12342" in st["message"]
+
+
+def test_empty_reading_keeps_the_rules_head(monkeypatch, s46):
+    _reader_on(monkeypatch)
+    monkeypatch.setattr(R, "read", lambda *a, **k: _reading())
+    before = s46.model.to_json()
+    out, st = pl.reader_step(s46.prepared, s46.labels, [], s46.model)
+    assert st["status"] == "skipped" and "no head pieces" in st["message"]
+    assert out.to_json() == before and s46.model.to_json() == before
+
+
+def test_reader_failure_is_reported_and_the_rules_head_stays(monkeypatch, s46):
+    _reader_on(monkeypatch)
+
+    def boom(*a, **k):
+        raise RuntimeError("llama-server exited with 3")
+    monkeypatch.setattr(R, "read", boom)
+    before = s46.model.to_json()
+    out, st = pl.reader_step(s46.prepared, s46.labels, [], s46.model)
+    assert st["status"] == "failed" and "llama-server exited with 3" in st["message"]
+    assert out.to_json() == before
+    # a fault later in the step (the judge) is reported the same way
+    _one_decision(monkeypatch, C.Decision("center", ("c",), ("badge", "rose"), "reader"))
+
+    def bad_judge(*a, **k):
+        raise ValueError("render failed")
+    monkeypatch.setattr(J, "judge", bad_judge)
+    out, st = pl.reader_step(s46.prepared, s46.labels, [], s46.model)
+    assert st["status"] == "failed" and "render failed" in st["message"] and out.to_json() == before
+
+
+def test_a_judged_candidate_replaces_the_head_with_flags(monkeypatch, s46):
+    _reader_on(monkeypatch)
+    state = "rose" if s46.model.rose else "badge"
+    other = "badge" if state == "rose" else "rose"
+    center = next(q for q in s46.model.parts if q.role == "center")
+    _one_decision(monkeypatch, C.Decision("center", (center.id,), (state, other), "reader"))
+    seen = {}
+
+    def fake_judge(cands, p, labels, pieces, decisions=None, merged=None):
+        seen.update(n=len(cands), decisions=decisions, merged=merged)
+        return J.Verdict(winner=1, scores=[0.70, 0.75], terms=[{}, {}], margin=0.05, labels=decisions,
+                         changed=[center.id])
+    monkeypatch.setattr(J, "judge", fake_judge)
+    before = s46.model.to_json()
+    out, st = pl.reader_step(s46.prepared, s46.labels, [], s46.model, merged=s46.merged)
+    assert seen["n"] == 2 and seen["merged"] == s46.merged
+    assert seen["decisions"][0] == "rules head" and other in seen["decisions"][1]
+    assert out.rose == (other == "rose")
+    assert any(line.startswith("judge: rules head -> ") for line in out.info)
+    assert next(q for q in out.parts if q.id == center.id).confidence <= 0.5 + 10 * 0.05
+    assert s46.model.to_json() == before  # the rules head itself is not touched
+    assert st["status"] == "on" and st["decisions"] == 1 and st["winner"] == 1 and st["margin"] == 0.05
+    assert st["images"] == 1 and st["cached"] is False and set(st) == READER_KEYS
+    assert st["message"].startswith("judge: rules head -> ")
+
+
+def test_no_open_decisions_keep_the_rules_head_without_judging(monkeypatch, s46):
+    _reader_on(monkeypatch)
+    _one_decision(monkeypatch, None)
+
+    def no_judge(*a, **k):
+        raise AssertionError("judged without decisions")
+    monkeypatch.setattr(J, "judge", no_judge)
+    out, st = pl.reader_step(s46.prepared, s46.labels, [], s46.model)
+    assert out.to_json() == s46.model.to_json()
+    assert st["status"] == "on" and st["decisions"] == 0 and st["winner"] == 0
+
+
+def test_the_reader_server_starts_once_per_process_and_stops_at_exit(monkeypatch):
+    started, stopped, registered = [], [], []
+
+    class FakeServer:
+        def __init__(self, settings):
+            self.settings, self.proc = settings, None
+
+        @property
+        def url(self):
+            return "http://127.0.0.1:1"
+
+        def start(self):
+            started.append(self)
+            self.proc = types.SimpleNamespace(poll=lambda: None)
+            return self
+
+        def stop(self):
+            stopped.append(self)
+            self.proc = None
+    monkeypatch.setattr(pl, "_READER_SERVER", None)
+    monkeypatch.setattr(pl, "_READER_ATEXIT", False)
+    monkeypatch.setattr(R, "ReaderServer", FakeServer)
+    monkeypatch.setattr(R, "_http_post", lambda url, body: {"url": url})
+    monkeypatch.setattr(pl.atexit, "register", lambda fn: registered.append(fn))
+    s = pl.perception_settings.load({})
+    post = pl._reader_post(s)
+    assert started == []  # lazy: a warm cache never starts it
+    assert post("ignored", {})["url"] == "http://127.0.0.1:1/v1/chat/completions"
+    pl._reader_post(s)("ignored", {})
+    assert len(started) == 1 and len(registered) == 1
+    registered[0]()
+    assert stopped == started and pl._READER_SERVER is None
