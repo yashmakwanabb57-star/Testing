@@ -265,8 +265,9 @@ PIECE_FRONT, PIECE_STACKING = True, False
 # taper to a point: the widest row within the inner TIP_PEAK of the lobe, the width beyond it
 # falling along its chord (at most TIP_BULGE above it on average: a block keeps its width and then
 # drops), the last row at most TIP_END of the widest; the lobe rows n-fold (SPLIT_FLOOR). And its
-# inner end must be cut by a layer drawn above it, either (A, switched off: TIP_CUT_A) where the lobe is wide (its first row
-# at least TIP_CUT_WIDE of the widest) by a ring, the center or a higher points layer on
+# inner end must be cut by a layer drawn above it, either (A, switched off: TIP_CUT_A) where the
+# lobe is wide (its first row at least TIP_CUT_WIDE of the widest) by a ring, the center or a
+# higher points layer on
 # >= COVER_CUT_SHARE of the visible axes (walking in along each axis while the label holds, up to
 # TIP_WALK_UNITS), or (B) by a higher points layer of another color, same count, on axes half a step
 # off (within NEST_AXIS_DEG: the lobes sit in its valleys) that holds the labels beside the lobe
@@ -827,10 +828,17 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame, pieces: list | None 
         elif pleat_texture(p, labels == label, unit(i0) * fr.scale, unit(i1) * fr.scale) >= PLEAT_TEXTURE:
             rp["pinked"] = 1  # ML-1: a pleated ribbon band (the files draw these pinked)
         parts.append(Part(f"ring-{depth}", "ring", rp, label, min(49, 30 + depth), r3(conf)))
-    _finish_points(parts, labels, p, fr, pol, radii, win, head["label"] if head else -2, trims,
-                   pieces if PIECE_STACKING else None)
+    head_label = head["label"] if head else -2
+    starts = _finish_points(parts, labels, p, fr, pol, radii, win, head_label, trims,
+                            pieces if PIECE_STACKING else None)
     if _tips_to_stars(parts, pol, radii, win, fr, trims, pieces, p):  # R17: tips of covered stars
+        z0 = [q.z for q in parts]
         photo_stacking(parts, labels, p, fr, trims, pieces if PIECE_STACKING else None)
+        if [q.z for q in parts] != z0:  # the cover starts read z: recompute them on the new order
+            for q in parts:
+                if id(q) in starts and q.params.get("kind") != "star":
+                    q.params["r_inner"], q.params["width_ratio"] = starts[id(q)]
+            _cover_start(parts, pol, radii, win, fr, head_label, trims)
     if head is None:
         _base_star(parts, p, labels, fr, win, trims)
     return parts
@@ -1479,19 +1487,22 @@ def _base_star(parts: list[Part], p: Prepared, labels: np.ndarray, fr: Frame, wi
 
 def _finish_points(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame, pol: np.ndarray,
                    radii: np.ndarray, win: np.ndarray, head_label: int, trims: set[int],
-                   pieces: list | None = None) -> None:
+                   pieces: list | None = None) -> dict[int, tuple]:
     """Points layers start at the cover over them (H4), are stacked as the photo shows
     them (H12) and then start under the layers drawn above them (H11 _cover_start, which
-    reads z: it runs on the final order)."""
+    reads z: it runs on the final order). Returns {id(points part): (r_inner, width_ratio)}
+    before `_cover_start`, so a later re-vote that changes z (R17) can recompute the starts."""
     _points_start_at_cover(parts)
     photo_stacking(parts, labels, p, fr, trims, pieces)
+    starts = {id(q): (q.params["r_inner"], q.params["width_ratio"]) for q in parts if q.role == "points"}
     _cover_start(parts, pol, radii, win, fr, head_label, trims)
+    return starts
 
 
 def _covering(parts: list[Part], q: Part, lab: int, r: float) -> set[str]:
     """R17: what of the parts drawn above points layer q holds label `lab` at radius r (canvas
-    units): "ring", "center" or "pts" (a points layer of higher z); "disc" for the head disc
-    (drawn under q, so it covers nothing)."""
+    units): "ring", "center" or "pts" (a points layer of higher z). The head disc lies under every
+    points layer and covers nothing."""
     out = set()
     for o in parts:
         if o is q or o.color_group != lab:
@@ -1504,8 +1515,6 @@ def _covering(parts: list[Part], q: Part, lab: int, r: float) -> set[str]:
         elif (o.role == "points" and o.z > q.z
               and float(a["r_inner"]) - MIN_BAND_UNITS / 2 <= r <= float(a["r_outer"]) + MIN_BAND_UNITS / 2):
             out.add("pts")
-        elif o.role == "head":
-            out.add("disc")
     return out
 
 
@@ -1516,7 +1525,8 @@ def _tip_lobes(q: Part, parts: list[Part], pol: np.ndarray, radii: np.ndarray, w
     0..1), bulge, end and inner (last and first row's width over the widest), sym (turned
     self-correlation at the count over the lobe rows), cover (share of the visible axes whose label
     just inside the lobe is a ring, the center or a higher points layer), side (share of the labels
-    beside the lobe, where it narrows inward, that are such a cover; 1 when it does not narrow),
+    beside the lobe, where it narrows inward, that are such a cover; 0 when no such label is seen:
+    no evidence of a cover beside the lobe),
     interleaved (a higher points layer of another color, same count, axes half a step off). None
     when the lobe shows on fewer than 3 rows."""
     a = q.params
@@ -1553,7 +1563,8 @@ def _tip_lobes(q: Part, parts: list[Part], pol: np.ndarray, radii: np.ndarray, w
         j = i0 + b
         while j > 0 and pol[j, c] == g and i0 + b - j < walk:
             j -= 1
-        j = max(0, j - 1)
+        if pol[j, c] == g:  # the walk limit ended on a lobe row: the next row inward
+            j = max(0, j - 1)
         covered += bool(_covering(parts, q, int(pol[j, c]), float(unit[j])) & {"ring", "center", "pts"})
     seen = held = 0
     for ii in range(b, b + pk):  # beside the lobe where it is narrower than its widest
@@ -1580,7 +1591,7 @@ def _tip_lobes(q: Part, parts: list[Part], pol: np.ndarray, radii: np.ndarray, w
         for o in parts)
     return dict(rows=(i0 + b, i0 + e), peak=pk / max(1, len(seg) - 1), bulge=bulge, end=float(seg[-1] / wmax),
                 inner=float(seg[0] / wmax), sym=float(sym), cover=covered / len(cols),
-                side=held / seen if seen else 1.0, interleaved=interleaved)
+                side=held / seen if seen else 0.0, interleaved=interleaved)
 
 
 def _is_tip_layer(f: dict | None) -> str | None:
@@ -1604,7 +1615,8 @@ def _tip_star(q: Part, f: dict, pol: np.ndarray, radii: np.ndarray, win: np.ndar
     valley rays, never outside the lobe's first row (it is the star's own color there) nor within
     MIN_ZONE_UNITS of the middle. With SAM 2 pieces of q's color holding the lobe on
     >= BORDER_MIN_SIDES of the visible axes, the tips and sides are read from those pieces' union
-    instead (params source "piece")."""
+    instead (params source "piece"), unless the pieces' tip lies more than PIECE_PROMINENCE_UNITS
+    from the label's (the pieces hold more than the lobe): then the labels."""
     a = q.params
     g, n = q.color_group, int(a["count"])
     b, e = f["rows"]
@@ -1625,8 +1637,10 @@ def _tip_star(q: Part, f: dict, pol: np.ndarray, radii: np.ndarray, win: np.ndar
             ind = np.logical_or.reduce(hold)
             if ind[mid, cols].mean() >= BORDER_MIN_SIDES:
                 ends = [int(np.flatnonzero(ind[:, c])[-1]) for c in cols if ind[:, c].any()]
-                e = max(b + 2, int(np.median(ends)))
-                lab, src = np.where(ind, g, -1), "piece"
+                ep = max(b + 2, int(np.median(ends)))
+                if abs(fr.d(radii[min(ep, len(radii) - 1)] - radii[e])) <= PIECE_PROMINENCE_UNITS:
+                    e, lab, src = ep, np.where(ind, g, -1), "piece"
+                # else the pieces hold more than the lobe (merged with another region): the labels
     pk = b + int(round(f["peak"] * (f["rows"][1] - f["rows"][0])))
     r_out = fr.d(radii[min(e, len(radii) - 1)])
     first = fr.d(radii[b])
@@ -1644,7 +1658,8 @@ def _tip_star(q: Part, f: dict, pol: np.ndarray, radii: np.ndarray, win: np.ndar
 def _tips_to_stars(parts: list[Part], pol: np.ndarray, radii: np.ndarray, win: np.ndarray, fr: Frame,
                    trims: set[int], pieces: list | None, p: Prepared) -> bool:
     """R17: points layers read as blocks, kites or petals whose lobes are the tips of a covered star
-    (`_is_tip_layer`) become that star (`_tip_star`), keeping their color, count, axes and z. A
+    (`_is_tip_layer`) become that star (`_tip_star`), keeping their color, count and axes (the
+    caller re-runs the photo vote on the new geometry, so z is re-voted). A
     layer hosting trims (same count and axes), a front layer, or one whose color already has a
     star on its axes is left alone. True when any layer changed."""
     changed = False
