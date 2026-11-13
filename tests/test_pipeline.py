@@ -233,11 +233,99 @@ def test_reader_on_without_pieces_is_skipped(monkeypatch, s46):
     assert out is s46.model and st["status"] == "skipped" and st["message"] == "no pieces"
 
 
-def test_reader_auto_without_the_files_is_off(monkeypatch, tmp_path, s46):
+def test_reader_auto_without_the_files_is_missing_with_the_install_line(monkeypatch, tmp_path, s46):
     monkeypatch.setenv("ROSETTE_READER", "auto")
     monkeypatch.setenv("ROSETTE_MODELS_DIR", str(tmp_path))
     out, st = pl.reader_step(s46.prepared, s46.labels, [], s46.model)
-    assert out is s46.model and st["status"] == "off"
+    assert out is s46.model and st["status"] == "missing" and "b12342" in st["message"]
+
+
+def test_reader_settings_accept_cached():
+    assert pl.perception_settings.load({"ROSETTE_READER": "cached"}).reader == "cached"
+    with pytest.raises(ValueError, match="cached"):
+        pl.perception_settings.load({"ROSETTE_READER": "warm"})
+
+
+def _head_piece(p):
+    import numpy as np
+    from rosette.perception.pieces import Piece
+    cx, cy, r = p.head
+    yy, xx = np.mgrid[:p.mask.shape[0], :p.mask.shape[1]]
+    mask = (xx - cx) ** 2 + (yy - cy) ** 2 <= (0.5 * r) ** 2
+    ys, xs = np.nonzero(mask)
+    return Piece(mask=mask, score=0.9, stability=0.95, area=int(mask.sum()),
+                 bbox=(int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())), in_head=True)
+
+
+def _cached_mode(monkeypatch, tmp_path):
+    monkeypatch.setenv("ROSETTE_READER", "cached")
+    monkeypatch.setattr(pl, "_resolve_reader", lambda settings: R.Resolved(Path("x"), Path("y"), Path("z"), ""))
+    monkeypatch.setattr(R, "weights_tag", lambda settings: "Q8_0")
+    monkeypatch.setattr(R, "DEFAULT_READER_CACHE", tmp_path)
+
+    def never(*a, **k):
+        raise AssertionError("the model was asked in cached mode")
+    monkeypatch.setattr(R.ReaderServer, "start", never)
+    monkeypatch.setattr(R, "_http_post", never)
+
+
+def test_cached_mode_with_a_cold_cache_is_skipped_and_never_starts_the_model(monkeypatch, tmp_path, s46):
+    _cached_mode(monkeypatch, tmp_path)
+    out, st = pl.reader_step(s46.prepared, s46.labels, [_head_piece(s46.prepared)], s46.model)
+    assert out is s46.model
+    assert st["status"] == "skipped" and st["message"] == "no cached reading (ROSETTE_READER=cached)"
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cached_mode_uses_a_warm_reading(monkeypatch, tmp_path, s46):
+    _cached_mode(monkeypatch, tmp_path)
+    settings = pl.perception_settings.load()
+    key = R.default_key(s46.prepared, settings)
+    (tmp_path / f"{key}-{R.PROMPT_VERSION}-Q8_0.json").write_text(
+        __import__("json").dumps(R._to_json(_reading([1]))), encoding="utf-8")
+    monkeypatch.setattr(C, "open_decisions", lambda rules, groups, reading: [])
+    out, st = pl.reader_step(s46.prepared, s46.labels, [_head_piece(s46.prepared)], s46.model)
+    assert st["status"] == "on" and st["cached"] is True and st["images"] == 1
+    assert out.to_json() == s46.model.to_json()
+
+
+@pytest.mark.parametrize("tool", ["tools.score", "tools.head_templates"])
+def test_batch_tools_default_to_cached_readings(tool):
+    import os
+    import subprocess
+    import sys
+    root = Path(__file__).resolve().parent.parent
+    code = f"import os; import {tool}; print(os.environ['ROSETTE_READER'])"
+    env = {k: v for k, v in os.environ.items() if k != "ROSETTE_READER"}
+    got = subprocess.run([sys.executable, "-c", code], cwd=root, env=env, capture_output=True, text=True, timeout=120)
+    assert got.stdout.strip() == "cached", got.stderr
+    env["ROSETTE_READER"] = "on"
+    got = subprocess.run([sys.executable, "-c", code], cwd=root, env=env, capture_output=True, text=True, timeout=120)
+    assert got.stdout.strip() == "on", got.stderr
+
+
+def test_pieces_the_detector_rejected_are_never_read(monkeypatch):
+    _reader_on(monkeypatch)
+    real = pl.detect_parts
+    fake_pieces = []
+
+    def perception(p, labels, env=None):
+        fake_pieces.append(_head_piece(p))
+        return fake_pieces, {"status": "on", "message": "cached pieces"}
+
+    def detect_parts(p, labels, groups, pieces=None):
+        if pieces is not None:
+            raise ValueError("bad piece")
+        return real(p, labels, groups)
+
+    def no_read(*a, **k):
+        raise AssertionError("the reader read rejected pieces")
+    monkeypatch.setattr(pl, "perception", perception)
+    monkeypatch.setattr(pl, "detect_parts", detect_parts)
+    monkeypatch.setattr(R, "read", no_read)
+    d = pl.detect(_photo("S46-15"))
+    assert d.perception["status"] == "failed"
+    assert d.reader["status"] == "skipped" and d.reader["message"] == "no pieces"
 
 
 def test_reader_on_without_the_files_is_missing_with_the_install_line(monkeypatch, tmp_path, s46):

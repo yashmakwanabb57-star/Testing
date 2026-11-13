@@ -8,7 +8,7 @@ from typing import Mapping
 
 DEVICES = ("auto", "cpu", "cuda")
 MODELS = ("small", "tiny", "off")
-READER_MODES = ("on", "off", "auto")
+READER_MODES = ("on", "off", "auto", "cached")
 DEFAULT_MODELS_DIR = Path(__file__).resolve().parents[2] / "models"
 
 

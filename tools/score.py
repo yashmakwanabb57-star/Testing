@@ -42,6 +42,7 @@ and listed separately. --sheet DIR saves photo | generated | designer PNGs;
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -49,6 +50,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:  # run as a script
     sys.path.insert(0, str(ROOT))
+# ML-4: a batch run reads only cached readings and never starts the model (ROSETTE_READER=on overrides)
+os.environ.setdefault("ROSETTE_READER", "cached")
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402

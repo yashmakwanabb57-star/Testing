@@ -23,6 +23,7 @@ the per-ID listing.
 from __future__ import annotations
 
 import itertools
+import os
 import pickle
 import sys
 from dataclasses import dataclass, field
@@ -31,6 +32,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:  # run as a script
     sys.path.insert(0, str(ROOT))
+# ML-4: a batch run reads only cached readings and never starts the model (ROSETTE_READER=on overrides)
+os.environ.setdefault("ROSETTE_READER", "cached")
 
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
@@ -84,7 +87,8 @@ def truth(sid: str, cache: Path | None = None) -> Truth:
 
 
 def photo_record(sid: str, cache: Path | None = None) -> dict:
-    """What the pipeline sees of one photo (rosette.pipeline.detect), the rules SVG."""
+    """What the pipeline sees of one photo (rosette.pipeline.detect): the detected head after the
+    learned classifier (ML-1) and the reader (ML-4; cached readings only in this tool), and its SVG."""
     cp = cache / "photos" / f"{sid}.pkl" if cache else None
     if cp and cp.exists():
         rec = pickle.loads(cp.read_bytes())

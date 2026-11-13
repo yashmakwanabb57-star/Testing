@@ -722,9 +722,9 @@ def perception(p: Prepared, labels: np.ndarray, env=None) -> tuple[list | None, 
 
 
 READER_OFF = "ML-4 reader is off (ROSETTE_READER=off): the rules head stands."
-READER_ABSENT = "ML-4 reader is off (ROSETTE_READER=auto and the model files are absent)."
-# One llama-server per process (ML-4): started on the first cold read, stopped at exit, so a batch
-# run (tools/score.py, the comparison pages) pays the start once.
+READER_COLD = "no cached reading (ROSETTE_READER=cached)"
+# One llama-server per process (ML-4): started on the first cold read, stopped at exit. Batch tools
+# (tools/score.py, tools/head_templates.py) default to ROSETTE_READER=cached and never start it.
 _READER_SERVER = None
 _READER_ATEXIT = False
 _READER_LOCK = threading.Lock()
@@ -765,6 +765,14 @@ def _reader_post(settings) -> Callable[[str, dict], dict]:
     return post
 
 
+class _ColdReading(Exception):
+    """ROSETTE_READER=cached and the photo has no cached reading: the model is not asked."""
+
+
+def _cold_post(url: str, body: dict) -> dict:
+    raise _ColdReading(READER_COLD)
+
+
 def _candidate_labels(decisions: list, choices: list[tuple[int, ...]]) -> list[str]:
     """One description per candidate: "rules head" for candidate 0, else the options it takes."""
     out = []
@@ -779,14 +787,17 @@ def reader_step(p: Prepared, labels: np.ndarray, pieces: list | None, model: Ros
     """ML-4: read the head pieces (rosette.perception.reader), group them (vision.groups), open the
     head decisions and span the candidates (vision.candidates; candidate 0 is `model`), render and
     judge them against the photo (vision.judge) and write the verdict on the chosen head
-    (judge.flag). Runs only when `pieces` is not None and ROSETTE_READER resolves on ("auto": on
-    when the executable and the weights resolve). Returns (model, status); when the reader does not
-    run, reads nothing, opens no decision or fails, `model` itself comes back untouched.
+    (judge.flag). ROSETTE_READER: "off" returns at once; "on", "auto" and "cached" need the
+    executable and the weights to resolve (else status "missing" with the install line), then
+    `pieces` that are not None (else "skipped"); "on" and "auto" ask the model on a cold cache
+    (one llama-server per process, _reader_post), "cached" never does: a photo without a
+    cached reading is "skipped" (READER_COLD). Returns (model, status); when the reader does
+    not run, reads nothing, opens no decision or fails, `model` itself comes back untouched.
     status: {"status", "message", "seconds", "cached", "images", "decisions", "winner", "margin",
-    "note", "tie", "removed"} with status "on", "off", "missing" (the install line), "skipped" (no
-    pieces, or no head piece to read) or "failed" (the error text); message is the judge's line
-    when it judged. Never raises. The candidates change counts, z, kinds and the centre state only,
-    never a colour group, so the chosen head needs no second assign."""
+    "note", "tie", "removed"} with status "on", "off", "missing", "skipped" (no pieces, no head
+    piece to read, or no cached reading) or "failed" (the error text); message is the judge's
+    line when it judged. Never raises. The candidates change counts, z, kinds and the centre
+    state only, never a colour group, so the chosen head needs no second assign."""
     t0 = time.perf_counter()
     out = {"status": "off", "message": READER_OFF, "seconds": 0.0, "cached": False, "images": 0, "decisions": 0,
            "winner": None, "margin": None, "note": "", "tie": [], "removed": []}
@@ -800,13 +811,14 @@ def reader_step(p: Prepared, labels: np.ndarray, pieces: list | None, model: Ros
         try:
             resolved = _resolve_reader(settings)
         except reader_mod.MissingReader as exc:
-            if settings.reader == "auto":
-                return model, dict(out, message=READER_ABSENT)
             return model, done(status="missing", message=str(exc))
         if pieces is None:
             return model, done(status="skipped", message="no pieces")
-        reading = reader_mod.read(p, pieces, settings, cache_dir=reader_mod.DEFAULT_READER_CACHE,
-                                  post=_reader_post(settings))
+        post = _cold_post if settings.reader == "cached" else _reader_post(settings)
+        try:
+            reading = reader_mod.read(p, pieces, settings, cache_dir=reader_mod.DEFAULT_READER_CACHE, post=post)
+        except _ColdReading:
+            return model, done(status="skipped", message=READER_COLD)
         note = "; ".join(x for x in (resolved.note, reading.note) if x)
         seen = {"cached": bool(reading.cached), "images": int(reading.images), "note": note}
         if not reading.marks:
@@ -850,6 +862,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
         if pieces is None:
             raise
         seen = dict(seen, status="failed", message=f"SAM 2 pieces failed in the detector - {type(exc).__name__}: {exc}")
+        pieces = None  # rejected: the reader never reads them either
         found = detect_parts(p, labels, groups)
     tidy = merge_tail_slivers(drop_two_point_layers(drop_specks(
         RosetteModel(parts=found), head_r=Frame.of(p).d(p.head[2]))))
