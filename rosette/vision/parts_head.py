@@ -273,12 +273,14 @@ PIECE_FRONT, PIECE_STACKING = True, False
 # R19 (`_loose_votes`): with PIECE_STACKING off a front in the disc's color read from pieces with no
 # backing (a loose front, `_loose_piece_fronts`) casts no label vote: its label cannot be told from
 # the disc's. Its own pieces still decide its pair with a layer that has pieces when the piece vote is
-# unanimous (every sample on one mask) and holds at least PIECE_UNANIMOUS_MIN samples (canvas
-# units^2). Mined on the 76 photos (docs/pipeline.md R19): of the 35 pairs voted with pieces on
-# both sides, the only unanimous vote under STACK_MIN_UNITS2 is S43-15's (13 / 0, the turquoise
-# arms over the glitter blocks, as on the photo); the other small votes are split (S18-15B 6 / 31,
-# S3-15 1 / 9, S32-15 14 / 5).
-PIECE_UNANIMOUS_MIN = 10
+# unanimous (every sample on one mask) and the winner's mask holds at least STACK_SHARE of the drawn
+# overlap's samples: a vote from mask edges grazing the overlap is no vote. Mined on the 76 photos
+# (docs/pipeline.md R19, fix round 1): of the 35 pairs voted with pieces on both sides, the votes
+# whose masks only graze the overlap hold 0.007-0.018 of it (S18-15B 31 of 4729, S32-15 14 of 772,
+# S3-15 9 of 732: 37 samples at most, so a bare sample count cannot tell them from S43-15's 13); the
+# other 31 hold 0.18-1.00 on the winner's mask (S29-15 0.18 ... S47-15 0.93, S18-15 and S53-19 1.00);
+# S43-15's turquoise arms hold 13 of the 13 (1.00, 12 of them 3 units or more inside the mask), the
+# only unanimous vote under STACK_MIN_UNITS2. The bar STACK_SHARE stands 0.63 over the grazing votes.
 # R17 (`_tip_lobes`, `_tips_to_stars`): a points layer read as blocks, kites or petals whose lobes
 # are the TIPS of a star whose body is covered by other layers is that star. Its outermost lobe (the
 # last run of rows its label holds through the lobe axes, the median over the visible axes) must
@@ -1657,8 +1659,10 @@ def _axis_runs(pol: np.ndarray, cols: list[int], rows: int, minlen: int) -> list
 def _nested_runs(parts: list[Part], pol: np.ndarray, radii: np.ndarray, win: np.ndarray, fr: Frame) -> None:
     """R19: the stars nested on a drawn star's axes, each read from one color run along them (the
     conditions with the constants: R19 above). The new stars lie on top of the drawn layers on those
-    axes, the shorter above, and the points layers above those move up with them; none is added when
-    the points layers would then reach the rings' z (30)."""
+    axes, the shorter above, and the points layers above those move up with them. Their z is assumed
+    (the photo vote does not see them), so they are flagged (confidence at most
+    BLOB_UNCONFIRMED_CONF). None is added when the points layers would then reach the rings' z (30);
+    the drawn layers on those axes are flagged then instead (fix round 1: not silent)."""
     t = pol.shape[1]
     n_groups = int(pol.max()) + 1
     if n_groups <= 0:
@@ -1703,13 +1707,15 @@ def _nested_runs(parts: list[Part], pol: np.ndarray, radii: np.ndarray, win: np.
             ra = max(a, int(np.searchsorted(radii, r_in * fr.scale)))
             if sym < SPLIT_FLOOR or r_out - r_in < MIN_ZONE_UNITS or b - ra < 2:
                 continue
+            # the host's footprint caps the side fit, as H16's inner star is capped by its front's
             cap = _star_halfangle(radii[ra:b], float(hp["r_outer"]) * fr.scale, r_in * fr.scale, n)
             v = _straight_valley(pol, radii, range(ra, b), g, hp, win, cap)
             v = r_in if v is None else max(r_in, fr.d(v))
             params = {"cx": hp["cx"], "cy": hp["cy"], "kind": "star", "count": n, "r_inner": r3(r_in),
                       "r_outer": r3(r_out), "rotation_deg": hp["rotation_deg"],
                       "width_ratio": r3(2 * np.pi * v / n / max(r_out - r_in, 1e-6))}
-            new.append((host, Part(f"points-{len(parts) + len(new)}", "points", params, g, 0, r3(min(agr, sym)))))
+            conf = r3(min(agr, sym, BLOB_UNCONFIRMED_CONF))  # z assumed: flagged
+            new.append((host, Part(f"points-{len(parts) + len(new)}", "points", params, g, 0, conf)))
     if not new:
         return
     under = [q for q in pts if any(_same_axes(q.params, int(h.params["count"]), float(h.params["rotation_deg"]),
@@ -1717,7 +1723,10 @@ def _nested_runs(parts: list[Part], pol: np.ndarray, radii: np.ndarray, win: np.
     top = max(q.z for q in under)
     add = sorted((q for _, q in new), key=lambda q: -float(q.params["r_outer"]))
     if max(q.z for q in pts) + len(add) >= 30:
-        log.info("R19: no z left under the rings for %d nested stars", len(add))
+        log.warning("R19: no z left under the rings for %d nested stars; the layers on their axes are flagged",
+                    len(add))
+        for q in under:
+            q.confidence = r3(min(float(q.confidence), BLOB_UNCONFIRMED_CONF))
         return
     for q in pts:
         if q.z > top:
@@ -2429,7 +2438,7 @@ def _own_pieces(parts: list[Part], geoms: dict, pieces: list, fr: Frame) -> dict
 
 
 def stack_votes(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame,
-                trims: set[int], pieces: list | None = None) -> list[tuple[int, int, int, int]]:
+                trims: set[int], pieces: list | None = None, totals: bool = False) -> list[tuple]:
     """H12: (index a, index b, samples of a's label, samples of b's label) over the drawn
     overlap of every pair of non-trim points parts of different colors (STACK_*). A front layer
     in the disc's color does not vote; its backing does (H16, `_front_roles`). The other points
@@ -2439,7 +2448,8 @@ def stack_votes(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame,
     ML-2: with SAM 2 pieces, a pair of layers that both have pieces counts the samples on each one's
     own visible mask (`_own_pieces`: the pieces whose centroid lies in the smallest drawn layer of
     their color) instead of its color label; when either has no piece, both count their labels as
-    before (like with like: a partial piece set against a full label loses votes it should win)."""
+    before (like with like: a partial piece set against a full label loses votes it should win).
+    With `totals` (R19) each tuple also holds the overlap's sample count."""
     geoms = {k: _part_geom(q) for k, q in enumerate(parts) if q.role in ("points", "ring", "center", "unknown")}
     own = _own_pieces(parts, geoms, pieces, fr) if pieces else {}
     front_of, backs = _front_roles(parts, trims, pieces)
@@ -2479,13 +2489,11 @@ def stack_votes(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame,
             ang = np.degrees(np.arctan2(py - cy, px - cx))
             ok = (px >= 0) & (px < w) & (py >= 0) & (py < h) & (np.abs(ang - 90.0) > TAIL_SECTOR_DEG)
             lab = labels[py[ok], px[ok]]
-            if not own:
-                out.append((a, b, int((lab == ga).sum()), int((lab == gb).sum())))
-                continue
             if a in own and b in own:  # like with like: both visible masks, else both labels
-                out.append((a, b, int(own[a][py[ok], px[ok]].sum()), int(own[b][py[ok], px[ok]].sum())))
+                vote = (a, b, int(own[a][py[ok], px[ok]].sum()), int(own[b][py[ok], px[ok]].sum()))
             else:
-                out.append((a, b, int((lab == ga).sum()), int((lab == gb).sum())))
+                vote = (a, b, int((lab == ga).sum()), int((lab == gb).sum()))
+            out.append(vote + (int(ok.sum()),) if totals else vote)
     return out
 
 
@@ -2513,9 +2521,9 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
             continue
         share = na / n
         if share >= STACK_SHARE:
-            edges.append((share, b, a))
+            edges.append((share, b, a, n))
         elif share <= 1 - STACK_SHARE:
-            edges.append((1 - share, a, b))
+            edges.append((1 - share, a, b, n))
         else:
             continue
         decided.add(frozenset((a, b)))
@@ -2525,8 +2533,8 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
                   and k not in front_of and k not in carried and k not in loose}
         free = loose - set(carried)  # a front carried by its backing (ML-2) is placed with it
         for a, b, na, nb in _loose_votes(parts, labels, p, fr, trims, loose_pieces, free):
-            if a in voters or b in voters:
-                edges.append((1.0, b, a) if na else (1.0, a, b))
+            if a in voters or b in voters:  # at its share like any vote (unanimous: 1.0)
+                edges.append((1.0, b, a, na + nb) if na else (1.0, a, b, na + nb))
                 decided.add(frozenset((a, b)))
                 loose -= {a, b}
     hosts = [k for k in pts if (id(parts[k]) not in trims or k in backs)
@@ -2585,7 +2593,10 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
                 todo.extend(above[u])
         return False
 
-    for _, lo, up in sorted(edges, key=lambda e: -e[0]):
+    # strongest first; R19: ties by the vote's samples (a small unanimous piece vote after a large
+    # unanimous label vote); the H16 / ML-2 placements (2.0) and the nested rule have no samples
+    for e in sorted(edges, key=lambda e: (-e[0], -(e[3] if len(e) > 3 else 0))):
+        lo, up = e[1], e[2]
         if not reaches(up, lo):
             above[lo].add(up)
     below = {k: sum(k in above[j] for j in hosts) for k in hosts}
@@ -2655,8 +2666,9 @@ def _loose_votes(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame, 
                  pieces: list, loose: set[int]) -> list[tuple[int, int, int, int]]:
     """R19: the piece votes (`stack_votes` with pieces: a loose front votes there) of the pairs of
     a loose front and a layer that is neither loose nor its inner piece layer (placed on it by
-    ML-2), both with pieces (`_own_pieces`), the vote unanimous and of at least
-    PIECE_UNANIMOUS_MIN samples."""
+    ML-2), both with pieces (`_own_pieces`), the vote unanimous and the winner's mask holding at
+    least STACK_SHARE of the drawn overlap's samples (fix round 1: mask edges grazing an overlap
+    give small unanimous votes too)."""
     geoms = {k: _part_geom(q) for k, q in enumerate(parts) if q.role in ("points", "ring", "center", "unknown")}
     own = _own_pieces(parts, geoms, pieces, fr)
     if not any(k in own for k in loose):
@@ -2668,10 +2680,10 @@ def _loose_votes(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame, 
                 and qk.get("count") == qf.get("count") and qk.get("rotation_deg") == qf.get("rotation_deg")
                 and float(qk["r_outer"]) < float(qf["r_outer"]))
 
-    return [(a, b, na, nb) for a, b, na, nb in stack_votes(parts, labels, p, fr, trims, pieces)
+    return [(a, b, na, nb) for a, b, na, nb, n in stack_votes(parts, labels, p, fr, trims, pieces, totals=True)
             if ((a in loose and b not in loose and not inner_of(a, b))
                 or (b in loose and a not in loose and not inner_of(b, a)))
-            and a in own and b in own and min(na, nb) == 0 and na + nb >= PIECE_UNANIMOUS_MIN]
+            and a in own and b in own and min(na, nb) == 0 and na + nb >= STACK_SHARE * max(n, 1)]
 
 
 def base_of(parts: list[Part]) -> int | None:
