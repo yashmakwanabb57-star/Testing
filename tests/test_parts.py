@@ -66,7 +66,10 @@ def test_parts_well_formed(sid):
     for q in parts:
         # edge strips of two-tone loops carry their strip width (H4)
         extra = {"edge_width"} if q.role == "points" else set()
-        assert KEYS[q.role] <= set(q.params) <= KEYS[q.role] | extra, q
+        # ML-4: the H12 verdict per voted pair (`parts_head._record_vote`), read by the candidates
+        votes = {k for k in q.params if k.startswith("vote_")} if q.role == "points" else set()
+        assert all(q.params[k] in ("over", "under", "undecided") for k in votes), q
+        assert KEYS[q.role] <= set(q.params) <= KEYS[q.role] | extra | votes, q
         assert q.color_group in ids
         assert 0.0 <= q.confidence <= 1.0
         lo, hi = Z[q.role]

@@ -2531,6 +2531,7 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
         a, b = carried.get(a, a), carried.get(b, b)  # ML-2: a piece front votes for its backing
         if a == b:
             continue
+        _record_vote(parts, a, b, na, nb)  # ML-4: the verdict per pair, for the candidates
         n = na + nb
         if n < STACK_MIN_UNITS2:
             continue
@@ -2643,6 +2644,17 @@ def photo_stacking(parts: list[Part], labels: np.ndarray, p: Prepared, fr: Frame
     zs = sorted(parts[k].z for k in pts)
     for k, z in zip(full, zs):
         parts[k].z = z
+
+
+def _record_vote(parts: list[Part], a: int, b: int, na: int, nb: int) -> None:
+    """ML-4: the H12 verdict of a voted pair on both parts' params (`vote_<other id>`: "over" when
+    that part lies on top at STACK_SHARE, "under", or "undecided" below the share or STACK_MIN_UNITS2),
+    read by `candidates.open_decisions`. The drawing never reads these keys."""
+    n = na + nb
+    v = ("undecided" if n < STACK_MIN_UNITS2 else "over" if na / n >= STACK_SHARE
+         else "under" if na / n <= 1 - STACK_SHARE else "undecided")
+    parts[a].params[f"vote_{parts[b].id}"] = v
+    parts[b].params[f"vote_{parts[a].id}"] = {"over": "under", "under": "over"}.get(v, v)
 
 
 def _carried_fronts(parts: list[Part], trims: set[int], backs: set[int]) -> dict[int, int]:
