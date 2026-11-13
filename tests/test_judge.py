@@ -130,3 +130,100 @@ def test_flag_caps_confidence_by_the_margin_and_writes_the_info_line():
     assert len(line) == 1 and re.fullmatch(r"judge: 8 points -> 6 points \(margin \d\.\d{3}\)", line[0])
     assert next(q for q in out.parts if q.id == "p1").confidence == pytest.approx(min(0.9, 0.5 + 10 * v.margin))
     assert not any(w.startswith("judge undecided") for w in out.warnings)
+
+
+def test_merged_labels_count_as_their_group():
+    p, labels, pieces = _photo(_model(6))
+    m = _model(6)
+    _, ref = J.score(m, p, labels, pieces)
+    split = labels.copy()
+    split[(labels == 2) & (np.arange(W)[None, :] < CX)] = 5  # assign merged label 5 into the centre's group 2
+    _, raw = J.score(m, p, split, pieces)
+    assert raw["color"] < ref["color"] - 0.01
+    _, fixed = J.score(m, p, split, pieces, merged={5: 2})
+    assert fixed["color"] == pytest.approx(ref["color"])
+    v = J.judge([m, _model(8)], p, split, pieces, merged={5: 2})
+    assert v.terms[0]["color"] == pytest.approx(ref["color"])
+
+
+def test_colour_term_tracks_head_fit():
+    from rosette import pipeline as P
+    p, labels, pieces = _photo(_model(6))
+    for m in (_model(6), _model(8)):
+        _, terms = J.score(m, p, labels, pieces)
+        assert terms["color"] == pytest.approx(P.head_fit(p, labels, m).agreement, abs=0.05)
+
+
+def test_single_candidate():
+    p, labels, pieces = _photo(_model(6))
+    v = J.judge([_model(6)], p, labels, pieces)
+    assert v.winner == 0 and v.margin == 0.0 and v.changed == []
+    out = J.flag(_model(6), v)
+    assert out.warnings == [] and out.info == []
+
+
+def test_decisions_length_mismatch_falls_back_to_default_labels():
+    p, labels, pieces = _photo(_model(6))
+    v = J.judge([_model(8), _model(6)], p, labels, pieces, decisions=["only one"])
+    assert v.labels == ["candidate 0", "candidate 1"]
+
+
+def test_more_than_four_colours_skips_the_judge():
+    p, labels, pieces = _photo(_model(6))
+    big = _model(6)
+    big.groups += [ColorGroup(g, (10 * g, 10, 10), False, 1.0, 0.5, 1, 0.9) for g in (3, 4)]
+    big.parts += [Part(f"ring-{g}", "ring", {"cx": 300.0, "cy": 175.0, "r_outer": 30.0 - 5 * g,
+                                            "r_inner": 25.0 - 5 * g}, g, 50 + g, 0.9) for g in (3, 4)]
+    v = J.judge([big, _model(8)], p, labels, pieces)
+    assert v.winner == 0 and v.note == "judge skipped: more than 4 colours"
+    out = J.flag(big, v)
+    assert "judge skipped: more than 4 colours" in out.info
+    assert not any(w.startswith("judge undecided") for w in out.warnings)
+
+
+def test_a_tie_among_alternatives_takes_the_fewest_changes(monkeypatch):
+    rules = _model(8)
+    one = _model(6)  # changes p1
+    two = _model(6)
+    two.parts[2].params["r"] = 50.0  # changes p1 and center
+    fake = iter([0.50, 0.795, 0.80])
+    monkeypatch.setattr(J, "score", lambda *a, **k: (next(fake), {}))
+    p, labels, pieces = _photo(_model(6))
+    v = J.judge([rules, one, two], p, labels, pieces)
+    assert v.winner == 1 and v.margin == pytest.approx(0.295) and v.tie == [1, 2]  # the winner's own lead
+    out = J.flag(one, v)
+    assert any(x.startswith("judge: candidate 0 -> candidate 1") and "tie" in x for x in out.info)
+
+
+def test_margin_is_measured_against_candidate_zero(monkeypatch):
+    fake = iter([0.50, 0.80, 0.70])
+    monkeypatch.setattr(J, "score", lambda *a, **k: (next(fake), {}))
+    p, labels, pieces = _photo(_model(6))
+    v = J.judge([_model(8), _model(6), _model(7)], p, labels, pieces)
+    assert v.winner == 1 and v.margin == pytest.approx(0.30) and v.tie == []
+
+
+def test_removed_parts_are_changed_and_named():
+    p, labels, pieces = _photo(_model(6))
+    rules = _model(6)
+    rules.parts.append(Part("dot", "center", {"cx": 300.0, "cy": 175.0, "r": 140.0}, 1, 60, 0.9))
+    v = J.judge([rules, _model(6)], p, labels, pieces)
+    assert v.winner == 1 and "dot" in v.changed
+    out = J.flag(_model(6), v)
+    assert any("removed dot" in x for x in out.info)
+
+
+def test_a_decided_rules_head_is_kept():
+    p, labels, pieces = _photo(_model(6))
+    v = J.judge([_model(6), _model(8)], p, labels, pieces)
+    out = J.flag(_model(6), v)
+    assert re.fullmatch(r"judge: candidate 0 kept \(margin \d\.\d{3}\)", out.info[0])
+
+
+def test_edge_term_penalises_render_boundaries_without_photo_edges():
+    p, labels, pieces = _photo(_model(6))
+    busy = _model(6)
+    busy.parts.append(Part("ring-x", "ring", {"cx": 300.0, "cy": 175.0, "r_outer": 140.0, "r_inner": 130.0},
+                           2, 60, 0.9))
+    plain = J.score(_model(6), p, labels, [])[1]["edge"]
+    assert J.score(busy, p, labels, [])[1]["edge"] < plain - 0.05
