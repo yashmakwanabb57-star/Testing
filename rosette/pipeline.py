@@ -859,7 +859,7 @@ SEAM_INFO = "A narrow band of the head's color between rings was joined to the r
 def close_seams(parts: list) -> bool:
     head = next((q for q in parts if q.role == "head"), None)
     center = next((q for q in parts if q.role == "center"), None)
-    if head is None:
+    if head is None and center is None:
         return False
     edges = ([float(center.params["r"])] if center is not None else [])
     changed = False
@@ -872,7 +872,7 @@ def close_seams(parts: list) -> bool:
             q.params["r_inner"] = prev.params["r_inner"]
             changed = True
         elif (inner is not None and 0 < ri - inner <= SEAM_GAP_UNITS
-                and (q.color_group == head.color_group
+                and ((head is not None and q.color_group == head.color_group)
                      or (center is not None and inner == float(center.params["r"])))):
             # a gap of the head's color, or any gap at the center (it lies on top of every ring)
             q.params["r_inner"] = round(inner, 3)
