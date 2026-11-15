@@ -355,3 +355,15 @@ def test_the_reader_server_starts_once_per_process_and_stops_at_exit(monkeypatch
     assert len(started) == 1 and len(registered) == 1
     registered[0]()
     assert stopped == started and pl._READER_SERVER is None
+
+
+def test_close_seams_joins_a_same_color_gap_and_tucks_a_ring_under_the_inner_one():
+    from rosette.model import Part
+    from rosette.pipeline import close_seams
+    head = Part("head", "head", {"cx": 300.0, "cy": 170.0, "r": 143.0}, 0, 10, 0.9)
+    center = Part("center", "center", {"cx": 300.0, "cy": 170.0, "r": 54.5}, 1, 50, 0.9)
+    inner = Part("ring-1", "ring", {"cx": 300.0, "cy": 170.0, "r_inner": 63.5, "r_outer": 83.5}, 0, 31, 0.9)
+    outer = Part("ring-0", "ring", {"cx": 300.0, "cy": 170.0, "r_inner": 84.5, "r_outer": 113.5}, 1, 30, 0.9)
+    assert close_seams([head, center, inner, outer])
+    assert inner.params["r_inner"] == 54.5  # A9-15: the red band of the head's color joins the red ring
+    assert outer.params["r_inner"] == 54.5  # runs in under the ring on top of it: one edge at 83.5

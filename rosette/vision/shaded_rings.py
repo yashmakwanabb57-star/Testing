@@ -123,3 +123,59 @@ def shaded_rings(p: Prepared, parts: list[Part], groups: list[ColorGroup]) -> li
         head.color_group, head.confidence = old_head
         return None  # the rebuild loses a color the head shows: not shaded pleats (A10-15B, S68-19)
     return out
+
+
+# R34 (`dark_loop_edges`): loops edged with a darker ribbon of their own hue (S10-19: navy edges
+# on blue loops, gold-threaded) read as plain loops; the edging is too thin to form a color
+# group in the head. On the middle 40 % of the loops' radii the loop's photo L* at its side
+# edges (the outer tenth of its width on each side) is at least LOOP_EDGE_DARK below its
+# middle third (S10-19 8.2; over the 76 photos every other loop layer reads 6.8 or less), and a
+# used group darker than the loops (L* LOOP_EDGE_DARK or more lower) lies within
+# LOOP_EDGE_HUE of their a*b*: that group is drawn as the loops' edge strips (the designer's
+# S10-19 edges, Color 1; parts_trims EDGE_SHARE of the loop's width).
+LOOP_EDGE_DARK, LOOP_EDGE_HUE = 8.0, 30.0
+
+
+def dark_loop_edges(p: Prepared, labels: np.ndarray, parts: list[Part], groups: list[ColorGroup]) -> list[Part] | None:
+    """R34: the parts with dark edge strips added along loops edged in a darker ribbon, or None."""
+    from rosette.vision.parts_common import polar_sample
+    from rosette.vision.parts_trims import EDGE_SHARE
+    L = cv2.cvtColor(p.rgb.astype(np.float32) / 255.0, cv2.COLOR_RGB2Lab)[..., 0]
+    cx, cy, _ = p.head
+    s = p.scale
+    t = 720
+    win = np.abs(np.degrees(np.linspace(0, 2 * np.pi, t, endpoint=False)) - 90) > 35
+    used = {q.color_group for q in parts}
+    lab = {g.id: cv2.cvtColor(np.array([[g.rgb]], np.float32) / 255.0, cv2.COLOR_RGB2Lab)[0, 0] for g in groups}
+    out, added = list(parts), False
+    for q in parts:
+        a = q.params
+        if q.role != "points" or a.get("kind") != "bow" or a.get("edge_width") is not None:
+            continue
+        g = q.color_group
+        ri, ro = float(a["r_inner"]), float(a["r_outer"])
+        radii = np.arange((ri + 0.3 * (ro - ri)) * s, (ri + 0.7 * (ro - ri)) * s, s)
+        pl = polar_sample(labels.astype(np.int32), cx, cy, radii, t)
+        pL = polar_sample(L, cx, cy, radii, t, fill=np.nan)
+        e, c = [], []
+        for row, rl in zip(pl, pL):
+            runs = np.flatnonzero(np.diff(np.r_[0, (row == g).astype(int), 0])).reshape(-1, 2)
+            for i0, i1 in runs:
+                w = i1 - i0
+                if w < 12 or not win[(i0 + i1) // 2 % t]:
+                    continue
+                k = max(2, w // 10)
+                e += list(rl[i0:i0 + k]) + list(rl[i1 - k:i1])
+                c += list(rl[i0 + w // 3:i1 - w // 3])
+        if not e or np.nanmedian(c) - np.nanmedian(e) < LOOP_EDGE_DARK:
+            continue
+        dark = [h for h in used if h != g and h in lab and lab[h][0] <= lab[g][0] - LOOP_EDGE_DARK
+                and np.hypot(*(lab[h][1:] - lab[g][1:])) <= LOOP_EDGE_HUE]
+        if not dark:
+            continue
+        h = min(dark, key=lambda h: np.hypot(*(lab[h][1:] - lab[g][1:])))
+        w = float(a["width_ratio"]) * (ro - ri)
+        out.append(Part(f"edge-{q.id}", "points", dict(a, edge_width=r3(EDGE_SHARE * w)), h, q.z + 1,
+                        min(q.confidence, HUE_CONF)))
+        added = True
+    return out if added else None

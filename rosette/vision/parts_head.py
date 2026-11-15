@@ -750,6 +750,36 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame, pieces: list | None 
                     layers.append(("points", g, conf, params, area, rb_blob))
                     meta.append(dict(zone=(a, b), rows=(ra, rb_blob), eats=None, inner=inner))
                     continue
+                tipped = _tip_harmonic(ind, win)  # R37: irregular petals with clear tips
+                if tipped is not None:
+                    n_t, rot_t = tipped
+                    r_out = unit(rb - 1)
+                    # valleys where the petals cover the most of the circle (they meet there)
+                    r_in = unit(ra + int(np.argmax(cov[ra:rb, g])))
+                    params = {"cx": r3(ccx), "cy": r3(ccy), "kind": "star", "count": int(n_t),
+                              "r_inner": r3(r_in), "r_outer": r3(r_out), "rotation_deg": r3(rot_t),
+                              "width_ratio": r3(2 * r_in * np.sin(np.pi / n_t) / max(r_out - r_in, 1e-6)),
+                              "tips": 1}
+                    layers.append(("points", g, BLOB_UNCONFIRMED_CONF, params, area, rb))
+                    meta.append(dict(zone=(a, b), rows=(ra, rb), eats=None, inner=inner))
+                    if n_t >= TIP_LAYERED and n_t % 2 == 0:  # two layers: leaves on every other point
+                        # the designer's S11-15, scaled by the star's tips (0.958 there): a curved
+                        # 12-point star (valleys 0.548) under 6 straight leaves standing on the center
+                        sc = r_out / 0.958
+                        # under the leaves only the points between them show: drawn as their own
+                        # star of half the count, half a step off the leaves (no double edges)
+                        half = n_t // 2
+                        params.update(count=int(half), r_inner=r3(0.548 * sc),
+                                      rotation_deg=r3((rot_t + 180.0 / half) % (360.0 / half)),
+                                      width_ratio=r3(2 * 0.548 * sc * np.sin(np.pi / n_t) / max(r_out - 0.548 * sc, 1e-6)))
+                        k_in = r3(TIP_KITE_IN * sc)
+                        k_out = r3(TIP_UNDER_REACH * sc)
+                        kite = {"cx": r3(ccx), "cy": r3(ccy), "kind": "diamond", "count": int(n_t // 2), "lens": 1,
+                                "r_inner": k_in, "r_outer": k_out, "rotation_deg": r3(rot_t),
+                                "width_ratio": r3(TIP_KITE_WIDTH * sc / max(k_out - k_in, 1e-6))}
+                        layers.append(("points", g, BLOB_UNCONFIRMED_CONF, kite, 0.0, rb - 1))
+                        meta.append(dict(zone=(a, b), rows=(ra, rb - 1), eats=None, inner=inner))
+                    continue
                 ring = _pleated_ring(g, a, b, bridges, cov, radii, fr)
                 if ring is not None:
                     pleated.append(ring)
@@ -886,6 +916,7 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame, pieces: list | None 
     _nested_runs(parts, pol, radii, win, fr)  # R19: stars nested along a drawn star's axes
     if head is None:
         _base_star(parts, p, labels, fr, win, trims)
+        _loops_from_notches(parts, p, fr, win)
     return parts
 
 
@@ -1024,6 +1055,8 @@ def _head_star_on_ring(parts: list[Part], pol: np.ndarray, radii: np.ndarray, wi
     head = next((q for q in parts if q.role == "head"), None)
     if head is None or any(q.role == "points" and q.color_group == head.color_group for q in parts):
         return
+    if any(q.params.get("tips") for q in parts):
+        return  # R37's layered star: its kites are the star's top layer, not pleats between arms
     g0 = head.color_group
     for b in [q for q in parts if q.role == "points" and q.params.get("kind") == "diamond"]:
         n, rot_b = int(b.params["count"]), float(b.params["rotation_deg"])
@@ -1122,6 +1155,210 @@ def _piece_star_on_ring(parts: list[Part], groups: list[int] | None = None) -> N
                 c.params["r"] = r3(min(float(c.params["r"]), PIECE_STAR_CENTER * v))
                 c.color_group = third[0] if third else rings[0].color_group
         return
+
+
+# R36 (`_petals_between_loops`): a star lying on top of loops of its count, between them (its
+# axes half a step from theirs; stars under the loops keep the designers' straight sides: S10-19's white satin petals between the blue loops) is the designer's petal
+# flower: drawn with ROUND_COVER (geometry.points) and its valleys at PETAL_VALLEY of its tips;
+# the loops run in under it to its valleys, their width kept (no gap between loop and petal).
+PETAL_VALLEY, PETAL_AXIS_DEG = 0.63, 8.0
+
+
+def _petals_between_loops(parts: list[Part]) -> None:
+    """R36: a star between loops of its count becomes a petal flower (in place)."""
+    loops = [q for q in parts if q.role == "points" and q.params.get("kind") == "bow"
+             and q.params.get("edge_width") is None]
+    for a in parts:
+        p = a.params
+        if a.role != "points" or p.get("kind") != "star" or p.get("leaf") or a.id.startswith(FRONT_ID):
+            continue
+        n = int(p["count"])
+        step = 360.0 / n
+        under = [b for b in loops if int(b.params["count"]) == n and a.z > b.z
+                 and abs(((float(p["rotation_deg"]) - float(b.params["rotation_deg"])) % step) - step / 2)
+                 <= PETAL_AXIS_DEG]
+        if not under:
+            continue
+        ro = float(p["r_outer"])
+        v = min(float(p["r_inner"]), PETAL_VALLEY * ro)
+        p.update(leaf=2, r_inner=r3(v), width_ratio=r3(2 * v * np.sin(np.pi / n) / max(ro - v, 1e-6)))
+        for b in under:  # the loops run in under the petals: no gap between them
+            q = b.params
+            ri, rb = float(q["r_inner"]), float(q["r_outer"])
+            if v < ri:
+                w = float(q["width_ratio"]) * (rb - ri)
+                q.update(r_inner=r3(v), width_ratio=r3(w / max(rb - v, 1e-6)))
+
+
+# R37 (`_tip_harmonic`): folded satin petals (S11-15: light pink petals in a 12-point star) are
+# too irregular for the turned self-correlation over the whole layer, which then reads as a
+# pleated ring. Their tips still repeat: on the outer TIP_ROWS share of the layer's rows, one
+# order n in TIP_MIN..TIP_MAX is the strongest harmonic of the color's indicator on at least
+# TIP_AGREE of those rows, at least TIP_GAIN times the next order's on average. The layer is then
+# a star of n points, its valleys where the color covers the most of the circle (the petals
+# meet there) and its tips at the layer's outer edge, flagged (S11-15: n 12 on the outer rows,
+# 0.18-0.23 against <= 0.13; the designer's star has 12 points).
+TIP_ROWS, TIP_MIN, TIP_MAX, TIP_AGREE, TIP_GAIN = 0.25, 5, 16, 0.6, 1.4
+# A star of TIP_LAYERED points or more (even) is two layers in the designer's files (S11-15: a
+# 12-point star under 6 kites on every other point, the kites starting at 0.35-0.43 head radii,
+# the star's valleys at 0.55): kites of half the count are drawn on top, from TIP_KITE_IN of the
+# star's valleys to its tips, curved leaves (lens) TIP_KITE_WIDTH times as wide as long (the
+# designer's S11-15 leaves: 0.27 of 0.64 head radii); the star's points under them reach
+# TIP_UNDER_REACH of the leaves' tips (designer 0.88 / 0.96).
+TIP_DEBUG: list = []
+TIP_LAYERED, TIP_KITE_IN, TIP_KITE_WIDTH, TIP_UNDER_REACH = 10, 0.36, 0.40, 0.958
+
+
+def _tip_harmonic(ind: np.ndarray, win: np.ndarray) -> tuple[int, float] | None:
+    """R37: (count, rotation deg) of a layer whose tips repeat clearly, or None."""
+    rows = ind.shape[0]
+    k = max(3, int(round(TIP_ROWS * rows)))
+    if rows < k + 2:
+        return None
+    th = np.linspace(0, 2 * np.pi, ind.shape[1], endpoint=False)
+    ns = np.arange(TIP_MIN, TIP_MAX + 1)
+    tops, gains = [], []
+    for row in ind[rows - k:]:
+        x = row[win].astype(float)
+        if x.mean() <= 0.05 or x.mean() >= 0.95:
+            continue
+        h = np.array([abs(((x - x.mean()) * np.exp(-1j * n * th[win])).sum()) for n in ns])
+        o = np.argsort(h)[::-1]
+        tops.append(int(ns[o[0]]))
+        gains.append(h[o[0]] / max(h[o[1]], 1e-9))
+    if len(tops) < 3:
+        return None
+    n = max(set(tops), key=tops.count)
+    gain = float(np.mean([g for t, g in zip(tops, gains) if t == n]))
+    TIP_DEBUG.append((n, round(tops.count(n) / len(tops), 2), round(gain, 2)))
+    if tops.count(n) < TIP_AGREE * len(tops) or gain < TIP_GAIN:
+        return None
+    if n < TIP_LAYERED or n % 2:
+        return None  # R37 draws only the layered star (S11-15); fewer points made 5 photos worse
+    return n, _harmonic_rotation(ind[rows - k:], win, n)
+
+
+# R38 (`_loops_from_notches`): ribbon loops in one color around the center (S1-15: 6 red loops
+# around a white rose) read as one band: the loops touch, so the color covers the full circle.
+# Their ends still notch the head's outline: dips under NOTCH_DEPTH of its median radius,
+# merged within NOTCH_MERGE_DEG. With no head disc and no points layer, a ring of one color
+# from the center to at least NOTCH_REACH of the head radius whose notches repeat every 360/n
+# degrees (n 5-8, the median gap between neighbouring notches, the tails sector left out)
+# becomes n loop blocks between the notches, from the center to the loop ends (the outline's
+# 90th percentile), upright when within a few degrees of it, as wide
+# as NOTCH_WIDTH of their spacing at mid length (the designer's S1-15 loops), flagged.
+NOTCH_DEPTH, NOTCH_MERGE_DEG, NOTCH_REACH, NOTCH_WIDTH = 0.88, 25.0, 0.85, 0.9
+NOTCH_BASE_WIDTH = 0.85  # the loops' base width share (geometry.points LOOP_PROFILE[0])
+
+
+def _loops_from_notches(parts: list[Part], p: Prepared, fr: Frame, win: np.ndarray) -> None:
+    """R38: a one-color band around the center notched like loops becomes those loops (in place)."""
+    if any(q.role in ("head", "points") for q in parts):
+        return
+    c = next((q for q in parts if q.role == "center"), None)
+    rings = [q for q in parts if q.role == "ring"]
+    if c is None or len(rings) != 1:
+        return
+    ring = rings[0]
+    head_r = fr.d(p.head[2])
+    if float(ring.params["r_outer"]) < NOTCH_REACH * head_r or float(ring.params["r_inner"]) > float(c.params["r"]) + 2:
+        return
+    out = _head_outline(p, fr)
+    t = len(out)
+    theta = np.degrees(np.linspace(0, 2 * np.pi, t, endpoint=False))
+    valid = win & np.isfinite(out)
+    if valid.sum() < t // 3:
+        return
+    med = float(np.median(out[valid]))
+    low = valid & (out < NOTCH_DEPTH * med)
+    runs = np.flatnonzero(np.diff(np.r_[0, low.astype(int), 0])).reshape(-1, 2)
+    dips = sorted(float(theta[(a + b - 1) // 2]) for a, b in runs if b - a >= 2)
+    merged: list[float] = []
+    for d in dips:
+        if merged and d - merged[-1] <= NOTCH_MERGE_DEG:
+            merged[-1] = (merged[-1] + d) / 2
+        else:
+            merged.append(d)
+    if len(merged) < 3:
+        return
+    gaps = [b - a for a, b in zip(merged, merged[1:]) if not (a < 90 < b)]  # not across the tails
+    if not gaps:
+        return
+    n = int(round(360.0 / float(np.median(gaps))))
+    if not 5 <= n <= 8:
+        return
+    step = 360.0 / n
+    rot = float(np.angle(np.mean(np.exp(1j * np.radians(np.array(merged) * n))), deg=True) / n + step / 2) % step
+    for up in (0.0, step / 2):  # the rosettes are photographed upright
+        if abs((rot - up + step / 2) % step - step / 2) <= STAR_UPRIGHT_DEG + 2:
+            rot = up
+            break
+    ri, ro = float(c.params["r"]), fr.d(float(np.percentile(out[valid], 90)))  # the loop ends
+    if ro - ri < MIN_ZONE_UNITS:
+        return
+    w = NOTCH_WIDTH * 2 * ((ri + ro) / 2) * np.sin(np.pi / n)
+    parts.remove(ring)
+    # the loops run in under the center: their base corners sink under its edge, so each loop
+    # looks tucked under the badge (R22), and their bases fill the circle around it
+    half = 0.5 * w * NOTCH_BASE_WIDTH
+    rc = ri
+    ri = float(np.sqrt(max(rc * rc - half * half, 0.0))) if half < rc else rc * 0.3
+    parts.append(Part("points-loops", "points", {
+        "cx": ring.params["cx"], "cy": ring.params["cy"], "kind": "bow", "count": n, "r_inner": r3(ri),
+        "r_outer": r3(ro), "rotation_deg": r3(rot), "width_ratio": r3(w / (ro - ri)), "tips": 1},
+        ring.color_group, 20, r3(min(ring.confidence, BLOB_UNCONFIRMED_CONF))))
+
+
+# R39 (`_badge_under_loops`): a printed badge inside a ring of loops (S1-15B: a dog badge in red
+# and white loops) reads as small stars and rings of its print; the designer draws one center
+# disc out to where the loops start, the loops tucked under it. When loops start beyond a
+# center and every other head layer lies inside their start (+ BADGE_LOOP_SLACK units), those
+# layers go, the center grows to the loops' start and the loops sink under it (R22).
+BADGE_LOOP_SLACK = 3.0
+# The badge disc takes the color holding the most of its rim band (BADGE_RIM_FROM..TO of its
+# radius): the designer colors a badge by its rim, not its middle print (S1-15B: red rim).
+BADGE_RIM_FROM, BADGE_RIM_TO = 0.6, 0.85
+
+
+def _badge_under_loops(parts: list[Part], p: Prepared | None = None, labels: np.ndarray | None = None) -> bool:
+    """R39: a badge read as print inside loops becomes one center disc (in place)."""
+    c = next((q for q in parts if q.role == "center"), None)
+    loops = [q for q in parts if q.role == "points" and q.params.get("kind") == "bow"
+             and q.params.get("edge_width") is None]
+    if c is None or not loops or any(q.role == "head" for q in parts):
+        return False
+    rb = min(float(q.params["r_inner"]) for q in loops)
+    inner = [q for q in parts if q is not c and q not in loops and q.role in ("points", "ring", "unknown")
+             and float(q.params.get("r_outer", q.params.get("r", 0.0))) <= rb + BADGE_LOOP_SLACK]
+    if not inner or float(c.params["r"]) >= rb:
+        return False
+    rest = [q for q in parts if q.role in ("points", "ring") and q not in loops and q not in inner]
+    if any(float(q.params.get("r_edge", q.params["r_outer"])) > rb for q in rest if q.params.get("edge_width") is None):
+        return False
+    for q in inner:
+        parts.remove(q)
+    c.params["r"] = r3(rb)
+    if p is not None and labels is not None:  # the badge's color: its rim band (A1-15, S1-15B)
+        fr = Frame.of(p)
+        th = np.linspace(0, 2 * np.pi, 720, endpoint=False)
+        votes: dict[int, float] = {}
+        for f in np.linspace(BADGE_RIM_FROM, BADGE_RIM_TO, 8):
+            rp = f * rb * fr.scale
+            xs = np.clip(np.rint(p.head[0] + rp * np.cos(th)).astype(int), 0, labels.shape[1] - 1)
+            ys = np.clip(np.rint(p.head[1] + rp * np.sin(th)).astype(int), 0, labels.shape[0] - 1)
+            for g, n in zip(*np.unique(labels[ys, xs], return_counts=True)):
+                if g >= 0:
+                    votes[int(g)] = votes.get(int(g), 0) + float(n)
+        if votes:
+            c.color_group = max(votes, key=votes.get)
+    for q in loops:
+        a = q.params
+        ri, ro = float(a["r_inner"]), float(a["r_outer"])
+        w = float(a["width_ratio"]) * (ro - ri)
+        half = 0.5 * w * NOTCH_BASE_WIDTH
+        new = float(np.sqrt(max(rb * rb - half * half, 0.0))) if half < rb else 0.3 * rb
+        a.update(r_inner=r3(new), width_ratio=r3(w / max(ro - new, 1e-6)))
+    return True
 
 
 # R23 (`_badge_disc`): the designer draws the center badge (a printed button the rose sits on)
@@ -2684,7 +2921,7 @@ def _part_geom(q: Part):
                              a["rotation_deg"], a["width_ratio"],
                              None if a.get("inner_ratio") is None else float(a["inner_ratio"]),
                              None if a.get("edge_width") is None else float(a["edge_width"]),
-                             leaf=bool(int(a.get("leaf", 0))))
+                             leaf=int(a.get("leaf", 0)), lens=bool(int(a.get("lens", 0))))
     elif q.role == "ring":
         shapes = [(pinked_ring if int(a.get("pinked", 0)) else ring)(a["cx"], a["cy"], a["r_outer"], a["r_inner"])]
     elif q.role in ("center", "unknown"):

@@ -58,3 +58,17 @@ def test_leaf_star_is_one_valid_polygon_with_bulging_arms():
     gl, gs = Polygon(pl), Polygon(ps)
     assert gl.is_valid and gl.area > gs.area  # the arms bow outward
     assert gl.contains(Point(300, 160)) and abs(gl.bounds[2] - 410.0) < 0.01  # body and a tip at r_outer
+
+
+def test_a_star_on_top_of_loops_between_them_becomes_petals():
+    from rosette.vision.parts_head import _petals_between_loops
+    loop = Part("points-0", "points", {"cx": 300.0, "cy": 160.0, "kind": "bow", "count": 6, "r_inner": 97.5,
+                                       "r_outer": 151.5, "rotation_deg": 0.0, "width_ratio": 1.0}, 0, 20, 0.9)
+    star = Part("points-1", "points", {"cx": 300.0, "cy": 160.0, "kind": "star", "count": 6, "r_inner": 97.5,
+                                       "r_outer": 130.5, "rotation_deg": 30.0, "width_ratio": 1.0}, 1, 21, 0.9)
+    _petals_between_loops([loop, star])
+    assert star.params["leaf"] == 2 and abs(star.params["r_inner"] - 0.63 * 130.5) < 0.01
+    under = Part("points-1", "points", dict(star.params, leaf=0, r_inner=97.5), 1, 19, 0.9)
+    under.params.pop("leaf")
+    _petals_between_loops([loop, under])
+    assert "leaf" not in under.params  # under the loops: the designer's straight star

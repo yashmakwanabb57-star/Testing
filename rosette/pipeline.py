@@ -52,7 +52,8 @@ from .vision import groups as vgroups
 from .vision import judge as vjudge
 from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_groups
 from .vision.one_color import ONE_COLOR_INFO, badge_in_pleats, rose_center
-from .vision.shaded_rings import HUE_INFO, shaded_rings
+from .vision.shaded_rings import HUE_INFO, dark_loop_edges, shaded_rings
+from .vision.parts_head import _badge_under_loops, _petals_between_loops
 
 # R32: the center of a hue-rebuilt head is checked for a badge from this share of the head radius.
 HUE_BADGE_BIG = 0.3
@@ -846,6 +847,40 @@ def reader_step(p: Prepared, labels: np.ndarray, pieces: list | None, model: Ros
 HUE_TUCK = 0.18
 
 
+# R33: a ring starting at most SEAM_GAP_UNITS outside the center or the ring inside it, over a
+# gap that shows the head disc in the ring's own color, runs in to meet it: the gap is the same
+# ribbon, not a part of its own (A9-15: a 9-unit red band between the badge and the red pleat
+# ring drew an extra circle line and a pleated edge inside the red).
+SEAM_GAP_UNITS = 12.0
+SEAM_INFO = "A narrow band of the head's color between rings was joined to the ring around it."
+
+
+def close_seams(parts: list) -> bool:
+    head = next((q for q in parts if q.role == "head"), None)
+    center = next((q for q in parts if q.role == "center"), None)
+    if head is None:
+        return False
+    edges = ([float(center.params["r"])] if center is not None else [])
+    changed = False
+    prev = None
+    for q in sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_inner"])):
+        ri = float(q.params["r_inner"])
+        inner = max((e for e in edges if e <= ri), default=None)
+        if (prev is not None and 0 <= ri - float(prev.params["r_outer"]) <= SEAM_GAP_UNITS and prev.z > q.z):
+            # the ring inside lies on top: this ring runs in under it, so one edge shows
+            q.params["r_inner"] = prev.params["r_inner"]
+            changed = True
+        elif (inner is not None and 0 < ri - inner <= SEAM_GAP_UNITS
+                and (q.color_group == head.color_group
+                     or (center is not None and inner == float(center.params["r"])))):
+            # a gap of the head's color, or any gap at the center (it lies on top of every ring)
+            q.params["r_inner"] = round(inner, 3)
+            changed = True
+        edges.append(float(q.params["r_outer"]))
+        prev = q
+    return changed
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -898,6 +933,13 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     assert [q.id for q in model.parts] == [q.id for q in out.parts]
     merged = {a.color_group: b.color_group for a, b in zip(model.parts, out.parts)
               if a.color_group != b.color_group}
+    edged = dark_loop_edges(p, labels, out.parts, out.groups)  # R34: dark loop edges (on the photo's loops)
+    if edged is not None:
+        out.parts = edged
+    _petals_between_loops(out.parts)  # R36: petals on top of loops (final stacking known here)
+    _badge_under_loops(out.parts, p, labels)  # R39: a badge inside loops, read as print
+    if close_seams(out.parts):
+        out.info.append(SEAM_INFO)
     hue = shaded_rings(p, out.parts, out.groups)
     if hue is not None:
         badged = badge_in_pleats(p, hue, big=HUE_BADGE_BIG, outer=True)  # the badge in the light pleats
@@ -938,7 +980,8 @@ def analyze_with_context(data: bytes, template: bool = True,
     ctx = PhotoContext(p, labels, groups, merged, copy.deepcopy(out), d.rules_model, d.perception, d.reader)
     used = {q.color_group for q in out.parts} | set(merged)
     lib = None
-    if template and ONE_COLOR_INFO not in out.info and HUE_INFO not in out.info:  # R29/R32: the rules head stands
+    tip_star = any(q.params.get("tips") for q in out.parts)  # R37: a star read from its tips
+    if template and ONE_COLOR_INFO not in out.info and HUE_INFO not in out.info and not tip_star:  # the rules head stands
         lib = with_template(out, p.mask, labels, p.head, Frame.of(p), groups, merged, exclude_key=exclude_key)
     cache: dict[int, tuple] = {}  # one render per head model (fit and overlap share it)
 
