@@ -343,3 +343,47 @@ def test_the_server_log_is_truncated_on_each_start(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError):
         ReaderServer(s, log_path=log).start()
     assert log.stat().st_size == 0
+
+
+@pytest.mark.skipif(__import__("sys").platform != "win32", reason="job objects are Windows only")
+def test_a_child_in_the_kill_job_dies_when_its_parent_is_killed(tmp_path):
+    # a parent killed without running its exit hooks (low memory, task manager) must not leave
+    # its model process behind: the child sits in a kill-on-close job the parent holds
+    import subprocess
+    import sys
+    import time
+    root = Path(__file__).resolve().parent.parent
+    script = tmp_path / "parent.py"
+    script.write_text(
+        "import subprocess, sys, time\n"
+        f"sys.path.insert(0, {str(root)!r})\n"
+        "from rosette.perception.reader import kill_with_parent\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        "job = kill_with_parent(child)\n"
+        "print(child.pid, bool(job), flush=True)\n"
+        "time.sleep(60)\n", encoding="utf-8")
+    parent = subprocess.Popen([sys.executable, str(script)], stdout=subprocess.PIPE, text=True)
+    pid, held = parent.stdout.readline().split()
+    assert held == "True"
+    parent.kill()  # TerminateProcess: no atexit, no finally
+    parent.wait(timeout=10)
+
+    def alive(p: int) -> bool:
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {p}", "/NH"], capture_output=True, text=True).stdout
+        return str(p) in out
+
+    deadline = time.time() + 10
+    while alive(int(pid)) and time.time() < deadline:
+        time.sleep(0.2)
+    assert not alive(int(pid))
+
+
+def test_stop_closes_the_job_and_ends_the_process():
+    import subprocess
+    import sys
+    srv = ReaderServer(load({"ROSETTE_READER": "off"}))
+    srv.proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    srv.job = reader.kill_with_parent(srv.proc)
+    proc = srv.proc
+    srv.stop()
+    assert proc.poll() is not None and srv.job is None and srv.proc is None
