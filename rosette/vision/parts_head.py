@@ -1430,6 +1430,90 @@ def _twin_points(parts: list[Part], p: Prepared, labels: np.ndarray) -> bool:
     return False
 
 
+# R41 (`_loops_on_rim`): wide satin loops of one color on a dark pleated rim (S13-15: 6 light green
+# loops on navy pleats, a mid-blue star between them) read as a star of the loops' color, the
+# rim merged into the star's mid-blue. A star layer whose color still covers >= RIM_LOOP_COVER of
+# the circle over the outer half of its length (a star's tips narrow: S13-15 0.67-0.71) is loops;
+# the head disc takes the used color whose L* is nearest the rim's (RIM_SAMPLE head radii), and
+# when that changes the disc's color, its old color becomes a star between the loops (half a step
+# off, from the ring around the center out to RIM_STAR_REACH of the loops' ends: the designer's).
+# A missing center (the rose in the loops' color) is drawn inside the center's ring.
+RIM_LOOP_COVER, RIM_SAMPLE, RIM_STAR_REACH = 0.55, (0.93, 0.96), 0.87
+RIM_RING_SHARE = 0.6  # the ring around the center reaches this share of the head (designer S13-15)
+RIM_LOOP_MIN = 5  # loops on a rim: 5 or more (s44-15's 4-point stars stay stars)
+
+
+def _loops_on_rim(parts: list[Part], p: Prepared, labels: np.ndarray, groups: list) -> bool:
+    """R41: a star that is loops on a dark rim, with a star between them (in place)."""
+    import cv2
+    head = next((q for q in parts if q.role == "head"), None)
+    if head is None:
+        return False
+    fr = Frame.of(p)
+    cx, cy = p.head[0], p.head[1]
+    th = np.linspace(0, 2 * np.pi, 720, endpoint=False)
+    vis = np.abs(np.degrees(th) - 90.0) > TAIL_SECTOR_DEG
+    h, w = labels.shape
+
+    def cover(g: int, ru: float) -> float:
+        rp = ru * fr.scale
+        xs = np.clip(np.rint(cx + rp * np.cos(th)).astype(int), 0, w - 1)
+        ys = np.clip(np.rint(cy + rp * np.sin(th)).astype(int), 0, h - 1)
+        return float((labels[ys, xs][vis] == g).mean())
+
+    for s in parts:
+        a = s.params
+        if (s.role != "points" or a.get("kind") != "star" or a.get("leaf") or a.get("tips")
+                or int(a["count"]) < RIM_LOOP_MIN):
+            continue
+        ri, ro = float(a["r_inner"]), float(a["r_outer"])
+        outer = np.mean([cover(s.color_group, ri + f * (ro - ri)) for f in (0.6, 0.7, 0.8, 0.9)])
+        if outer < RIM_LOOP_COVER:
+            continue
+        lab = cv2.cvtColor(p.rgb.astype(np.float32) / 255.0, cv2.COLOR_RGB2Lab)
+        rim = []
+        for f in RIM_SAMPLE:
+            rp = f * p.head[2]
+            xs = np.clip(np.rint(cx + rp * np.cos(th)).astype(int), 0, w - 1)
+            ys = np.clip(np.rint(cy + rp * np.sin(th)).astype(int), 0, h - 1)
+            rim.append(np.median(lab[ys, xs][vis][:, 0]))
+        used = {q.color_group for q in parts}
+        gl = {g.id: cv2.cvtColor(np.array([[g.rgb]], np.float32) / 255.0, cv2.COLOR_RGB2Lab)[0, 0][0]
+              for g in groups if g.id in used and g.id != s.color_group}
+        if not gl:
+            continue
+        rim_g = min(gl, key=lambda g: abs(gl[g] - float(np.mean(rim))))
+        n = int(a["count"])
+        # the loops start where their color begins outside the center's ring
+        starts = [q for q in parts if q.role == "ring"]
+        base = max([float(q.params["r_outer"]) for q in starts], default=ri)
+        loop_in = next((ru for ru in np.arange(base, ro, 1.0) if cover(s.color_group, ru) >= 0.2), base)
+        hr = float(head.params["r"])
+        for q in starts:  # the pleated ring around the center: the designer's width
+            if float(q.params["r_outer"]) < RIM_RING_SHARE * hr:
+                q.params["r_outer"] = r3(RIM_RING_SHARE * hr)
+        a.update(kind="bow", r_inner=r3(loop_in),
+                 width_ratio=r3(0.8 * 2 * ((loop_in + ro) / 2) * np.sin(np.pi / n) / max(ro - loop_in, 1e-6)))
+        s.z = 20  # the loops lie under the star between them
+        if rim_g != head.color_group:
+            old = head.color_group
+            head.color_group = rim_g
+            step = 360.0 / n
+            tip = RIM_STAR_REACH * hr  # the designer's star tips; its valleys under the ring
+            parts.append(Part("points-between", "points", {
+                "cx": a["cx"], "cy": a["cy"], "kind": "star", "count": n, "r_inner": r3(base),
+                "r_outer": r3(tip), "rotation_deg": r3((float(a["rotation_deg"]) + step / 2) % step),
+                "width_ratio": r3(2 * base * np.sin(np.pi / n) / max(tip - base, 1e-6)), "tips": 1},
+                old, 22, BLOB_UNCONFIRMED_CONF))
+        s.params["tips"] = 1
+        if not any(q.role == "center" for q in parts) and starts:  # the rose inside the center's ring
+            inner = min(float(q.params["r_inner"]) for q in starts)
+            parts.append(Part("center", "center", {"cx": a["cx"], "cy": a["cy"], "r": r3(inner)},
+                              s.color_group, 50, BLOB_UNCONFIRMED_CONF))
+        return True
+    return False
+
+
 # R23 (`_badge_disc`): the designer draws the center badge (a printed button the rose sits on)
 # as one plain disc (the files' center is one circle, r 31-77 units, mostly 45-60). A badge
 # whose print breaks the label profile reads as a tiny center and thin rings (A1-15: a dot
