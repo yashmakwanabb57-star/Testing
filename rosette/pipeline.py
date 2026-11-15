@@ -856,6 +856,55 @@ SEAM_GAP_UNITS = 12.0
 SEAM_INFO = "A narrow band of the head's color between rings was joined to the ring around it."
 
 
+# R44: a head of only bows over a star, no center found, the bows a light tint of the star's
+# hue (S2-15: pink loops over a wine star) is the designer's rose head: a rose of the star's
+# color over the center, the star's points and the loops running in under it, the loops edged
+# in the star's color. The rose stands where the loops start in the photo.
+ROSE_BOW_HUE_DEG, ROSE_BOW_DL = 20.0, 25.0
+ROSE_BOW_SHARE = 0.8  # rose radius / where the loops start in the photo (designer rose 0.36 of the head)
+ROSE_BOW_SPAN = 34.0  # a loop's span at its end, edges included (designer S2-15)
+ROSE_BOW_BASE = 0.4  # a loop's width at the rose / its widest (designer S2-15)
+ROSE_BOW_EDGE = 0.22  # each edge strip's share of the loop's width (designer S2-15)
+ROSE_BOW_TUCK = 0.5  # the loops start at this share of the rose radius
+
+
+def _hue_l(rgb) -> tuple[float, float]:
+    import cv2
+    lab = cv2.cvtColor(np.array([[rgb]], np.float32) / 255.0, cv2.COLOR_RGB2Lab)[0, 0]
+    return float(np.degrees(np.arctan2(lab[2], lab[1]))), float(lab[0])
+
+
+def _rose_over_bows(parts: list, groups: list) -> bool:
+    head = [q for q in parts if q.role not in ("tail_stripe",)]
+    bows = [q for q in head if q.role == "points" and q.params.get("kind") == "bow"]
+    stars = [q for q in head if q.role == "points" and q.params.get("kind") == "star"]
+    if (len(bows) != 1 or len(stars) != 1 or any(q.role in ("center", "ring", "head") for q in head)
+            or bows[0].color_group == stars[0].color_group):
+        return False
+    bow, star = bows[0], stars[0]
+    rgb = {g.id: g.rgb for g in groups}
+    if bow.color_group not in rgb or star.color_group not in rgb:
+        return False
+    hb, lb = _hue_l(rgb[bow.color_group])
+    hs, ls = _hue_l(rgb[star.color_group])
+    if abs((hb - hs + 180.0) % 360.0 - 180.0) > ROSE_BOW_HUE_DEG or lb - ls < ROSE_BOW_DL:
+        return False
+    rr = round(ROSE_BOW_SHARE * float(bow.params["r_inner"]), 3)
+    star.params["r_inner"] = rr
+    ri, ro = ROSE_BOW_TUCK * rr, float(bow.params["r_outer"])
+    w = float(bow.params["width_ratio"]) * (float(bow.params["r_outer"]) - float(bow.params["r_inner"]))
+    # the photo's loops spread flat; the designer's span ROSE_BOW_SPAN degrees at their ends
+    w = min(w, 2.0 * ro * np.sin(np.radians(ROSE_BOW_SPAN / 2.0)))
+    bow.params["r_inner"] = round(ri, 3)
+    bow.params["width_ratio"] = round(w / (ro - ri), 4)  # the loops keep their width
+    bow.params["inner_ratio"] = ROSE_BOW_BASE  # and narrow in toward the rose
+    parts.append(Part(f"edge-{bow.id}", "points", dict(bow.params, edge_width=round(ROSE_BOW_EDGE * w, 3)),
+                      star.color_group, bow.z + 1, bow.confidence))
+    parts.append(Part("center", "center", {"cx": star.params["cx"], "cy": star.params["cy"], "r": rr},
+                      star.color_group, 50, star.confidence))
+    return True
+
+
 def close_seams(parts: list) -> bool:
     head = next((q for q in parts if q.role == "head"), None)
     center = next((q for q in parts if q.role == "center"), None)
@@ -1049,6 +1098,8 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     edged = dark_loop_edges(p, labels, out.parts, out.groups)  # R34: dark loop edges (on the photo's loops)
     if edged is not None:
         out.parts = edged
+    if _rose_over_bows(out.parts, out.groups):  # R44: bows and a star of one hue under a rose
+        out.rose = True
     _petals_between_loops(out.parts)  # R36: petals on top of loops (final stacking known here)
     _badge_under_loops(out.parts, p, labels)  # R39: a badge inside loops, read as print
     if _loops_on_rim(out.parts, p, labels, out.groups):  # R41: loops on a dark rim, star between
