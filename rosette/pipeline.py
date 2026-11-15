@@ -905,6 +905,38 @@ def _rose_over_bows(parts: list, groups: list) -> bool:
     return True
 
 
+def _taper_edged_bows(parts: list) -> bool:
+    """R45: a loop set laid on a wider loop set of another color, one count and angle (S2-15B:
+    blue loops on white), is the designer's edged loops: both narrow toward the center to
+    ROSE_BOW_BASE of their widest, as in R44, and start together under the center."""
+    if not any(q.role == "center" for q in parts):
+        return False
+    bows = [q for q in parts if q.role == "points" and q.params.get("kind") == "bow"
+            and q.params.get("edge_width") is None and q.params.get("inner_ratio") is None]
+    done = False
+    for a in bows:
+        for b in bows:
+            if a is b or a.color_group == b.color_group or a.z <= b.z:
+                continue
+            if int(a.params["count"]) != int(b.params["count"]):
+                continue
+            step = 360.0 / int(a.params["count"])
+            d = (float(a.params["rotation_deg"]) - float(b.params["rotation_deg"])) % step
+            if min(d, step - d) > 3.0:
+                continue
+            wa = float(a.params["width_ratio"]) * (float(a.params["r_outer"]) - float(a.params["r_inner"]))
+            wb = float(b.params["width_ratio"]) * (float(b.params["r_outer"]) - float(b.params["r_inner"]))
+            if wb <= wa:
+                continue
+            ri = min(float(a.params["r_inner"]), float(b.params["r_inner"]))
+            for q, w in ((a, wa), (b, wb)):
+                q.params["r_inner"] = round(ri, 3)
+                q.params["width_ratio"] = round(w / (float(q.params["r_outer"]) - ri), 4)
+                q.params["inner_ratio"] = ROSE_BOW_BASE
+            done = True
+    return done
+
+
 def close_seams(parts: list) -> bool:
     head = next((q for q in parts if q.role == "head"), None)
     center = next((q for q in parts if q.role == "center"), None)
@@ -1100,6 +1132,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
         out.parts = edged
     if _rose_over_bows(out.parts, out.groups):  # R44: bows and a star of one hue under a rose
         out.rose = True
+    _taper_edged_bows(out.parts)  # R45: loops edged by a wider loop narrow toward the center
     _petals_between_loops(out.parts)  # R36: petals on top of loops (final stacking known here)
     _badge_under_loops(out.parts, p, labels)  # R39: a badge inside loops, read as print
     if _loops_on_rim(out.parts, p, labels, out.groups):  # R41: loops on a dark rim, star between

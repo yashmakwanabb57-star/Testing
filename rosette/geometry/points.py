@@ -23,6 +23,7 @@ from .common import Pt, points_attr, polar
 #   head IoU mean 0.7702 vs 0.7606 (better on 6, worse on 2: S40-15 -0.004, S58-17
 #   -0.007, equal on 6), whole shape 0.8897 vs 0.8866, color 0.8291 vs 0.8265.
 _T = tuple(i / 10 for i in range(11))
+LOOP_CURVE_BELOW = 0.6  # a bow base narrower than this share of its widest widens on a curve
 LOOP_PROFILE = (0.85, 0.85, 0.89, 0.92, 0.94, 0.96, 0.98, 1.0, 1.0, 1.0, 1.0)
 KITE_PEAK = 0.4
 KITE_PROFILE = tuple(round(t / KITE_PEAK if t <= KITE_PEAK else (1 - t) / (1 - KITE_PEAK), 4) for t in _T)
@@ -65,6 +66,10 @@ def _profile(kind: str, inner_ratio: float | None, lens: bool = False) -> tuple[
     if kind == "bow":
         if inner_ratio is None:
             return LOOP_PROFILE
+        if inner_ratio < LOOP_CURVE_BELOW:
+            # a loop narrowed hard toward the center (R44/R45: the designer's rose loops) widens
+            # on a smooth curve, no corner where the straight profile would level off
+            return tuple(round(inner_ratio + (1 - inner_ratio) * math.sin(math.pi / 2 * t), 4) for t in _T)
         # an edited base width: the loop profile rescaled between it and full width
         base = LOOP_PROFILE[0]
         return tuple(inner_ratio + (p - base) * (1 - inner_ratio) / (1 - base) for p in LOOP_PROFILE)
