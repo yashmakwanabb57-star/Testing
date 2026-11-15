@@ -40,6 +40,11 @@ ARC_POINTS = 9
 # strip's center lies EDGE_OUTSIDE strip widths outside the loop's side edge (median
 # 0.19, quartiles 0.00-0.34).
 EDGE_OUTSIDE = 0.19
+# A leaf star (R30, A14-17's designer star): each arm fills its share of the circle at the
+# valleys and narrows to its tip with sides bowing outward. Share of the arm's angular span
+# (360 / count) it covers at t = 0, 0.1, ..., 1 from the valleys to the tip, measured on the
+# designer file (circles every 6 units from r 50 to 110 around the head center).
+LEAF_COVER = (1.0, 0.91, 0.76, 0.62, 0.51, 0.40, 0.30, 0.21, 0.13, 0.05, 0.0)
 
 
 def _to_world(cx, cy, theta_deg, radial, lateral) -> Pt:
@@ -111,13 +116,15 @@ def _edge_strips(kind: str, r_in: float, r_out: float, w: float, inner_ratio: fl
 def points_ring(cx: float, cy: float, kind: Literal["star", "diamond", "bow", "petal"],
                 count: int, r_inner: float, r_outer: float,
                 rotation_deg: float, width_ratio: float, inner_ratio: float | None = None,
-                edge_width: float | None = None) -> list[Shape]:
+                edge_width: float | None = None, leaf: bool = False) -> list[Shape]:
     """Angles run clockwise on screen from +x; point k is centered on
     rotation_deg + k*360/count. Width = width_ratio * (r_outer - r_inner) is the widest
     lateral width; the width profile is the designer's for the kind (LOOP_PROFILE,
     KITE_PROFILE, PETAL_PROFILE). An explicit inner_ratio sets a bow's base width
     (share of the widest; LOOP_PROFILE[0] = 0.85 when unset), the profile rescaled. With edge_width the shapes are
     the two edge strips along each point's sides instead (two-tone loops)."""
+    if kind == "star" and leaf:
+        return [_leaf_star(cx, cy, count, r_inner, r_outer, rotation_deg)]
     if kind == "star":
         pts = []
         for k in range(count):
@@ -136,3 +143,16 @@ def points_ring(cx: float, cy: float, kind: Literal["star", "diamond", "bow", "p
             pts = [_to_world(cx, cy, th, r, l) for r, l in o]
             shapes.append(Shape("polygon", {"points": points_attr(pts)}, None))
     return shapes
+
+
+def _leaf_star(cx: float, cy: float, count: int, r_inner: float, r_outer: float, rotation_deg: float) -> Shape:
+    """One polygon: a star whose arms run from the valleys (r_inner) to the tips (r_outer),
+    covering LEAF_COVER of their angular span, the valleys shared by neighbouring arms."""
+    span = 360.0 / count
+    pts: list[Pt] = []
+    for k in range(count):
+        th = rotation_deg + span * k
+        side = [(r_inner + (r_outer - r_inner) * t, c * span / 2) for t, c in zip(_T, LEAF_COVER)]
+        arm = [(r, th - h) for r, h in side] + [(r, th + h) for r, h in reversed(side[:-1])]
+        pts += [polar(cx, cy, r, a) for r, a in arm[:-1]]  # the last valley starts the next arm
+    return Shape("polygon", {"points": points_attr(pts)}, None)

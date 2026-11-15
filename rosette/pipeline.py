@@ -51,7 +51,11 @@ from .vision import candidates as vcandidates
 from .vision import groups as vgroups
 from .vision import judge as vjudge
 from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_groups
-from .vision.one_color import ONE_COLOR_INFO, rose_center
+from .vision.one_color import ONE_COLOR_INFO, badge_in_pleats, rose_center
+from .vision.shaded_rings import HUE_INFO, shaded_rings
+
+# R32: the center of a hue-rebuilt head is checked for a badge from this share of the head radius.
+HUE_BADGE_BIG = 0.3
 from .vision.layer_classify import classify_head_layers
 from .vision.parts import detect_parts
 from .vision.parts_common import Frame, majority
@@ -835,6 +839,26 @@ def reader_step(p: Prepared, labels: np.ndarray, pieces: list | None, model: Ros
         return model, done(status="failed", message=f"ML-4 reader failed - {type(exc).__name__}: {exc}")
 
 
+# R32: the rebuilt pleat rings are widened outward by HUE_TUCK of the head radius (each ring's
+# pleats run on under the ring outside it: A3-15's designer rings end at 0.58 and 0.78 head radii,
+# the photo shows them to 0.40 and 0.60), and each ring starts where the ring inside it starts,
+# so no head color shows between them (the inner ring lies on top).
+HUE_TUCK = 0.18
+
+
+def _tuck_rings(parts: list) -> None:
+    head = next((q for q in parts if q.role == "head"), None)
+    rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
+    if head is None or not rings:
+        return
+    rim, grow = float(head.params["r"]), HUE_TUCK * float(head.params["r"])
+    for i, q in enumerate(rings):
+        q.params["r_outer"] = round(min(float(q.params["r_outer"]) + grow, 0.95 * rim), 3)
+        if i:
+            q.params["r_inner"] = rings[i - 1].params["r_inner"]
+        q.z = 30 + len(rings) - i  # inner rings on top
+
+
 def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -> Detection:
     """prepare -> pixel_groups -> detect_parts -> tidy -> RosetteModel -> assign -> the
     learned layer classifier (ML-1) -> the piece reader (ML-4, reader_step). classify=False:
@@ -855,6 +879,9 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     tidy = merge_tail_slivers(drop_two_point_layers(drop_specks(
         RosetteModel(parts=found), head_r=Frame.of(p).d(p.head[2]))))
     parts = tidy.parts
+    badge = badge_in_pleats(p, parts)  # R31: a badge inside pleats of its own color
+    if badge is not None:
+        parts = badge
     one = rose_center(p, parts)  # R29: the rose of a one-color rosette, same color
     if one is not None:
         parts = one
@@ -865,10 +892,26 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
                          rose=any(q.role == "center" for q in parts), warnings=tidy.warnings,
                          info=list(tidy.info) + alt_ring_info(parts))  # A16: a one-color two-tone edge
     out = assign(model)
+    # R32: shaded pleat rings read from hue, after the Colors are numbered on the labels' reading
+    # (the rebuilt head reuses the same groups, so their Colors stand)
     # assign keeps the parts (same order and ids) and only relabels merged groups
     assert [q.id for q in model.parts] == [q.id for q in out.parts]
     merged = {a.color_group: b.color_group for a, b in zip(model.parts, out.parts)
               if a.color_group != b.color_group}
+    hue = shaded_rings(p, out.parts, out.groups)
+    if hue is not None:
+        badged = badge_in_pleats(p, hue, big=HUE_BADGE_BIG, outer=True)  # the badge in the light pleats
+        if badged is not None:
+            # its print is no ribbon color: it takes the next ring's out (A3-15's designer badge is
+            # the mid ring's Color 3); flagged with the rebuilt rings
+            mid = sorted((q for q in badged if q.role == "ring" and q.id != "ring-badge"),
+                         key=lambda q: float(q.params["r_inner"]))
+            c = next(q for q in badged if q.role == "center")
+            if mid:
+                c.color_group, c.confidence = mid[0].color_group, min(c.confidence, 0.5)
+        out.parts = badged or hue
+        _tuck_rings(out.parts)
+        out.info.append(HUE_INFO)
     # ML-1: the learned classifier's count, and its kind where it is sure (layer_classify)
     rules_model = copy.deepcopy(out)
     read_status = None
@@ -895,7 +938,7 @@ def analyze_with_context(data: bytes, template: bool = True,
     ctx = PhotoContext(p, labels, groups, merged, copy.deepcopy(out), d.rules_model, d.perception, d.reader)
     used = {q.color_group for q in out.parts} | set(merged)
     lib = None
-    if template and ONE_COLOR_INFO not in out.info:  # R29: a library head would bring a second color
+    if template and ONE_COLOR_INFO not in out.info and HUE_INFO not in out.info:  # R29/R32: the rules head stands
         lib = with_template(out, p.mask, labels, p.head, Frame.of(p), groups, merged, exclude_key=exclude_key)
     cache: dict[int, tuple] = {}  # one render per head model (fit and overlap share it)
 

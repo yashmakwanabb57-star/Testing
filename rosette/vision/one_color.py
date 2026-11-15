@@ -65,3 +65,52 @@ def rose_center(p: Prepared, parts: list[Part]) -> list[Part] | None:
     c = Part("center", "center", {"cx": head.params["cx"], "cy": head.params["cy"], "r": r3(fr.d(rr))},
              head.color_group, 50, ROSE_CONF)
     return list(parts) + [c]
+
+
+# R31 (`badge_in_pleats`): a printed badge inside pleats of its own color (A2-15: a white badge
+# in a white pleated ring) reads as one large center disc, and the rose drawn on it comes out
+# far too big. When the center reaches BADGE_BIG of the head's radius, the badge's rim is the
+# radius between BADGE_FROM and BADGE_TO of the center's where the radial edge is strongest
+# all around (30th percentile of the radial gradient: a circle, not print or folds), at least
+# BADGE_EDGE_GAIN times that percentile's median over the range. The center shrinks to it and
+# the rest becomes a pinked ring of the same color (the pleats; the designer's A2-15: a pleated
+# ring around a center circle at 0.42 head radii; ours 0.39). `outer` takes the outermost strong
+# edge (the badge rim, not a printed circle inside it): R32's centers (A3-15).
+BADGE_BIG, BADGE_FROM, BADGE_TO, BADGE_EDGE_GAIN = 0.55, 0.35, 0.85, 1.6
+
+
+def badge_in_pleats(p: Prepared, parts: list[Part], big: float = BADGE_BIG, outer: bool = False) -> list[Part] | None:
+    """R31: the parts with a large center split into badge and same-color pleats, or None."""
+    c = next((q for q in parts if q.role == "center"), None)
+    if c is None:
+        return None
+    fr = Frame.of(p)
+    head_r = fr.d(p.head[2])
+    rc = float(c.params["r"])
+    if rc < big * head_r:
+        return None
+    g = cv2.GaussianBlur(cv2.cvtColor(p.rgb, cv2.COLOR_RGB2GRAY).astype(np.float32), (0, 0), 1.5)
+    gx, gy = cv2.Sobel(g, cv2.CV_32F, 1, 0), cv2.Sobel(g, cv2.CV_32F, 0, 1)
+    cx, cy = p.head[0], p.head[1]
+    th = np.linspace(0, 2 * np.pi, 720, endpoint=False)
+    vis = ~((th > np.radians(55)) & (th < np.radians(125)))
+    h, w = g.shape
+    radii = np.arange(BADGE_FROM * rc, BADGE_TO * rc, 1.0)
+    prof = []
+    for ru in radii:
+        rp = ru * fr.scale
+        xs = np.clip(np.rint(cx + rp * np.cos(th)).astype(int), 0, w - 1)
+        ys = np.clip(np.rint(cy + rp * np.sin(th)).astype(int), 0, h - 1)
+        prof.append(float(np.percentile(np.abs(gx[ys, xs] * np.cos(th) + gy[ys, xs] * np.sin(th))[vis], 30)))
+    prof = np.array(prof)
+    if len(prof) < 5:
+        return None
+    strong = np.flatnonzero(prof >= BADGE_EDGE_GAIN * float(np.median(prof)))
+    if not strong.size:
+        return None
+    k = int(strong[-1]) if outer else int(np.argmax(prof))  # outer: the badge rim, not its print
+    edge = float(radii[k])
+    c.params["r"] = r3(edge)
+    ring = Part("ring-badge", "ring", {"cx": c.params["cx"], "cy": c.params["cy"], "r_inner": r3(edge),
+                                       "r_outer": r3(rc), "pinked": 1}, c.color_group, 49, c.confidence)
+    return list(parts) + [ring]

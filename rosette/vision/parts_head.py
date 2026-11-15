@@ -875,6 +875,9 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame, pieces: list | None 
         parts.append(Part(f"ring-{depth}", "ring", rp, label, min(49, 30 + depth), r3(conf)))
     head_label = head["label"] if head else -2
     _badge_disc(parts, head_label)
+    _star_on_ring(parts, pol, radii, win, fr)
+    _head_star_on_ring(parts, pol, radii, win, fr)
+    _piece_star_on_ring(parts, sorted({int(v) for v in np.unique(labels) if v >= 0}))
     vote = pieces if PIECE_STACKING else None
     loose = pieces if PIECE_FRONT and not PIECE_STACKING else None  # R19: the loose fronts' pieces
     pre_cover = _finish_points(parts, labels, p, fr, pol, radii, win, head_label, trims, vote, loose)
@@ -884,6 +887,241 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame, pieces: list | None 
     if head is None:
         _base_star(parts, p, labels, fr, win, trims)
     return parts
+
+
+# R30 (`_star_on_ring`): a star lying on a pleated ring of another color (A14-17: a black
+# 6-point star on light orange pleats) reads as two kite layers of the same count, the
+# second's axes half a step from the first's (the ring shows between the star's arms). The
+# designer draws one star and one ring under it. Two kite layers of one count n whose axes
+# are within STAR_RING_AXIS_DEG of half a step apart, where the first's color holds the
+# full circle (>= FULL_COV) just inside the pair (the star's body) and the second's does
+# not: the first becomes a star from its last row of STAR_RING_VALLEY coverage or more (the
+# valleys) to its tips, drawn as a leaf star (arms bowing outward, the designer's shape), the
+# second a pinked ring from the star's valleys to its own outer end; a center of the star's
+# color takes the head disc's color (the designer's A14-17 badge is Color 1 over the star).
+STAR_RING_AXIS_DEG, STAR_RING_VALLEY = 6.0, 0.9
+STAR_RING_DEBUG: list = []
+
+
+# R30: the star is drawn the designer's way: upright (a tip or a valley straight up, when the
+# photo's star is within STAR_UPRIGHT_DEG of it: the rosettes are photographed upright), drawn
+# as leaves with their valleys at LEAF_VALLEY_SHARE of where the photo's star body ends (the
+# folds hide the valleys: designer / photo valley 50 / 65.5 on A14-17, 58 / 71.5 on A15-17),
+# never inside the center.
+STAR_UPRIGHT_DEG, LEAF_VALLEY_SHARE = 6.0, 0.8
+
+
+def _finish_star(star: Part, parts: list[Part], leaf: bool = True) -> None:
+    """R30: upright and the designer's leaf valleys (in place); rings starting at the old
+    valleys follow."""
+    a = star.params
+    n = int(a["count"])
+    step = 360.0 / n
+    rot = float(a["rotation_deg"]) % step
+    for up in (270.0 % step, (270.0 + step / 2) % step):
+        d = (rot - up + step / 2) % step - step / 2
+        if abs(d) <= STAR_UPRIGHT_DEG:
+            a["rotation_deg"] = r3(up)
+            break
+    c = next((q for q in parts if q.role == "center"), None)
+    old = float(a["r_inner"])
+    if leaf:
+        a["leaf"] = 1
+        v = max(LEAF_VALLEY_SHARE * old, float(c.params["r"]) if c is not None else 0.0)
+        if v < old and float(a["r_outer"]) - v >= MIN_ZONE_UNITS:
+            a["r_inner"] = r3(v)
+            a["width_ratio"] = r3(2 * v * np.sin(np.pi / n) / max(float(a["r_outer"]) - v, 1e-6))
+            for q in parts:
+                if q.role == "ring" and abs(float(q.params["r_inner"]) - old) < 1e-6:
+                    q.params["r_inner"] = r3(v)
+
+
+def _badge_edge(parts: list[Part], g: int, pol: np.ndarray, radii: np.ndarray, win: np.ndarray, fr: Frame) -> None:
+    """R30: the center grows to the outer edge of the badge it is read from: out from its radius
+    while the star's color g does not hold the full circle (the badge's rim and print), at most
+    BADGE_EDGE_MAX head radii (in place)."""
+    c = next((q for q in parts if q.role == "center"), None)
+    head = next((q for q in parts if q.role == "head"), None)
+    if c is None or head is None:
+        return
+    i = int(np.searchsorted(radii, float(c.params["r"]) * fr.scale))
+    cap = BADGE_EDGE_MAX * float(head.params["r"])
+    while i < len(radii) and fr.d(radii[i]) < cap and (pol[i, win] == g).mean() < FULL_COV:
+        i += 1
+    edge = min(fr.d(radii[min(i, len(radii) - 1)]), cap)
+    if edge > float(c.params["r"]):
+        c.params["r"] = r3(edge)
+
+
+BADGE_EDGE_MAX = 0.4
+
+
+def _star_on_ring(parts: list[Part], pol: np.ndarray, radii: np.ndarray, win: np.ndarray, fr: Frame) -> None:
+    """R30: interleaved kite pairs that are a star on a ring become that (in place)."""
+    kites = [q for q in parts if q.role == "points" and q.params.get("kind") == "diamond"]
+    for a in kites:
+        for b in kites:
+            if a is b or a.color_group == b.color_group or int(a.params["count"]) != int(b.params["count"]):
+                continue
+            n = int(a.params["count"])
+            step = 360.0 / n
+            d = (float(a.params["rotation_deg"]) - float(b.params["rotation_deg"])) % step
+            if abs(d - step / 2) > STAR_RING_AXIS_DEG:
+                continue
+            ri = float(a.params["r_inner"])
+            i0 = int(np.searchsorted(radii, ri * fr.scale))
+            rows = range(max(0, i0 - 4), i0)
+            if not len(rows):
+                continue
+            cov_a = [(pol[i, win] == a.color_group).mean() for i in rows]
+            cov_b = [(pol[i, win] == b.color_group).mean() for i in rows]
+            STAR_RING_DEBUG.append((round(float(np.mean(cov_a)), 2), round(float(np.mean(cov_b)), 2)))
+            if np.mean(cov_a) < FULL_COV or np.mean(cov_b) >= FULL_COV:
+                continue
+            i1 = int(np.searchsorted(radii, float(a.params["r_outer"]) * fr.scale))
+            cov = np.array([(pol[i, win] == a.color_group).mean() for i in range(i0, max(i0 + 1, i1))])
+            full = np.flatnonzero(cov >= STAR_RING_VALLEY)  # the body (a badge rim may break it)
+            k = int(full[-1]) + 1 if full.size else 0
+            valley = fr.d(radii[min(i0 + k, len(radii) - 1)])
+            ro = float(a.params["r_outer"])
+            if ro - valley < MIN_ZONE_UNITS:
+                continue
+            a.params.update(kind="star", r_inner=r3(valley), leaf=1,
+                            width_ratio=r3(2 * valley * np.sin(np.pi / n) / max(ro - valley, 1e-6)))
+            _badge_edge(parts, a.color_group, pol, radii, win, fr)
+            for c in parts:  # a center of the star's color would vanish into it: the head's color
+                if c.role == "center" and c.color_group == a.color_group:
+                    head = next((h for h in parts if h.role == "head"), None)
+                    if head is not None:
+                        c.color_group = head.color_group
+            b.role = "ring"
+            b.params = {"cx": b.params["cx"], "cy": b.params["cy"], "r_inner": r3(valley),
+                        "r_outer": r3(float(b.params["r_outer"])), "pinked": 1}
+            b.z = 30
+            a.z = max(a.z, 31)
+            _finish_star(a, parts)
+            return
+
+
+# R30b (`_head_star_on_ring`): the same star in the head disc's own color (A15-17: a black
+# star on orange pleats inside a black rim). No layer of the star's color is read (it is the
+# disc's), only the pleats between its arms: a kite layer whose color does not hold the full
+# circle just inside it, while the head's color does within HEAD_STAR_BODY_UNITS inside it
+# (the star's body; its arms already part where the kites begin). That layer and any
+# other points layer on its axes (inner pleats) become pinked rings from the star's valleys,
+# a leaf star of the head's color is added half a step off their axes (valleys: the head
+# color's last full row; tips: the kites' outer end), rings of the head's color inside the
+# tips (the body read as a band) and unknown blobs there are dropped, and a center of the
+# head's color takes the kites' color (the designer's A15-17 badge is Color 2).
+
+
+HEAD_STAR_BODY_UNITS = 25.0  # the star's body is looked for this far inside the kites
+HEAD_STAR_MAX_COUNT = 8  # head-colored stars on pleats: 5-8 points (A15-17: 6)
+
+
+def _head_star_on_ring(parts: list[Part], pol: np.ndarray, radii: np.ndarray, win: np.ndarray, fr: Frame) -> None:
+    """R30b: a head-colored star on pleated rings (in place)."""
+    head = next((q for q in parts if q.role == "head"), None)
+    if head is None or any(q.role == "points" and q.color_group == head.color_group for q in parts):
+        return
+    g0 = head.color_group
+    for b in [q for q in parts if q.role == "points" and q.params.get("kind") == "diamond"]:
+        n, rot_b = int(b.params["count"]), float(b.params["rotation_deg"])
+        if n > HEAD_STAR_MAX_COUNT:
+            continue  # many points: a star layer of its own between them (S49-17's white 12 points)
+        i0 = int(np.searchsorted(radii, float(b.params["r_inner"]) * fr.scale))
+        reach = max(1, int(round(HEAD_STAR_BODY_UNITS * fr.scale / max(float(radii[1] - radii[0]), 1e-6))))
+        rows = range(max(0, i0 - reach), i0)
+        if not len(rows):
+            continue
+        cov_h = max((pol[i, win] == g0).mean() for i in rows)  # the body: full somewhere just inside
+        cov_b = np.mean([(pol[i, win] == b.color_group).mean() for i in rows[-4:]])
+        STAR_RING_DEBUG.append(("head", round(float(cov_h), 2), round(float(cov_b), 2)))
+        if cov_h < FULL_COV or cov_b >= FULL_COV:
+            continue
+        tip = float(b.params["r_outer"])
+        i1 = int(np.searchsorted(radii, tip * fr.scale))
+        cov = np.array([(pol[i, win] == g0).mean() for i in range(i0, max(i0 + 1, i1))])
+        full = np.flatnonzero(cov >= STAR_RING_VALLEY)
+        valley = fr.d(radii[min(i0 + (int(full[-1]) + 1 if full.size else 0), len(radii) - 1)])
+        if tip - valley < MIN_ZONE_UNITS:
+            continue
+        step = 360.0 / n
+        same_axes = [q for q in parts if q.role == "points" and q is not b
+                     and int(q.params["count"]) == n
+                     and min((float(q.params["rotation_deg"]) - rot_b) % step,
+                             (rot_b - float(q.params["rotation_deg"])) % step) <= STAR_RING_AXIS_DEG]
+        for k, q in enumerate([b] + sorted(same_axes, key=lambda q: -float(q.params["r_outer"]))):
+            q.role, q.z = "ring", 30 + k
+            q.params = {"cx": q.params["cx"], "cy": q.params["cy"], "r_inner": r3(valley),
+                        "r_outer": r3(float(q.params["r_outer"])), "pinked": 1}
+        parts[:] = [q for q in parts if not (
+            (q.role == "ring" and q.color_group == g0 and float(q.params["r_outer"]) <= tip)
+            or (q.role == "unknown"))]
+        parts.append(Part("points-star", "points", {
+            "cx": head.params["cx"], "cy": head.params["cy"], "kind": "star", "count": n,
+            "r_inner": r3(valley), "r_outer": r3(tip), "rotation_deg": r3((rot_b + step / 2) % step),
+            "width_ratio": r3(2 * valley * np.sin(np.pi / n) / max(tip - valley, 1e-6))}, g0, 40,
+            r3(min(head.confidence, BLOB_UNCONFIRMED_CONF))))
+        _badge_edge(parts, g0, pol, radii, win, fr)
+        for c in parts:
+            if c.role == "center" and c.color_group == g0:
+                c.color_group = b.color_group
+        _finish_star(next(q for q in parts if q.id == "points-star"), parts)
+        return
+
+
+# R30c (`_piece_star_on_ring`): the same star found by SAM 2 as a front layer of the head's
+# color (A16-17: a black 8-point star on orange pleats in a black rim, whose folds are too
+# irregular for the color profile). A front star of the head's color (source "piece") with a
+# ring of another color starting outside its valleys and inside its tips is that star on that
+# ring: the ring runs in to the star's valleys and lies under it, the star's tips reach the
+# ring's outer edge and it is drawn straight-sided and upright (A16-17's designer star), and a center of the star's color (the badge read as the star's body) shrinks
+# to PIECE_STAR_CENTER of the valleys and takes the photo's third color when there is one
+# (A16-17's designer badge is Color 3, the light orange; neither the star's nor the ring's),
+# else the ring's; with a third color, a ring of it (the inner pleats, flagged: the photo shows
+# them in the ring's shade) is drawn from the valleys out to PIECE_STAR_INNER head radii.
+PIECE_STAR_CENTER = 0.75
+# The inner pleats in the third color reach this share of the head's radius (A16-17's designer
+# file: yellow to 110 of 160 svg units, blue to 145).
+PIECE_STAR_INNER = 0.69
+
+
+def _piece_star_on_ring(parts: list[Part], groups: list[int] | None = None) -> None:
+    """R30c: a SAM front star of the head's color on a ring (in place)."""
+    head = next((q for q in parts if q.role == "head"), None)
+    if head is None:
+        return
+    for a in parts:
+        if not (a.role == "points" and a.id.startswith(FRONT_ID) and a.color_group == head.color_group
+                and a.params.get("source") == "piece" and a.params.get("kind") == "star"):
+            continue
+        ri, ro = float(a.params["r_inner"]), float(a.params["r_outer"])
+        rings = [q for q in parts if q.role == "ring" and q.color_group != head.color_group
+                 and ri < float(q.params["r_inner"]) < ro]
+        if not rings:
+            continue
+        for q in rings:
+            q.params["r_inner"] = r3(ri)
+        a.z = max(a.z, max(q.z for q in rings) + 1)
+        tip = max(ro, max(float(q.params["r_outer"]) for q in rings))  # the tips reach the rim
+        a.params["r_outer"] = r3(tip)
+        a.params["width_ratio"] = r3(2 * ri * np.sin(np.pi / int(a.params["count"])) / max(tip - ri, 1e-6))
+        _finish_star(a, parts, leaf=False)
+        v = float(a.params["r_inner"])
+        third = [g for g in (groups or []) if g not in (head.color_group, rings[0].color_group)]
+        if third:  # the inner pleats in the third color (A16-17's designer: yellow inside the blue)
+            split = max(v + MIN_BAND_UNITS, PIECE_STAR_INNER * float(head.params["r"]))
+            parts.append(Part("ring-inner", "ring", {"cx": a.params["cx"], "cy": a.params["cy"],
+                                                     "r_inner": r3(v), "r_outer": r3(split), "pinked": 1},
+                              third[0], max(q.z for q in rings) + 1 if a.z > max(q.z for q in rings) + 1 else a.z,
+                              BLOB_UNCONFIRMED_CONF))
+            a.z = max(a.z, parts[-1].z + 1)
+        for c in parts:
+            if c.role == "center" and c.color_group == head.color_group:
+                c.params["r"] = r3(min(float(c.params["r"]), PIECE_STAR_CENTER * v))
+                c.color_group = third[0] if third else rings[0].color_group
+        return
 
 
 # R23 (`_badge_disc`): the designer draws the center badge (a printed button the rose sits on)
@@ -2445,7 +2683,8 @@ def _part_geom(q: Part):
         shapes = points_ring(a["cx"], a["cy"], a["kind"], int(a["count"]), a["r_inner"], a["r_outer"],
                              a["rotation_deg"], a["width_ratio"],
                              None if a.get("inner_ratio") is None else float(a["inner_ratio"]),
-                             None if a.get("edge_width") is None else float(a["edge_width"]))
+                             None if a.get("edge_width") is None else float(a["edge_width"]),
+                             leaf=bool(int(a.get("leaf", 0))))
     elif q.role == "ring":
         shapes = [(pinked_ring if int(a.get("pinked", 0)) else ring)(a["cx"], a["cy"], a["r_outer"], a["r_inner"])]
     elif q.role in ("center", "unknown"):
