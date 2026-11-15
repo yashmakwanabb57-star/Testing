@@ -915,6 +915,8 @@ def _short_star_on_top(parts: list, p=None, labels=None) -> None:
             step = 360.0 / int(a.params["count"])
             if abs(((float(a.params["rotation_deg"]) - float(b.params["rotation_deg"])) % step) - step / 2) > 8.0:
                 continue
+            if float(a.params["r_outer"]) == float(b.params["r_outer"]):
+                continue  # one length (S18-15): the photo's order stands
             short, long_ = (a, b) if float(a.params["r_outer"]) < float(b.params["r_outer"]) else (b, a)
             if short.z <= long_.z:
                 short.z, long_.z = long_.z, short.z
@@ -1019,7 +1021,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
         RosetteModel(parts=found), head_r=Frame.of(p).d(p.head[2]))))
     if pair is not None:
         tidy.info.append(SHADE_INFO)
-        _short_star_on_top(tidy.parts, p, labels)
+    _short_star_on_top(tidy.parts, p, labels)
     parts = tidy.parts
     badge = badge_in_pleats(p, parts)  # R31: a badge inside pleats of its own color
     if badge is not None:
