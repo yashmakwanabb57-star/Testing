@@ -894,6 +894,100 @@ def _tuck_rings(parts: list) -> None:
         q.z = 30 + len(rings) - i  # inner rings on top
 
 
+# R42: two plain color groups of one hue (within SHADE_HUE_DEG; lightness and chroma within
+# SHADE_DL / SHADE_DC) are one ribbon in light and shade when merging them makes the tail
+# stripes mirror-symmetric (S15-15: the light and dark red read red | blue | yellow | blue |
+# yellow). The tails are always symmetric in the designer files with a single block; A14-17's
+# two oranges (as close) already are, so they stay apart. The larger group keeps its color.
+SHADE_HUE_DEG, SHADE_DL, SHADE_DC, SHADE_MIN_CHROMA = 12.0, 12.0, 12.0, 25.0
+SHADE_INFO = "Two shades of one ribbon were read as one color (light and shadow) - check the colors."
+
+
+def _short_star_on_top(parts: list, p=None, labels=None) -> None:
+    """R42: of two interleaved stars of one count (half a step apart), the shorter lies on top,
+    as the designer stacks them (S15-15: blue star over the red; the photo vote reads the red
+    over it once the red's two shades are one group)."""
+    stars = [q for q in parts if q.role == "points" and q.params.get("kind") == "star"]
+    for a in stars:
+        for b in stars:
+            if a is b or int(a.params["count"]) != int(b.params["count"]):
+                continue
+            step = 360.0 / int(a.params["count"])
+            if abs(((float(a.params["rotation_deg"]) - float(b.params["rotation_deg"])) % step) - step / 2) > 8.0:
+                continue
+            short, long_ = (a, b) if float(a.params["r_outer"]) < float(b.params["r_outer"]) else (b, a)
+            if short.z <= long_.z:
+                short.z, long_.z = long_.z, short.z
+                if short.z == long_.z:
+                    short.z += 1
+            if p is not None and labels is not None:
+                _body_ring(parts, long_, short, p, labels)
+            return
+
+
+def _body_ring(parts: list, long_, short, p, labels) -> None:
+    """R42: the long star's body showing as a full band inside the short star (S15-15: the red
+    pleated ring between the blue ring and the blue star) is a pinked ring on top of the stars."""
+    fr = Frame.of(p)
+    th = np.linspace(0, 2 * np.pi, 720, endpoint=False)
+    vis = np.abs(np.degrees(th) - 90.0) > 35.0
+    h, w = labels.shape
+    inner = max([float(q.params["r_outer"]) for q in parts if q.role == "ring"]
+                + [float(q.params["r"]) for q in parts if q.role == "center"], default=0.0)
+    full = []
+    for ru in np.arange(inner, float(short.params["r_inner"]), 1.0):
+        rp = ru * fr.scale
+        xs = np.clip(np.rint(p.head[0] + rp * np.cos(th)).astype(int), 0, w - 1)
+        ys = np.clip(np.rint(p.head[1] + rp * np.sin(th)).astype(int), 0, h - 1)
+        if float((labels[ys, xs][vis] == long_.color_group).mean()) >= 0.8:
+            full.append(ru)
+    if len(full) < 5:
+        return
+    from rosette.model import Part
+    # the pleated ring runs out under the short star's valleys (no head color between them)
+    parts.append(Part("ring-body", "ring", {"cx": long_.params["cx"], "cy": long_.params["cy"],
+                                            "r_inner": round(inner, 3),
+                                            "r_outer": round(float(short.params["r_inner"]) + 2.0, 3),
+                                            "pinked": 1}, long_.color_group, 29, 0.5))
+    c = next((q for q in parts if q.role == "center"), None)
+    if c is not None:  # rings start at the center: no band of other color, no extra edge lines
+        rc = float(c.params["r"])
+        for q in parts:
+            if q.role == "ring" and q.id != "ring-body" and 0 < float(q.params["r_inner"]) - rc <= 12.0:
+                q.params["r_inner"] = round(rc, 3)
+            if q.id == "ring-body":  # under the ring inside it: one pinked edge where they meet
+                q.params["r_inner"] = round(rc, 3)
+        parts[:] = [q for q in parts if not (q.role == "unknown" and float(q.params.get("r", 0)) <= rc)]
+
+
+def shade_pair(parts: list, groups: list) -> tuple[int, int] | None:
+    """R42: (group kept, group merged into it) or None."""
+    import itertools
+    import cv2
+    st = sorted((q for q in parts if q.role == "tail_stripe"),
+                key=lambda q: (int(q.params["tail_index"]), int(q.params["stripe_index"])))
+    def runs(x: list) -> list:  # consecutive repeats collapsed (slivers between stripes)
+        return [v for i, v in enumerate(x) if i == 0 or v != x[i - 1]]
+    seq = runs([q.color_group for q in st])
+    if len(seq) < 3 or seq == seq[::-1] or len({int(q.params["tail_index"]) for q in st}) != 1:
+        return None
+
+    def lab(g):
+        return cv2.cvtColor(np.array([[g.rgb]], np.float32) / 255.0, cv2.COLOR_RGB2Lab)[0, 0]
+    for a, b in itertools.combinations([g for g in groups if not g.pattern], 2):
+        la, lb = lab(a), lab(b)
+        ca, cb = float(np.hypot(*la[1:])), float(np.hypot(*lb[1:]))
+        if min(ca, cb) < SHADE_MIN_CHROMA:
+            continue
+        dh = abs((np.degrees(np.arctan2(la[2], la[1])) - np.degrees(np.arctan2(lb[2], lb[1])) + 180) % 360 - 180)
+        if dh > SHADE_HUE_DEG or abs(la[0] - lb[0]) > SHADE_DL or abs(ca - cb) > SHADE_DC:
+            continue
+        merged = runs([a.id if g == b.id else g for g in seq])
+        if merged == merged[::-1]:
+            return (a.id, b.id) if a.area >= b.area else (b.id, a.id)
+    return None
+
+
 def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -> Detection:
     """prepare -> pixel_groups -> detect_parts -> tidy -> RosetteModel -> assign -> the
     learned layer classifier (ML-1) -> the piece reader (ML-4, reader_step). classify=False:
@@ -911,8 +1005,21 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
             raise
         seen = dict(seen, status="failed", message=f"SAM 2 pieces failed in the detector - {type(exc).__name__}: {exc}")
         found = detect_parts(p, labels, groups)
+    pair = shade_pair(found, groups)  # R42: one ribbon in light and shade read as two colors
+    if pair is not None:
+        keep, drop = pair
+        labels = labels.copy()
+        labels[labels == drop] = keep
+        groups = [g for g in groups if g.id != drop]
+        try:
+            found = detect_parts(p, labels, groups, pieces)
+        except Exception:  # noqa: BLE001
+            found = detect_parts(p, labels, groups)
     tidy = merge_tail_slivers(drop_two_point_layers(drop_specks(
         RosetteModel(parts=found), head_r=Frame.of(p).d(p.head[2]))))
+    if pair is not None:
+        tidy.info.append(SHADE_INFO)
+        _short_star_on_top(tidy.parts, p, labels)
     parts = tidy.parts
     badge = badge_in_pleats(p, parts)  # R31: a badge inside pleats of its own color
     if badge is not None:
