@@ -51,6 +51,7 @@ from .vision import candidates as vcandidates
 from .vision import groups as vgroups
 from .vision import judge as vjudge
 from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_groups
+from .vision.one_color import ONE_COLOR_INFO, rose_center
 from .vision.layer_classify import classify_head_layers
 from .vision.parts import detect_parts
 from .vision.parts_common import Frame, majority
@@ -854,6 +855,10 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     tidy = merge_tail_slivers(drop_two_point_layers(drop_specks(
         RosetteModel(parts=found), head_r=Frame.of(p).d(p.head[2]))))
     parts = tidy.parts
+    one = rose_center(p, parts)  # R29: the rose of a one-color rosette, same color
+    if one is not None:
+        parts = one
+        tidy.info.append(ONE_COLOR_INFO)
     tidy.warnings.extend(pleat_warnings(parts, p, labels))  # ML-1: rings near the pleat bar
     used = {q.color_group for q in parts}
     model = RosetteModel(parts=parts, groups=[g for g in groups if g.id in used],
@@ -890,7 +895,7 @@ def analyze_with_context(data: bytes, template: bool = True,
     ctx = PhotoContext(p, labels, groups, merged, copy.deepcopy(out), d.rules_model, d.perception, d.reader)
     used = {q.color_group for q in out.parts} | set(merged)
     lib = None
-    if template:
+    if template and ONE_COLOR_INFO not in out.info:  # R29: a library head would bring a second color
         lib = with_template(out, p.mask, labels, p.head, Frame.of(p), groups, merged, exclude_key=exclude_key)
     cache: dict[int, tuple] = {}  # one render per head model (fit and overlap share it)
 
