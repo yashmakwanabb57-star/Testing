@@ -65,11 +65,20 @@ def test_low_confidence_points_ring_is_flagged():
     assert is_flagged(m, [])
 
 
-def test_merged_print_and_satin_is_flagged():
-    # S2-15B: two colors found for a three-color ribbon (print merged with satin)
+def test_merged_print_and_satin_is_flagged(monkeypatch):
+    # a plain group that looks partly patterned (a print merged with satin) is warned and flagged
+    import rosette.pipeline as pl
+    monkeypatch.setattr(pl, "mixed_texture_groups", lambda p, labels, groups: [0])
     model = analyze(_photo("S2-15B"))
     assert any("partly patterned" in w for w in model.warnings)
     assert is_flagged(model, render(model).issues)
+
+
+def test_s2_15b_print_and_satin_are_separate_colors_not_warned():
+    # S2-15B: the snowflake print is split from the white satin (STRIPE_PRINT_GRAIN)
+    model = analyze(_photo("S2-15B"))
+    assert len({q.color_group for q in model.parts}) == 3
+    assert not any("partly patterned" in w for w in model.warnings)
 
 
 def test_low_confidence_part_of_any_role_is_flagged():

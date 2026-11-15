@@ -99,6 +99,15 @@ SATIN_GRAIN, GLITTER_GRAIN, SPLIT_MIN_FRAC = 1.5, 6.0, 0.28
 # S80-22, S56-17B, S40-15). Over the 76 photos this adds exactly those three splits,
 # all with 3-color designer files; no other cluster's decision changes.
 STRIPE_SPLIT_SEP, STRIPE_MIN_SHARE, STRIPE_MIN_TAIL_SHARE, STRIPE_MIN_HV = 10.0, 0.17, 0.3, 2.5
+# A printed stripe beside a plain one (S2-15B: snowflake print beside white satin) has
+# few flat pixels, since its print is detail, so its half falls under STRIPE_MIN_SHARE
+# although it fills a whole stripe. The share test is waived when the smaller half is
+# textured (grain at or above STRIPE_PRINT_GRAIN) and the larger one plain (under
+# SATIN_GRAIN), and the glitter split (_split_glitter) would not separate the cluster
+# anyway; the separation, tail share and row/column tests still apply. Over the 76
+# photos, of the clusters failing on share only, the textured small halves read 5.4-9.8
+# and the plain ones 0.2-1.1; S18-15B and S5-15 (9.5, 9.8) are glitter-split already.
+STRIPE_PRINT_GRAIN = 3.0
 # Print blobs on the tails (text, logos) up to this share of the mask are absorbed when
 # at least PRINT_RING_DOM of a PRINT_RING_UNITS-wide ring around them is one other group
 # and at most PRINT_RING_OUT of that ring lies outside the mask.
@@ -123,7 +132,9 @@ PATTERN_T = 5.0
 # its borders add none) may hide a patterned ribbon merged with a plain one. Over the
 # 76 reference photos: S2-15B (snowflake print merged with white satin) 0.45, S58-17
 # (black tail with white text) 0.56; every other plain group <= 0.39 (S70-19).
-# Set from the single merged case: the margin is thin.
+# Set from the single merged case: the margin is thin. (S2-15B's print is now split off
+# by STRIPE_PRINT_GRAIN, so no reference photo is reported any more; the check stays as
+# the fallback for a print the split misses.)
 MIXED_PATTERN_SHARE = 0.42
 # Tail-interior pixels (canvas units^2) a group needs before it is checked.
 MIXED_MIN_UNITS2 = 2000.0
@@ -362,7 +373,9 @@ def _split_stripes(centers: np.ndarray, flat_feat: np.ndarray, feat_img: np.ndar
         sub, _ = _kmeans(xj, 2, np.random.default_rng(SEED))
         if sub is None or np.linalg.norm(sub[0] - sub[1]) < STRIPE_SPLIT_SEP:
             continue
-        if np.bincount(_nearest(xj, sub), minlength=2).min() < STRIPE_MIN_SHARE * len(x):
+        counts = np.bincount(_nearest(xj, sub), minlength=2)
+        if counts.min() < STRIPE_MIN_SHARE * len(x) and not _print_beside_plain(
+                sub, int(np.argmin(counts)), feat_img, labels == j):
             continue
         region = (labels == j) & tails
         if not region.any():
@@ -377,6 +390,17 @@ def _split_stripes(centers: np.ndarray, flat_feat: np.ndarray, feat_img: np.ndar
         out[j] = sub[0].astype(centers.dtype)
         out.append(sub[1].astype(centers.dtype))
     return np.array(out)
+
+
+def _print_beside_plain(sub: np.ndarray, small: int, feat_img: np.ndarray, region: np.ndarray) -> bool:
+    """The 2-means halves are a printed stripe (the smaller half) beside a plain one that
+    the glitter split would leave together (see STRIPE_PRINT_GRAIN)."""
+    grain = sub[:, 3] / GRAIN_WEIGHT
+    if grain[small] < STRIPE_PRINT_GRAIN or grain[1 - small] >= SATIN_GRAIN:
+        return False
+    v = feat_img[..., 3][region] / GRAIN_WEIGHT
+    glitter_split = (v < SATIN_GRAIN).mean() >= SPLIT_MIN_FRAC and (v > GLITTER_GRAIN).mean() >= SPLIT_MIN_FRAC
+    return not glitter_split
 
 
 def _changes(half: np.ndarray, mask: np.ndarray) -> int:

@@ -48,8 +48,8 @@ from rosette.model import Part
 from rosette.vision.colors import RIM_TOUCH
 from rosette.vision.parts_common import Frame, blob_rings, majority, polar_sample, r3
 from rosette.vision.parts_trims import (BACK_GAP_UNITS, BACK_MIN_UNITS, BORDER_MIN_SIDES, _axis_cols,
-                                       _backing_tips, _band_units, _border_bands, _rows, explain_trims,
-                                       fold_specks, split_borders)
+                                       _backing_tips, _band_units, _border_bands, _rows, edge_loops,
+                                       explain_trims, fold_specks, split_borders)
 from rosette.vision.prepare import Prepared
 from rosette.vision.templates import Piece as _Outline
 from rosette.vision.templates import _piece_word
@@ -789,6 +789,7 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame, pieces: list | None 
     if head is not None:
         _front_in_base(layers, meta, zones, pol, cov, radii, win, fr, head["label"], ccx, ccy)
     layers, meta = split_borders(layers, meta, pol, radii, win, fr)
+    layers, meta = edge_loops(layers, meta, pol, radii, win, fr, head["label"] if head else -2)
     layers, meta = fold_specks(layers, meta, bands, head_band, pleated, radii, fr, RING_MAX_GROWTH_UNITS)
     if head is not None and pieces and PIECE_FRONT:  # ML-2: front layers from piece outlines
         _front_pieces(layers, meta, zones, radii, fr, head["label"], p.head, pieces)
@@ -873,6 +874,7 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame, pieces: list | None 
             rp["pinked"] = 1  # ML-1: a pleated ribbon band (the files draw these pinked)
         parts.append(Part(f"ring-{depth}", "ring", rp, label, min(49, 30 + depth), r3(conf)))
     head_label = head["label"] if head else -2
+    _badge_disc(parts, head_label)
     vote = pieces if PIECE_STACKING else None
     loose = pieces if PIECE_FRONT and not PIECE_STACKING else None  # R19: the loose fronts' pieces
     pre_cover = _finish_points(parts, labels, p, fr, pol, radii, win, head_label, trims, vote, loose)
@@ -882,6 +884,46 @@ def detect_head(p: Prepared, labels: np.ndarray, fr: Frame, pieces: list | None 
     if head is None:
         _base_star(parts, p, labels, fr, win, trims)
     return parts
+
+
+# R23 (`_badge_disc`): the designer draws the center badge (a printed button the rose sits on)
+# as one plain disc (the files' center is one circle, r 31-77 units, mostly 45-60). A badge
+# whose print breaks the label profile reads as a tiny center and thin rings (A1-15: a dot
+# 0-8, rings 10-24, 50-58 and the gold rim 60-80; designer one circle r 61). When the center
+# is at most BADGE_FRAGMENT_UNITS, it and the rings around it ending within the badge zone
+# become one center disc out to the outermost of them, in the color (not the head disc's)
+# covering the most of them, else the head disc's. Not when a points layer starts within
+# the zone (a layered head: S29-15's star body around a dot; its designer center is a
+# hexagon). Over
+# the 76 photos: A1-15 (0.881 -> 1.000), A12-15 and S51-19 (designer circles 61, 59, 35; the
+# last two keep their colors, now one circle); every other center reads 18+ units.
+# The badge zone is BADGE_MAX_SHARE of the head disc's radius (A1-15's gold rim ends at 0.51 R;
+# the designer circles are 0.3-0.57 R), BADGE_MAX_UNITS without a head disc.
+BADGE_FRAGMENT_UNITS, BADGE_MAX_UNITS, BADGE_MAX_SHARE = 15.0, 62.0, 0.55
+
+
+def _badge_disc(parts: list[Part], head_label: int) -> None:
+    """R23: a center badge read as a dot and rings becomes one center disc (in place)."""
+    center = next((q for q in parts if q.role == "center"), None)
+    if center is None or float(center.params["r"]) > BADGE_FRAGMENT_UNITS:
+        return
+    head = next((q for q in parts if q.role == "head"), None)
+    zone = BADGE_MAX_SHARE * float(head.params["r"]) if head is not None else BADGE_MAX_UNITS
+    rings = [q for q in parts if q.role == "ring" and float(q.params["r_outer"]) <= zone]
+    if not rings:
+        return
+    if any(q.role == "points" and float(q.params["r_inner"]) < zone for q in parts):
+        return  # layers start in the badge zone: a layered head (S29-15's star body), not a badge
+    area: dict[int, float] = {center.color_group: np.pi * float(center.params["r"]) ** 2}
+    for q in rings:
+        a = np.pi * (float(q.params["r_outer"]) ** 2 - float(q.params["r_inner"]) ** 2)
+        area[q.color_group] = area.get(q.color_group, 0.0) + a
+    other = {g: a for g, a in area.items() if g != head_label}
+    center.color_group = max(other, key=other.get) if other else head_label
+    center.params["r"] = r3(max(float(q.params["r_outer"]) for q in rings))
+    center.params.pop("pinked", None)
+    for q in rings:
+        parts.remove(q)
 
 
 def pleat_texture(p: Prepared, member: np.ndarray, r0: float, r1: float,
@@ -1963,17 +2005,35 @@ def _points_start_at_cover(parts: list[Part]) -> None:
     covers = [(0.0 if q.role == "center" else float(q.params["r_inner"]),
                float(q.params["r" if q.role == "center" else "r_outer"]))
               for q in parts if q.role in ("ring", "center")]
+    strips = [q for q in parts if q.role == "points" and q.params.get("edge_width") is not None]
     for q in parts:
         kind = q.params.get("kind")
-        if q.role != "points" or kind == "star":
+        if q.role != "points" or kind == "star" or any(q is s for s in strips):
             continue
         ri, ro = float(q.params["r_inner"]), float(q.params["r_outer"])
+        center = None
         if kind == "bow":
             top = max((b for a, b in covers if a <= ri < b), default=ri)
+            # R22: a loop starting at the center's edge
+            center = next((b for a, b in covers if a == 0.0 and abs(b - ri) <= 1e-6), None) if top == ri else None
         else:
             top = max((b for a, b in covers if b <= ri <= b + COVER_GAP_UNITS), default=ri)
+        w = float(q.params["width_ratio"]) * (ro - ri)
+        if center is not None and w / 2 < center:
+            # R22: the loop's straight inner end sinks under the center until its corners meet the
+            # center's edge, so the center cuts the loop along its curve (the designer's loops tuck
+            # under the badge); a straight end at the center's radius left wedges of what lies
+            # beneath between the loop's corners and the circle (S2-15B). Hidden part only. Loops
+            # under a ring keep starting at its outer edge (its pleat teeth hide the join).
+            top = float(np.sqrt(center * center - (w / 2) ** 2))
         if top != ri and top < ro - MIN_ZONE_UNITS:
-            w = float(q.params["width_ratio"]) * (ro - ri)
+            for s in strips:  # a loop's edge strips are drawn on its outline: they follow it
+                sp = s.params
+                if (sp.get("kind") == q.params.get("kind") and int(sp["count"]) == int(q.params["count"])
+                        and sp.get("rotation_deg") == q.params.get("rotation_deg")
+                        and float(sp["r_inner"]) == ri and float(sp["r_outer"]) == ro
+                        and sp.get("width_ratio") == q.params.get("width_ratio")):
+                    sp["r_inner"], sp["width_ratio"] = r3(top), r3(w / (ro - top))
             q.params["r_inner"] = r3(top)
             q.params["width_ratio"] = r3(w / (ro - top))
 

@@ -365,6 +365,95 @@ def split_borders(layers: list, meta: list[dict], pol: np.ndarray, radii: np.nda
     return out, out_meta
 
 
+# R21 (`edge_loops`): loops (bow layers) edged with a narrow ribbon of another color on both
+# sides (S2-15B: snowflake loops with white satin edges). explain_trims draws edge strips only
+# for a low-confidence layer of the edge color whose band is followed by a third label; S2-15B's
+# white edges read as a 2-lobed white bow at 0.63, followed by the loops' own color (the loop's
+# fold, the next loop), and split_borders reads borders along a star's flanks only, so the
+# edging was dropped. On the middle half of the loops' rows, from each visible loop's axis
+# outward to both edges, the label just past the edge is the edging when one label other than
+# the loops' and the head disc's holds >= LOOP_EDGE_SHARE of the edges and its run there is
+# LOOP_EDGE_MIN..LOOP_EDGE_MAX units wide (median; S2-15B 13.5, the photo's white edges). It is
+# drawn as a backing of the loops (a trim: same count and axes, wider by the edging on each
+# side, reaching one unit further so it lies under them), and other loop or unknown layers of
+# its color in the loops' zone (the edging read as lobes or blobs) give way to it. Not for:
+# loops of LOOP_EDGE_MAX_COUNT or more (a pleated edge's teeth, PLEAT_MIN_COUNT: S6-15's pink
+# highlights between 17 wine pleats), loops that already carry edge strips (explain_trims),
+# or an edge color forming a layer of its own that is no loop, with the loops' count or a
+# multiple (a star between the loops: its arms line the loops' sides). Over the 76 photos it
+# draws edging on S2-15B, S35-19, S56-17, S57-17 and S69-19, all edged loops in the designer
+# files.
+LOOP_EDGE_SHARE, LOOP_EDGE_MIN, LOOP_EDGE_MAX, LOOP_EDGE_MAX_COUNT = 0.88, 3.0, 25.0, 16
+
+
+def _loop_edges(pol: np.ndarray, radii: np.ndarray, win: np.ndarray, fr: Frame, g: int, params: dict,
+                rows: range) -> list[tuple[int, float]]:
+    """(label past the edge, its run width in units) per visible loop, row and side."""
+    t = pol.shape[1]
+    half = t // (2 * max(1, int(params["count"])))
+    out = []
+    for c in _axis_cols(params, t):
+        if not win[c]:
+            continue
+        for i in rows:
+            row = pol[i]
+            if row[c] != g:
+                continue
+            for step in (-1, 1):
+                j = c
+                while row[j % t] == g and abs(j - c) < half:
+                    j += step
+                lab, k = int(row[j % t]), j
+                while row[k % t] == lab and abs(k - j) < t // 4:
+                    k += step
+                out.append((lab, fr.d(abs(k - j) * 2 * np.pi * radii[i] / t)))
+    return out
+
+
+def edge_loops(layers: list, meta: list[dict], pol: np.ndarray, radii: np.ndarray, win: np.ndarray,
+               fr: Frame, base: int) -> tuple[list, list[dict]]:
+    """R21: loops edged with another color get that color as a backing (see LOOP_EDGE_SHARE)."""
+    out, out_meta = list(layers), list(meta)
+    for j, (role, g, share, p2, _, rb) in enumerate(layers):
+        m = meta[j]
+        if (role != "points" or p2.get("kind") != "bow" or m.get("trim")
+                or int(p2["count"]) >= LOOP_EDGE_MAX_COUNT
+                or not any(lay is layers[j] for lay in out)):  # given way to an edging already
+            continue
+        n = int(p2["count"])
+        if any(mm.get("trim") and lay[3].get("edge_width") is not None and int(lay[3]["count"]) == n
+               and lay[3].get("rotation_deg") == p2.get("rotation_deg") for lay, mm in zip(out, out_meta)):
+            continue  # edge strips already drawn (explain_trims)
+        i0, i1 = m["rows"]
+        q = (i1 - i0) // 4
+        edges = _loop_edges(pol, radii, win, fr, g, p2, range(i0 + q, i1 - q))
+        if not edges:
+            continue
+        vals, cnt = np.unique(np.array([e[0] for e in edges]), return_counts=True)
+        h = int(vals[np.argmax(cnt)])
+        if h < 0 or h == g or h == base or cnt.max() < LOOP_EDGE_SHARE * len(edges):
+            continue
+        if any(lay[1] == h and lay[0] == "points" and lay[3].get("kind") != "bow" and not mm.get("trim")
+               and mm["zone"] == m["zone"] and int(lay[3]["count"]) % n == 0 for lay, mm in zip(out, out_meta)):
+            continue  # h is a layer of its own between the loops (a star), not their edging
+        side = float(np.median([w for lab, w in edges if lab == h]))
+        if not LOOP_EDGE_MIN <= side <= LOOP_EDGE_MAX:
+            continue
+        drop = [k for k, lay in enumerate(out)
+                if lay[1] == h and lay[0] in ("points", "unknown") and not out_meta[k].get("trim")
+                and out_meta[k]["zone"] == m["zone"] and (lay[0] == "unknown" or lay[3].get("kind") == "bow")]
+        for k in reversed(drop):
+            del out[k]
+            del out_meta[k]
+        ri, ro = float(p2["r_inner"]), float(p2["r_outer"])
+        w2 = float(p2["width_ratio"]) * (ro - ri)
+        ro2 = r3(ro + 1.0)  # one unit further out: drawn under the loops
+        back = dict(p2, r_outer=ro2, width_ratio=r3((w2 + 2 * side) / max(ro2 - ri, 1e-6)))
+        out.append(("points", h, min(share, float(cnt.max()) / len(edges)), back, 0.0, rb + 1))
+        out_meta.append(dict(m, rows=(i0, rb + 1), eats=None, trim=True))
+    return out, out_meta
+
+
 def fold_specks(layers: list, meta: list[dict], bands: list, head_band, pleated: list,
                 radii: np.ndarray, fr: Frame, pleat_units: float) -> tuple[list, list[dict]]:
     """Fold unknown layers that are a seam band's fringe (SEAM_PLEATS, SPECK_MAX_UNITS2)
