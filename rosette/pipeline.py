@@ -53,7 +53,7 @@ from .vision import judge as vjudge
 from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_groups
 from .vision.one_color import ONE_COLOR_INFO, badge_in_pleats, rose_center
 from .vision.shaded_rings import HUE_INFO, dark_loop_edges, shaded_rings
-from .vision.parts_head import _badge_under_loops, _petals_between_loops
+from .vision.parts_head import _badge_under_loops, _petals_between_loops, _twin_points
 
 # R32: the center of a hue-rebuilt head is checked for a badge from this share of the head radius.
 HUE_BADGE_BIG = 0.3
@@ -938,6 +938,8 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
         out.parts = edged
     _petals_between_loops(out.parts)  # R36: petals on top of loops (final stacking known here)
     _badge_under_loops(out.parts, p, labels)  # R39: a badge inside loops, read as print
+    if _twin_points(out.parts, p, labels):  # R40: two sets of points around the center
+        out.rose = True
     if close_seams(out.parts):
         out.info.append(SEAM_INFO)
     hue = shaded_rings(p, out.parts, out.groups)

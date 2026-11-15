@@ -1361,6 +1361,75 @@ def _badge_under_loops(parts: list[Part], p: Prepared | None = None, labels: np.
     return True
 
 
+# R40 (`_twin_points`): two points layers of one count n (kites, or one read as a star by the
+# layer classifier), in two colors, half a step apart and
+# starting at the same radius (S11a-15: blue and white satin points around a white rose) are the
+# designer's two sets of straight points standing on the center (leaves, as R37 draws them), their
+# bases tucked under the center: the set in the pleats' color on top, the other under it, and the center a disc in the color the photo shows
+# inside them, out to where they start.
+TWIN_AXIS_DEG, TWIN_START_UNITS = 6.0, 3.0
+
+
+def _twin_points(parts: list[Part], p: Prepared, labels: np.ndarray) -> bool:
+    """R40: interleaved kite pairs on the center become two sets of leaves (in place)."""
+    kites = [q for q in parts if q.role == "points" and q.params.get("kind") in ("diamond", "star")
+             and q.params.get("edge_width") is None and not q.params.get("leaf")]
+    for a in kites:
+        for b in kites:
+            if (a is b or a.color_group == b.color_group or int(a.params["count"]) != int(b.params["count"])
+                    or "diamond" not in (a.params["kind"], b.params["kind"])):
+                continue
+            n = int(a.params["count"])
+            step = 360.0 / n
+            if abs(((float(a.params["rotation_deg"]) - float(b.params["rotation_deg"])) % step) - step / 2) > TWIN_AXIS_DEG:
+                continue
+            ri = float(a.params["r_inner"])
+            if abs(ri - float(b.params["r_inner"])) > TWIN_START_UNITS:
+                continue
+            fr = Frame.of(p)
+            cx, cy = p.head[0], p.head[1]
+            th = np.linspace(0, 2 * np.pi, 360, endpoint=False)
+            votes: dict[int, int] = {}
+            for f in (0.2, 0.4, 0.6, 0.8):
+                rp = f * ri * fr.scale
+                xs = np.clip(np.rint(cx + rp * np.cos(th)).astype(int), 0, labels.shape[1] - 1)
+                ys = np.clip(np.rint(cy + rp * np.sin(th)).astype(int), 0, labels.shape[0] - 1)
+                for g, k in zip(*np.unique(labels[ys, xs], return_counts=True)):
+                    if g >= 0:
+                        votes[int(g)] = votes.get(int(g), 0) + int(k)
+            if not votes:
+                continue
+            for q in (a, b):  # standing on the center, their bases tucked under its edge (R22)
+                ro = float(q.params["r_outer"])
+                w = TIP_KITE_WIDTH * ro / 0.958
+                sink = float(np.sqrt(max(ri * ri - (w / 2) ** 2, 0.0))) if w / 2 < ri else 0.5 * ri
+                q.params.update(kind="diamond", lens=1, r_inner=r3(sink), width_ratio=r3(w / max(ro - sink, 1e-6)),
+                                rotation_deg=r3(float(q.params["rotation_deg"]) % step))
+            # the set in the pleats' color lies on top (S11a-15's designer: the long points over the
+            # short ones), the other under it
+            pleat = max((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]), default=None)
+            over = a if pleat is not None and a.color_group == pleat.color_group else b
+            under = b if over is a else a
+            under.z, over.z = 20, 21
+            for q in (a, b):
+                q.params["tips"] = 1
+            if not any(q.role == "head" for q in parts):  # the outer pleats are the disc behind the points
+                outer = max((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]), default=None)
+                if outer is not None and float(outer.params["r_inner"]) >= max(float(a.params["r_outer"]),
+                                                                              float(b.params["r_outer"])) - TWIN_START_UNITS:
+                    outer.params["r_inner"] = r3(ri)
+                    outer.z = 15
+            c = next((q for q in parts if q.role == "center"), None)
+            g = max(votes, key=votes.get)
+            if c is None:
+                parts.append(Part("center", "center", {"cx": a.params["cx"], "cy": a.params["cy"], "r": r3(ri)},
+                                  g, 50, BLOB_UNCONFIRMED_CONF))
+            else:
+                c.params["r"], c.color_group = r3(max(float(c.params["r"]), ri)), g
+            return True
+    return False
+
+
 # R23 (`_badge_disc`): the designer draws the center badge (a printed button the rose sits on)
 # as one plain disc (the files' center is one circle, r 31-77 units, mostly 45-60). A badge
 # whose print breaks the label profile reads as a tiny center and thin rings (A1-15: a dot
