@@ -1170,7 +1170,8 @@ def _petals_between_loops(parts: list[Part]) -> None:
              and q.params.get("edge_width") is None]
     for a in parts:
         p = a.params
-        if a.role != "points" or p.get("kind") != "star" or p.get("leaf") or a.id.startswith(FRONT_ID):
+        if (a.role != "points" or p.get("kind") != "star" or p.get("leaf") or a.id.startswith(FRONT_ID)
+                or p.get("tips")):  # a star read from its tips (R37, R43, R46) keeps its shape
             continue
         n = int(p["count"])
         step = 360.0 / n

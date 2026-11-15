@@ -171,3 +171,71 @@ def stacked_stars(p, labels: np.ndarray, parts: list) -> list | None:
                         int(top), 23, 0.5))
     out.append(Part("center", "center", {"cx": ccx, "cy": ccy, "r": round(rc, 3)}, g, 50, c.confidence))
     return out
+
+
+# R46: a star between loops on a head disc (S26-15: a pink star edged in wine between six glitter
+# loops on pink pleats). The edge color comes and goes around the head half a step from the loops;
+# the star is drawn the designer's way, a star of the edge color under a star of the head's color,
+# both standing on the ring around the center, the loops under them. Radii are the designer's
+# (S26-15, in head radii): the edge star 0.43-0.92, the top star 0.40-0.84.
+EDGE_STAR_SWING = 0.3
+EDGE_STAR_PHASE_TOL = 8.0  # degrees off half a step from the loops
+EDGE_STAR = (0.43, 0.92)
+TOP_STAR = (0.40, 0.84)
+EDGE_BOW = (0.43, 0.86, 0.40, 0.2)  # the loops: inner and outer radius, width (head radii), edge share; they end inside the pinking
+
+
+def edged_star_between_bows(p, labels: np.ndarray, parts: list) -> list | None:
+    head = next((q for q in parts if q.role == "head"), None)
+    c = next((q for q in parts if q.role == "center"), None)
+    bows = [q for q in parts if q.role == "points" and q.params.get("kind") == "bow"]
+    if head is None or c is None or len(bows) != 1 or any(
+            q.role == "points" and q.params.get("kind") != "bow" for q in parts):
+        return None
+    bow = bows[0]
+    n = int(bow.params["count"])
+    fr = Frame.of(p)
+    h, w = labels.shape
+    head_u = float(head.params["r"])
+    th = np.arange(720) * 2 * np.pi / 720  # from straight up, clockwise
+    radii = np.arange(0.45 * head_u, 0.95 * head_u, 1.0)
+    X = np.clip(np.rint(p.head[0] + np.outer(np.sin(th), radii * fr.scale)).astype(int), 0, w - 1)
+    Y = np.clip(np.rint(p.head[1] - np.outer(np.cos(th), radii * fr.scale)).astype(int), 0, h - 1)
+    L = labels[Y, X]
+    vis = np.abs(np.degrees(th) - 180.0) > STACK_VIS_DEG
+    A = np.stack([np.ones(vis.sum()), np.cos(n * th[vis]), np.sin(n * th[vis])], axis=1)
+
+    def fit(col):
+        coef, *_ = np.linalg.lstsq(A, (L == col).mean(axis=1)[vis], rcond=None)
+        return 2 * float(np.hypot(coef[1], coef[2])), (np.degrees(np.arctan2(coef[2], coef[1])) / n) % (360.0 / n)
+
+    step = 360.0 / n
+    _, bow_peak = fit(bow.color_group)
+    best = None
+    for col in np.unique(L[vis]):
+        if col < 0 or col in (head.color_group, bow.color_group):
+            continue
+        amp, peak = fit(col)
+        off = (peak - bow_peak) % step
+        if amp >= EDGE_STAR_SWING and abs(off - step / 2) <= EDGE_STAR_PHASE_TOL and (best is None or amp > best[0]):
+            best = (amp, int(col))
+    if best is None:
+        return None
+    edge = best[1]
+    rot = round(((bow_peak + step / 2) - 90.0) % step, 3)  # tips between the loops; parts angles from +x
+    star = {"cx": head.params["cx"], "cy": head.params["cy"], "kind": "star", "count": n, "width_ratio": 0.5,
+            "rotation_deg": rot, "tips": 1}
+    out = list(parts)
+    # the loops fill the room between the tips, under the star (designer S26-15: 0.43-0.97, 0.5 wide)
+    ri, ro = EDGE_BOW[0] * head_u, EDGE_BOW[1] * head_u
+    bow.params.update(r_inner=round(ri, 3), r_outer=round(ro, 3),
+                      width_ratio=round(EDGE_BOW[2] * head_u / (ro - ri), 4))
+    # each loop edged left and right in the head's color (designer S26-15)
+    out.append(Part(f"edge-{bow.id}", "points", dict(bow.params, edge_width=round(EDGE_BOW[3] * EDGE_BOW[2] * head_u, 3)),
+                    head.color_group, bow.z, 0.5))
+    out.append(Part("points-edge", "points", dict(star, r_inner=round(EDGE_STAR[0] * head_u, 3),
+                                                  r_outer=round(EDGE_STAR[1] * head_u, 3)), edge, bow.z + 1, 0.5))
+    out.append(Part("points-top", "points", dict(star, r_inner=round(TOP_STAR[0] * head_u, 3),
+                                                 r_outer=round(TOP_STAR[1] * head_u, 3)),
+                    head.color_group, bow.z + 2, 0.5))
+    return out
