@@ -80,6 +80,14 @@ GLITTER_EDGE_UNITS, GLITTER_RUN_UNITS = 2.0, 3.0
 # clean fits except S31-15 (6.1, a sliver at one side shifts the pairing; its colors
 # repeat) and A13-15B (8.0, three different ribbons).
 FAN_ASYM_DEG, FAN_RMS_UNITS, FAN_MIN_STRIPES, FAN_FLAG_CONF = 7.0, 2.0, 3, 0.5
+# R24: the designer draws the tails as ONE ribbon block of side-by-side stripes on 77 of the 79
+# files (S65-18 and S9-19 draw 3 tails), also where the photo's ribbons fan out or part toward
+# the bottom (A1-15, A9-15, A10-15, A13-15, A13-15B, S27-15, S56-17 read as 2-3 tails). So
+# tails that run as one ribbon on a measured row higher up are one tail (their rows where
+# they touch give the stripes and the width line), and a fan read from one tail stays one
+# tail (FAN_SEPARATE off; still flagged). Over the 76 photos the tail count then matches the
+# designer on all but S65-18 and S9-19 (3 tails, read as 1).
+ONE_BLOCK, FAN_SEPARATE = True, False
 
 
 def _runs(row: np.ndarray) -> list[tuple[int, int]]:
@@ -303,8 +311,10 @@ def detect_tails(p: Prepared, labels: np.ndarray, fr: Frame,
     n = max(set(low), key=lambda v: (low.count(v), v))  # tails part only toward the bottom
     if n == 0:
         return [], None
-    ok = [(y, c) for y, c in cuts if len(c) == n]
     count_conf = 1.0 if len(set(low)) == 1 else 0.6
+    if ONE_BLOCK and n > 1 and any(len(c) == 1 for _, c in cuts):
+        n, count_conf = 1, 1.0  # R24: one ribbon higher up: the designer's one tail block
+    ok = [(y, c) for y, c in cuts if len(c) == n]
 
     # per tail, per row: canvas y, offset from the axis, width
     ys = np.array([y for y, _ in ok])
@@ -379,7 +389,7 @@ def detect_tails(p: Prepared, labels: np.ndarray, fr: Frame,
                 f_list[k], f_list[j] = f, f[::-1]
     if asym is not None and asym >= FAN_ASYM_DEG:
         lab = groups[0]
-        if len(lab) >= FAN_MIN_STRIPES and len(set(lab)) == len(lab) and min(lab) >= 0:
+        if FAN_SEPARATE and len(lab) >= FAN_MIN_STRIPES and len(set(lab)) == len(lab) and min(lab) >= 0:
             lines = boundary_lines(fan_rows, fr)
             xb = [a + b * bottom_y for b, a, _ in lines]  # boundaries at the bottom edge
             top_y, fan_geo, axes = _fan(list(np.diff(xb)), top_y, bottom_y, w_at,
