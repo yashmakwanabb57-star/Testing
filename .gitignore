@@ -7,3 +7,6 @@ __pycache__/
 rosette/data/confirmed_layers.csv
 models/
 .cache/
+
+# review renders (tools/review_show.py)
+output/review*/

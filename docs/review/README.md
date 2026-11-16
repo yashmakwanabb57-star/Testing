@@ -54,7 +54,8 @@ only give proportions for parts the photo cannot show, for example hidden star v
    remark -> fix, re-render, show again.
 5. Fix as a narrow, numbered rule (R-number in a comment, constants named, designer
    proportions cited). Latest rule: R47 (`rosette/pipeline.py` `_star_as_loops`).
-6. Before showing a fix: check which of the 76 photos the rule fires on, and compare scores
+6. Before showing a fix: check which of the 76 photos the rule fires on
+   (`.venv/Scripts/python.exe tools/review_fire.py <rule function>` or `--part <part id>`), and compare scores
    before/after (`git stash` baseline) for those photos. Narrow the rule until no other photo
    gets worse. Tell the owner what else changed.
 7. Run `.venv/Scripts/python.exe -m pytest -q -m "not slow"` on touched areas before committing.
