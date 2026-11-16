@@ -339,3 +339,53 @@ def test_r62_needs_two_stars_on_one_axis_and_one_half_a_step_off():
     parts = _s41_parts()
     parts[1].params["rotation_deg"] = 25.3  # all three on one axis
     assert not _three_nested_stars(parts)
+
+
+def _s4_photo():
+    """A light head (group 0, lightness ~160) with six dark loops (~130) showing at the rim at 0, 60,
+    ...; most of the dark read into the light group, a little as its own group (1)."""
+    h = w = 600
+    yy, xx = np.mgrid[:h, :w]
+    cx, cy, hr = 300.0, 230.0, 160.0
+    r = np.hypot(xx - cx, yy - cy)
+    th = np.degrees(np.arctan2(yy - cy, xx - cx))
+    mask = (r <= hr) | ((np.abs(xx - cx) <= 90) & (yy >= cy) & (yy < 590))
+    labels = np.full((h, w), -1, dtype=int); labels[mask] = 0
+    rgb = np.zeros((h, w, 3)); rgb[mask] = (140, 133, 212)
+    dark = mask & (r > 0.8 * hr) & (r <= hr) & (np.abs(((th + 30) % 60) - 30) < 10)
+    rgb[dark] = (99, 90, 209)
+    labels[dark & (th > -20) & (th < 20)] = 1
+    tail_out = mask & (yy > cy + hr) & (np.abs(xx - cx) > 50)
+    labels[tail_out] = 1; rgb[tail_out] = (99, 90, 209)
+    p = SimpleNamespace(axis_x=cx, scale=1.0, mask=mask, head=(cx, cy, hr), rgb=rgb.astype(np.uint8))
+    from rosette.vision.parts_common import Frame
+    geo = {"cx": 300.0, "cy": round(float(Frame.of(p).y(cy)), 3)}
+    parts = [Part("head", "head", dict(geo, r=hr), 0, 10, 0.9), Part("unknown-1", "unknown", dict(geo, r=28.0), 1, 20, 0.3)]
+    return p, labels, parts, hr
+
+
+def test_r63_dark_loops_at_the_rim_under_light_loops():
+    from rosette.pipeline import _two_tone_loops
+    p, labels, parts, hr = _s4_photo()
+    out = _two_tone_loops(p, labels, parts)
+    assert out is not None
+    ids = {q.id: q for q in out}
+    dark, light, c = ids["points-dark"], ids["points-light"], ids["center"]
+    assert "head" not in ids and "unknown-1" not in ids
+    assert dark.color_group == 1 and light.color_group == 0 and c.color_group == 1
+    assert dark.params["count"] == 6 and light.params["count"] == 6 and dark.params["kind"] == "bow"
+    assert abs(((dark.params["rotation_deg"] + 30) % 60) - 30) < 3
+    assert abs(((light.params["rotation_deg"] - dark.params["rotation_deg"]) % 60) - 30) < 0.01
+    ring = ids["ring-light"]
+    assert dark.z < ring.z < light.z < c.z and ring.color_group == 0
+    assert abs(c.params["r"] - 0.39 * hr) < 0.01
+    assert ring.params["r_inner"] < c.params["r"] and light.params["r_inner"] < c.params["r"]  # under the rose
+    assert abs(ring.params["r_outer"] - 0.66 * hr) < 0.01  # the dark loops show only past it
+
+
+def test_r63_a_head_of_one_lightness_stays():
+    from rosette.pipeline import _two_tone_loops
+    p, labels, parts, hr = _s4_photo()
+    yy = np.arange(600)[:, None]
+    p.rgb[(yy <= 230 + hr) & p.mask] = (140, 133, 212)  # the whole head one lightness, the dark only in the tails
+    assert _two_tone_loops(p, labels, parts) is None

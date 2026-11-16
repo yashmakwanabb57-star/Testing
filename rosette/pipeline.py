@@ -1735,6 +1735,75 @@ def _three_nested_stars(parts: list) -> bool:
     return True
 
 
+# R63: only a plain disc read (no points, no rings), two color groups, and the rim's darker pixels
+# (lightness below the midpoint of the two groups') form a clear count of lobes (S4-15: dark violet
+# loops showing at the rim under wide lavender loops; the two purples close, the satin highlights
+# put most of the dark into the light group). Dark loops of the darker group at the lobes, light
+# loops of the head's group half a step off on them, a rose of the darker group. Designer S4-15
+# (head radii): dark loops to 1.01, 0.74 wide (short wide blocks at the rim, their corners past the
+# light loops' ends; the owner's check); light loops to 0.95, 0.66 wide (nearly touching);
+# rose 0.39; no disc. The light color is one piece from the rose to 0.66 (a ring under the rose, the
+# light loops starting under it), so the dark loops show only past it (the owner's check of S4-15).
+TONE_BAND = (0.85, 0.97)  # the rim band read, head radii
+TONE_PEAK = 2.5
+TONE_DARK_SHARE = 0.15  # the band's dark share at least
+TONE_ROSE = 0.39
+TONE_DARK = (1.01, 0.74)
+TONE_LIGHT = (0.95, 0.66)
+TONE_LIGHT_RING = 0.66  # the light ring's outer radius, head radii (designer S4-15: valleys 0.66)
+TONE_UNDER = 0.8  # the light ring and loops start at this share of the rose radius (under it)
+
+
+def _two_tone_loops(p, labels: np.ndarray, parts: list) -> list | None:
+    from .vision.layer_classify import KEEP_PARAM
+    from .vision.parts_common import polar_sample
+    head = next((q for q in parts if q.role == "head"), None)
+    if head is None or getattr(p, "rgb", None) is None or any(q.role in ("points", "ring", "template") for q in parts):
+        return None
+    gs = [int(v) for v in np.unique(labels[p.mask]) if v >= 0]
+    if len(gs) != 2:
+        return None
+    light = head.color_group
+    dark_g = next(g for g in gs if g != light)
+    lum = p.rgb.astype(float).mean(-1)
+    l_light, l_dark = float(np.median(lum[p.mask & (labels == light)])), float(np.median(lum[p.mask & (labels == dark_g)]))
+    if l_dark >= l_light:
+        return None
+    dark = ((lum < (l_light + l_dark) / 2) & p.mask).astype(np.int32)
+    fr = Frame.of(p)
+    hr = float(head.params["r"])
+    cx, cy = p.axis_x + (float(head.params["cx"]) - 300.0) * fr.scale, fr.py(float(head.params["cy"]))
+    radii = np.arange(TONE_BAND[0], TONE_BAND[1], 0.01) * hr * fr.scale
+    m = polar_sample(dark, cx, cy, radii, 360, fill=0).mean(0)
+    th = np.radians(np.arange(360.0))
+    win = np.abs(np.degrees(th) - 90.0) > 40.0
+    if m[win].mean() < TONE_DARK_SHARE:
+        return None
+    x = m[win] - m[win].mean()
+    spec = {n: np.sum(x * np.exp(-1j * n * th[win])) for n in FLOWER_COUNTS}
+    mags = sorted((abs(v), n) for n, v in spec.items())
+    if mags[-1][0] <= 0 or mags[-1][0] < TONE_PEAK * mags[-2][0]:
+        return None
+    n = mags[-1][1]
+    step = 360.0 / n
+    rot = (float(np.degrees(np.angle(spec[n]))) / n) % step
+    geo = {"cx": head.params["cx"], "cy": head.params["cy"]}
+    ri = TONE_ROSE * hr
+    out = [q for q in parts if q.role not in ("head", "unknown", "center")]
+    for pid, g, (ro, wd), r_ in (("points-dark", dark_g, TONE_DARK, rot), ("points-light", light, TONE_LIGHT, (rot + step / 2) % step)):
+        out.append(Part(pid, "points", dict(geo, kind="bow", count=n, r_inner=round(ri, 3), r_outer=round(ro * hr, 3),
+                                            rotation_deg=round(r_, 3), width_ratio=round(wd / (ro - TONE_ROSE), 4),
+                                            tips=1, **{KEEP_PARAM: 1}), g, 20 if pid == "points-dark" else 21, 0.5))
+    light_loops = out[-1]
+    light_loops.params["r_inner"] = round(TONE_UNDER * ri, 3)
+    light_loops.params["width_ratio"] = round(TONE_LIGHT[1] / (TONE_LIGHT[0] - TONE_UNDER * TONE_ROSE), 4)
+    out.append(Part("ring-light", "ring", dict(geo, r_inner=round(TONE_UNDER * ri, 3), r_outer=round(TONE_LIGHT_RING * hr, 3)),
+                    light, 21, 0.5))
+    light_loops.z = 22
+    out.append(Part("center", "center", dict(geo, r=round(ri, 3)), dark_g, 50, 0.5))
+    return out
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -1905,6 +1974,9 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     if third is not None:
         tidy.parts = third
     _three_nested_stars(tidy.parts)  # R62: three stars of one count, nested as the designer stacks them
+    tone = _two_tone_loops(p, labels, tidy.parts)  # R63: dark loops at the rim under light loops, two close colors
+    if tone is not None:
+        tidy.parts = tone
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower
