@@ -1026,6 +1026,36 @@ def _loops_on_star_flower(parts: list) -> bool:
     return True
 
 
+# R53: no center, and a small blunt star in the middle of the head (S47-15: the white rose's
+# petals read as a 6-point star inside the pink loops) is the rose: a center of its color at its
+# reach, the loops running in under it.
+ROSE_STAR_REACH = 0.45  # the star's tips / the head's reach at most
+ROSE_STAR_BLUNT = 0.6  # its valleys / its tips at least
+
+
+def _rose_from_small_star(parts: list) -> bool:
+    if any(q.role == "center" for q in parts):
+        return False
+    pts = [q for q in parts if q.role == "points"]
+    reach = max([float(q.params["r_outer"]) for q in pts]
+                + [float(q.params["r"]) for q in parts if q.role == "head"], default=0.0)
+    for a in pts:
+        pa = a.params
+        if (pa.get("kind") == "star" and float(pa["r_outer"]) <= ROSE_STAR_REACH * reach
+                and float(pa["r_inner"]) >= ROSE_STAR_BLUNT * float(pa["r_outer"])):
+            rr = float(pa["r_outer"])
+            parts.remove(a)
+            parts.append(Part("center", "center", {"cx": pa["cx"], "cy": pa["cy"], "r": round(rr, 3)},
+                              a.color_group, 50, a.confidence))
+            for q in parts:  # the loops run in under the rose
+                if q.role == "points" and q.params.get("kind") == "bow" and float(q.params["r_inner"]) > 0.6 * rr:
+                    ro, ri = float(q.params["r_outer"]), float(q.params["r_inner"])
+                    w = float(q.params["width_ratio"]) * (ro - ri)
+                    q.params.update(r_inner=round(0.6 * rr, 3), width_ratio=round(w / (ro - 0.6 * rr), 4))
+            return True
+    return False
+
+
 def _taper_edged_bows(parts: list) -> bool:
     """R45: a loop set laid on a wider loop set of another color, one count and angle (S2-15B:
     blue loops on white), is the designer's edged loops: both narrow toward the center to
@@ -1277,6 +1307,8 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     edged = dark_loop_edges(p, labels, out.parts, out.groups)  # R34: dark loop edges (on the photo's loops)
     if edged is not None:
         out.parts = edged
+    if _rose_from_small_star(out.parts):  # R53: a small blunt star with no center is the rose
+        out.rose = True
     if _rose_over_bows(out.parts, out.groups):  # R44: bows and a star of one hue under a rose
         out.rose = True
     _loops_on_star_flower(out.parts)  # R51: loops on a star around a bare center
