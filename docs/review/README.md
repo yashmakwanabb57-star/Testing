@@ -7,7 +7,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
 
 ## Progress
 
-- Owner-approved: lines 1-36 of `photo-order.txt` (A10-15 ... S32-15). Each approval is a commit.
+- Owner-approved: lines 1-37 of `photo-order.txt` (A10-15 ... S33-15). Each approval is a commit.
 - Done by Claude on its own (the owner asked it to continue alone; owner to review later):
   - 31 S28-15 - owner-approved after a fix: loops run in to the center, order loops, star, square (R48).
   - 32 S29-15 - owner-approved after a fix: a pinked ring of the inner star's color round the badge
@@ -17,7 +17,8 @@ only give proportions for parts the photo cannot show, for example hidden star v
   - 34 S31-15 (owner-approved as is; the flower is smaller and plainer than the designer's two petal rings) - loops on a star around a bare center: both run in under the center, loops edged in the
     center's color, a 6-point flower of the star's color over the loops' bases (R51; only S31-15). 0.929 -> 0.933.
   - 35 S3-15, 36 S32-15, 37 S33-15 - already match the designer (1.000), no change. S32-15 approved as is
-    (its white star is drawn over the red one; the photo and the designer have it behind).
+    (its white star is drawn over the red one; the photo and the designer have it behind). S33-15 approved
+    after a fix: R42's long star goes under the other stars and is kept in the app (also S15-15B's app run).
   - 38 s34-15, 39 S35-19, 40 S36-15 - structure matches the designer (0.956 / 0.962 / 1.000), no change.
     Small differences left: s34-15's dark points are longer than the designer's; S36-15's loop ends are
     square where the designer's are pointed petals.
@@ -38,7 +39,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
     54 S48-17 (stacked stars, 0.672), 57 S5-15 (cross loops), 58 S52-19 (layered loops), 63 S57-17 (0.857),
     65 S59-17 (0.876), 71 S68-19 (head drawn as a plain disc), 75 S8-15 (star around the rose read as
     loops, 0.640), and 43 S38-15 above.
-- Next (owner, at the office): verify Claude's work from line 37 (S33-15) one photo at a time with the
+- Next (owner, at the office): verify Claude's work from line 38 (s34-15) one photo at a time with the
   normal loop below (show photo | ours | designer, wait for "works next" or a fix request). Then the open
   list above, worst first (S8-15, s44-15, S48-17, S68-19, S4-15).
 - Update this section after each photo.

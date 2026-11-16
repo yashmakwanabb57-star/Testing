@@ -52,3 +52,20 @@ def test_r54_a_plain_star_round_the_badge_stays():
     parts = _parts()
     assert not _pleats_round_badge(parts, p, labels)
     assert not any(q.role == "ring" for q in parts)
+
+
+def test_r42_long_star_under_its_body_ring_goes_to_the_bottom_and_is_kept():
+    # S33-15, the owner's check: the violet star (its body the pleated ring) lies under both
+    # other stars; the app's classifier read its tips as kites
+    from rosette.pipeline import _long_star_under
+    from rosette.vision.layer_classify import KEEP_PARAM
+    geo = {"cx": 300.0, "cy": 200.0}
+    long_ = Part("points-0", "points", dict(geo, kind="star", count=6, r_inner=72.0, r_outer=150.0, rotation_deg=30.0), 0, 21, 0.9)
+    blue = Part("points-2", "points", dict(geo, kind="star", count=6, r_inner=81.0, r_outer=132.0, rotation_deg=0.0), 1, 20, 0.9)
+    edge = Part("points-1", "points", dict(geo, kind="star", count=6, r_inner=81.0, r_outer=113.0, rotation_deg=0.0), 2, 22, 0.9)
+    parts = [long_, edge, blue]
+    _long_star_under(parts, long_)
+    assert long_.z < blue.z < edge.z and long_.params[KEEP_PARAM] == 1
+    z = long_.z
+    _long_star_under(parts, long_)  # already at the bottom: stays
+    assert long_.z == z

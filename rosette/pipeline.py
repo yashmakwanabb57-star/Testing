@@ -1237,6 +1237,18 @@ def _short_star_on_top(parts: list, p=None, labels=None) -> None:
             return
 
 
+def _long_star_under(parts: list, long_) -> None:
+    """R42: the long star whose body shows as the pleated ring lies under every other points
+    layer (S33-15, the owner's check: the violet star under the glitter star and its edge), and
+    keeps its kind and count in the app: the classifier sees only its tips past the ring and
+    reads them as kites (S33-15, S15-15B)."""
+    from .vision.layer_classify import KEEP_PARAM
+    others = [q.z for q in parts if q.role == "points" and q is not long_]
+    if others and long_.z >= min(others):
+        long_.z = min(others) - 1
+    long_.params[KEEP_PARAM] = 1
+
+
 def _body_ring(parts: list, long_, short, p, labels) -> None:
     """R42: the long star's body showing as a full band inside the short star (S15-15: the red
     pleated ring between the blue ring and the blue star) is a pinked ring on top of the stars."""
@@ -1261,6 +1273,7 @@ def _body_ring(parts: list, long_, short, p, labels) -> None:
                                             "r_inner": round(inner, 3),
                                             "r_outer": round(float(short.params["r_inner"]) + 2.0, 3),
                                             "pinked": 1}, long_.color_group, 29, 0.5))
+    _long_star_under(parts, long_)
     c = next((q for q in parts if q.role == "center"), None)
     if c is not None:  # rings start at the center: no band of other color, no extra edge lines
         rc = float(c.params["r"])
