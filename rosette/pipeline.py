@@ -1540,6 +1540,73 @@ def _satin_star_on_pleats(p, labels: np.ndarray, parts: list) -> list | None:
     return out
 
 
+# R60: a star under a shorter star of its count, half a step off, both of colors other than the
+# head's (s39-15: the white satin star under the gold glitter star; its tips read at 0.79 of the
+# head, the photo's white runs reach 0.92, designer 0.91). Its tips are the median end of its
+# color's run within UNDER_TIP_SEARCH degrees of its tip axes (the photo's tips sit a few degrees off a
+# regular star), from just outside the top star's valleys, when longer. Both stars are hexagrams
+# for six points (designer s39-15: two triangles, valleys at 1 / sqrt(3) of the tips; the owner's
+# check), and are read whole from the photo (no library head).
+UNDER_TIP_STEP_DEG = 8.0  # the two stars half a step apart within this
+UNDER_TIP_MAX = 0.97  # at most this share of the head radius
+UNDER_TIP_SEARCH = 6.0
+UNDER_VALLEY = 0.577  # valleys / tips: a hexagram's 1 / sqrt(3)
+# on them a smaller star of each, in order: the under star's color on its axes, then the top star's
+# (designer s39-15: tips 0.73 and 0.58 against 0.91 and 0.75; the owner's check)
+UNDER_INNER = 0.80  # the under star's inner copy / its tips
+TOP_INNER = 0.77  # the top star's inner copy / its tips
+
+
+def _under_star_tips(parts: list, p, labels: np.ndarray) -> bool:
+    head = next((q for q in parts if q.role == "head"), None)
+    stars = [q for q in parts if q.role == "points" and q.params.get("kind") == "star"]
+    if head is None or len(stars) != 2:
+        return False
+    under, top = sorted(stars, key=lambda q: q.z)
+    n = int(under.params["count"])
+    if n != int(top.params["count"]) or head.color_group in (under.color_group, top.color_group):
+        return False
+    step = 360.0 / n
+    if abs(((float(under.params["rotation_deg"]) - float(top.params["rotation_deg"])) % step) - step / 2) > UNDER_TIP_STEP_DEG:
+        return False
+    if float(top.params["r_outer"]) > float(under.params["r_outer"]):
+        return False
+    fr = Frame.of(p)
+    hr = float(head.params["r"])
+    cx, cy = p.axis_x + (float(under.params["cx"]) - 300.0) * fr.scale, fr.py(float(under.params["cy"]))
+    h, w = labels.shape
+    rr = np.arange(0.0, UNDER_TIP_MAX * hr * fr.scale, 1.0)
+    start = int(float(top.params["r_inner"]) * fr.scale)
+    ends = []
+    for k in range(n):
+        best = None
+        for d in np.arange(-UNDER_TIP_SEARCH, UNDER_TIP_SEARCH + 0.1, 1.0):
+            a = np.radians(float(under.params["rotation_deg"]) + step * k + d)
+            v = labels[np.clip(np.rint(cy + rr * np.sin(a)).astype(int), 0, h - 1),
+                       np.clip(np.rint(cx + rr * np.cos(a)).astype(int), 0, w - 1)] == under.color_group
+            on = np.flatnonzero(v[start:])
+            if on.size == 0:
+                continue
+            e = start + on[0]
+            while e + 1 < v.size and (v[e + 1] or (e + 3 < v.size and v[e + 3])):  # bridge 1-2 px of grain
+                e += 1
+            best = max(best or 0.0, rr[e] / fr.scale)
+        if best is not None:
+            ends.append(best)
+    if len(ends) < n // 2:
+        return False
+    tip = max(float(np.median(ends)), float(under.params["r_outer"]))
+    under.params["r_outer"] = round(tip, 3)
+    from .vision.layer_classify import KEEP_PARAM
+    for q in (under, top):  # read whole from the photo: no library head, the classifier keeps them
+        q.params.update({"r_inner": round(UNDER_VALLEY * float(q.params["r_outer"]), 3), "tips": 1, KEEP_PARAM: 1})
+    for k, (q, share) in enumerate(((under, UNDER_INNER), (top, TOP_INNER))):
+        ro = share * float(q.params["r_outer"])
+        parts.append(Part(f"{q.id}-inner", "points", dict(q.params, r_outer=round(ro, 3), r_inner=round(UNDER_VALLEY * ro, 3)),
+                          q.color_group, top.z + 1 + k, 0.5))
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -1705,6 +1772,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     satin = _satin_star_on_pleats(p, labels, tidy.parts)  # R59: a darker satin star on pleats of one group
     if satin is not None:
         tidy.parts = satin
+    _under_star_tips(tidy.parts, p, labels)  # R60: a star under a shorter star, its tips from its color runs
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower

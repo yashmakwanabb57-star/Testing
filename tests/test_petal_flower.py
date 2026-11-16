@@ -219,3 +219,38 @@ def test_r59_a_star_of_the_pleats_own_hue_stays():
     p, labels, parts, hr = _satin_star_photo()
     p.rgb[...] = np.where(p.rgb.sum(-1, keepdims=True) > 0, np.array(_hue_rgb(26), dtype=np.uint8), 0)
     assert _satin_star_on_pleats(p, labels, parts) is None
+
+
+def test_r60_a_star_under_a_shorter_star_takes_its_tips_from_its_color_runs():
+    # s39-15, the owner's check: the white star's tips reach 0.92 of the head, read at 0.79
+    from rosette.pipeline import _under_star_tips
+    h = w = 600
+    yy, xx = np.mgrid[:h, :w]
+    cx, cy, hr = 300.0, 230.0, 150.0
+    r = np.hypot(xx - cx, yy - cy)
+    th = np.degrees(np.arctan2(yy - cy, xx - cx))
+    mask = r <= hr
+    labels = np.full((h, w), -1, dtype=int)
+    labels[mask] = 0
+    phi = np.radians(th - 30)
+    white = mask & (r <= 0.45 * hr + (0.92 - 0.45) * hr * np.abs(np.cos(3 * phi)) ** 6)
+    labels[white] = 1
+    gold = mask & (r <= 0.45 * hr + (0.76 - 0.45) * hr * np.abs(np.cos(3 * np.radians(th))) ** 6)
+    labels[gold] = 2
+    p = SimpleNamespace(axis_x=cx, scale=1.0, mask=mask, head=(cx, cy, hr))
+    from rosette.vision.parts_common import Frame
+    geo = {"cx": 300.0, "cy": round(float(Frame.of(p).y(cy)), 3)}
+    under = Part("points-1", "points", dict(geo, kind="star", count=6, r_inner=0.4 * hr, r_outer=0.79 * hr, rotation_deg=30.0), 1, 20, 0.9)
+    top = Part("points-2", "points", dict(geo, kind="star", count=6, r_inner=0.38 * hr, r_outer=0.76 * hr, rotation_deg=0.0), 2, 21, 0.9)
+    parts = [Part("head", "head", dict(geo, r=hr), 0, 10, 0.9), under, top]
+    assert _under_star_tips(parts, p, labels)
+    assert abs(under.params["r_outer"] / hr - 0.92) < 0.03
+    assert top.params["r_outer"] == 0.76 * hr
+    assert under.params["r_inner"] == round(0.577 * under.params["r_outer"], 3)
+    assert top.params["r_inner"] == round(0.577 * top.params["r_outer"], 3)
+    ids = {q.id: q for q in parts}
+    yi, bi = ids["points-1-inner"], ids["points-2-inner"]  # a smaller star of each on top, in order
+    assert under.z < top.z < yi.z < bi.z and yi.color_group == 1 and bi.color_group == 2
+    assert abs(yi.params["r_outer"] - 0.80 * under.params["r_outer"]) < 0.01
+    assert abs(bi.params["r_outer"] - 0.77 * top.params["r_outer"]) < 0.01
+    assert yi.params["rotation_deg"] == under.params["rotation_deg"] and bi.params["rotation_deg"] == top.params["rotation_deg"]
