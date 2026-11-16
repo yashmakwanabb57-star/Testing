@@ -1992,6 +1992,54 @@ def _banded_cross_stars(parts: list) -> bool:
     return True
 
 
+# R67: eight points of a second color with a ring of a third color inside them and a center of the
+# head's color (S45-15: a light blue eight-point star round a glitter pleated ring, a light blue
+# ruffle and small glitter points round a blue rose; the star read as square loops). Designer S45-15
+# (head radii): the star tips 0.83, valleys 0.607 under the ring; the third color's pleated ring
+# 0.44-0.60; the second color's ruffle 0.27-0.44; a small eight-point star of the third color, tips
+# 0.424, valleys 0.25; the rose 0.269; upright as R62.
+RINGS_STAR = (0.83, 0.607)
+RINGS_OUTER = (0.44, 0.60)
+RINGS_INNER = (0.27, 0.44)
+RINGS_SMALL = (0.424, 0.25)
+RINGS_ROSE = 0.269
+
+
+def _star_round_rings(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    head = next((q for q in parts if q.role == "head"), None)
+    pts = [q for q in parts if q.role == "points"]
+    rings = [q for q in parts if q.role == "ring"]
+    c = next((q for q in parts if q.role == "center"), None)
+    if head is None or c is None or len(pts) != 1 or len(rings) != 1:
+        return False
+    star, ring = pts[0], rings[0]
+    g, y, x = head.color_group, star.color_group, ring.color_group
+    if int(star.params["count"]) != 8 or star.params.get(KEEP_PARAM) or len({g, y, x}) != 3 or c.color_group != g:
+        return False
+    if float(ring.params["r_outer"]) >= float(star.params["r_outer"]):
+        return False
+    hr = float(head.params["r"])
+    step = 45.0
+    rot = float(star.params["rotation_deg"])
+    snap = round(rot / (step / 2)) * (step / 2)
+    if abs(rot - snap) <= NESTED_SNAP_DEG:
+        rot = snap % step
+    geo = {"cx": head.params["cx"], "cy": head.params["cy"]}
+    star.params.update({"kind": "star", "r_outer": round(RINGS_STAR[0] * hr, 3), "r_inner": round(RINGS_STAR[1] * hr, 3),
+                        "rotation_deg": round(rot, 3), "tips": 1, KEEP_PARAM: 1})
+    star.params.pop("edge_width", None)
+    ring.params.update({"r_inner": round(RINGS_OUTER[0] * hr, 3), "r_outer": round(RINGS_OUTER[1] * hr, 3), "pinked": 1})
+    ring.z = 30
+    parts.append(Part("ring-inner", "ring", dict(geo, r_inner=round(RINGS_INNER[0] * hr, 3), r_outer=round(RINGS_INNER[1] * hr, 3),
+                                                 pinked=1), y, 31, 0.5))
+    parts.append(Part("points-small", "points", dict(geo, kind="star", count=8, r_outer=round(RINGS_SMALL[0] * hr, 3),
+                                                     r_inner=round(RINGS_SMALL[1] * hr, 3), rotation_deg=round(rot, 3),
+                                                     width_ratio=0.5, tips=1, **{KEEP_PARAM: 1}), x, 40, 0.5))
+    c.params["r"] = round(RINGS_ROSE * hr, 3)
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -2168,6 +2216,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     _star_under_petals(tidy.parts)  # R64: star tips round a ring of the head's color are a star under petals
     _loops_under_petals(tidy.parts)  # R65: loops round a ring of the head's color run in under petals
     _banded_cross_stars(tidy.parts)  # R66: banded four-point stars on the axes and the diagonals
+    _star_round_rings(tidy.parts)  # R67: an eight-point star round a ring of a third color, a ruffle, a small star
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower

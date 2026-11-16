@@ -506,3 +506,35 @@ def test_r66_needs_the_diagonal_layer():
     from rosette.pipeline import _banded_cross_stars
     parts = [q for q in _s44_parts() if q.id != "points-1"]
     assert not _banded_cross_stars(parts)
+
+
+def _s45_parts(hr=129.3):
+    geo = {"cx": 300.0, "cy": 154.7}
+    return [Part("head", "head", dict(geo, r=hr), 0, 10, 0.9),
+            Part("points-1", "points", dict(geo, kind="bow", count=8, r_inner=30.9, r_outer=101.5, rotation_deg=3.1,
+                                            width_ratio=0.5), 1, 20, 0.9),
+            Part("center", "center", dict(geo, r=37.5), 0, 50, 0.9),
+            Part("ring-0", "ring", dict(geo, r_inner=63.5, r_outer=75.5), 2, 30, 0.9)]
+
+
+def test_r67_an_eight_point_star_round_a_glitter_ring_a_ruffle_and_a_small_star():
+    # S45-15, the owner's check: light blue star, glitter pleated ring, light blue ruffle, small glitter star, blue rose
+    from rosette.pipeline import _star_round_rings
+    parts = _s45_parts()
+    assert _star_round_rings(parts)
+    ids = {q.id: q for q in parts}
+    hr = 129.3
+    big, rx, ry, small, c = ids["points-1"], ids["ring-0"], ids["ring-inner"], ids["points-small"], ids["center"]
+    assert big.params["kind"] == "star" and big.color_group == 1 and abs(big.params["r_outer"] / hr - 0.83) < 0.01
+    assert big.params["rotation_deg"] == 0.0 and abs(big.params["r_inner"] / hr - 0.607) < 0.01
+    assert rx.color_group == 2 and abs(rx.params["r_inner"] / hr - 0.44) < 0.01 and abs(rx.params["r_outer"] / hr - 0.6) < 0.01
+    assert ry.color_group == 1 and abs(ry.params["r_inner"] / hr - 0.27) < 0.01
+    assert small.color_group == 2 and small.params["count"] == 8 and abs(small.params["r_outer"] / hr - 0.424) < 0.01
+    assert big.z < rx.z < ry.z < small.z < c.z and c.color_group == 0 and abs(c.params["r"] / hr - 0.269) < 0.01
+
+
+def test_r67_needs_the_ring_of_a_third_color():
+    from rosette.pipeline import _star_round_rings
+    parts = _s45_parts()
+    parts[3].color_group = 1
+    assert not _star_round_rings(parts)
