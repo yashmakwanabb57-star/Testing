@@ -1145,6 +1145,52 @@ def _fill_badge(parts: list) -> bool:
     return True
 
 
+# R54: a plain badge (the outer star's color) inside two nested stars, with the band just outside
+# it mixed light and shade of the inner star's color and the badge's (S29-15: the pink pleats
+# round the wine badge read as pink and wine shade, half and half, so no ring was found). The
+# band is a pleated ring of the inner star's color from the badge out, on top of the stars; the
+# designer's scalloped ring there reaches 1.44 of the badge (S29-15), at most to the outer
+# star's valleys.
+BADGE_PLEATS = 1.44  # ring outer radius / badge radius (designer S29-15)
+PLEAT_BAND = 0.15  # band sampled outside the badge, in badge radii
+PLEAT_MIX = (0.3, 0.7)  # the inner star's share of that band: light and shade, not a flat body
+
+
+def _pleats_round_badge(parts: list, p, labels: np.ndarray) -> bool:
+    c = next((q for q in parts if q.role == "center"), None)
+    stars = [q for q in parts if q.role == "points" and q.params.get("kind") == "star"]
+    if c is None or len(stars) != 2 or any(q.role == "ring" for q in parts):
+        return False
+    if len([q for q in parts if q.role == "points"]) - len(stars) > 2:
+        return False
+    outer, inner = sorted(stars, key=lambda q: -float(q.params["r_outer"]))
+    if int(outer.params["count"]) != int(inner.params["count"]):
+        return False
+    if c.color_group != outer.color_group or inner.color_group == c.color_group:
+        return False
+    rc = float(c.params["r"])
+    r1 = min((1.0 + PLEAT_BAND) * rc, float(inner.params["r_inner"]))
+    if r1 - rc < 2.0:
+        return False
+    fr = Frame.of(p)
+    cx = p.axis_x + (float(c.params["cx"]) - 300.0) * fr.scale
+    cy = fr.py(float(c.params["cy"]))
+    radii = np.arange(rc + 1.0, r1, 1.0) * fr.scale
+    from .vision.parts_common import polar_sample
+    v = polar_sample(labels, cx, cy, radii, 360).ravel()
+    v = v[(v == inner.color_group) | (v == c.color_group)]
+    if v.size == 0:
+        return False
+    share = float((v == inner.color_group).mean())
+    if not PLEAT_MIX[0] <= share <= PLEAT_MIX[1]:
+        return False
+    ro = min(BADGE_PLEATS * rc, float(outer.params["r_inner"]))
+    parts.append(Part("ring-pleats", "ring", {"cx": c.params["cx"], "cy": c.params["cy"], "r_inner": round(rc, 3),
+                                              "r_outer": round(ro, 3), "pinked": 1},
+                      inner.color_group, 30, 0.5))
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -1298,6 +1344,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
         tidy.parts = square
     parts = tidy.parts
     _fill_badge(parts)  # R49: a speck of center inside a ring of its color is the badge
+    _pleats_round_badge(parts, p, labels)  # R54: pleats round a badge read as light and shade
     badge = badge_in_pleats(p, parts)  # R31: a badge inside pleats of its own color
     if badge is not None:
         parts = badge
