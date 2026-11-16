@@ -167,6 +167,28 @@ def split_arms(cx: float, cy: float, count: int, r_tip: float, axis_deg: float, 
     return out
 
 
+def chevrons(cx: float, cy: float, count: int, r_tip: float, length: float, half: float, r_notch: float,
+             rotation_deg: float) -> list[Shape]:
+    """One folded point per axis (rotation_deg + k * 360 / count), as designer S68-19 draws its folds (R74):
+    a V from the tip, its arms ending `length` down the axis `half` off it and cut square to the arm, its
+    inner edge parallel to the outer one from the notch on the axis at r_notch, where the next fold's tip
+    sits (the folds of a point are one V moved along the axis). r_notch 0: the innermost fold, a triangle."""
+    T, A = (r_tip, 0.0), (r_tip - length, half)
+    if r_notch > 0:
+        n = math.hypot(length, half)
+        ux, uy = -length / n, half / n  # along the arm, tip to end
+        w = (r_tip - r_notch) * uy  # the strip between the outer edge and its parallel through the notch
+        I = (A[0] - uy * w, A[1] + ux * w)  # square across the arm, toward the axis
+        side = [T, A, I, (r_notch, 0.0), (I[0], -I[1]), (A[0], -A[1])]
+    else:
+        side = [T, A, (A[0], -A[1])]
+    out = []
+    for k in range(count):
+        th = rotation_deg + 360.0 * k / count
+        out.append(Shape("polygon", {"points": points_attr([_to_world(cx, cy, th, r, l) for r, l in side])}, None))
+    return out
+
+
 def points_ring(cx: float, cy: float, kind: Literal["star", "diamond", "bow", "petal"],
                 count: int, r_inner: float, r_outer: float,
                 rotation_deg: float, width_ratio: float, inner_ratio: float | None = None,

@@ -76,9 +76,13 @@ only give proportions for parts the photo cannot show, for example hidden star v
   - 72 S69-19 - owner-approved after a fix: six loops round chevron stars and a top star, no head disc, are the
     designer's stack: back and middle star, loops edged in the middle color, the top star over the loops, upright
     (R73; only S69-19). 0.972 -> 0.982, head 0.780 -> 0.790.
+  - 71 S68-19 - owner-approved after a fix: a head read as a plain disc whose colors swing four times (the head's,
+    the diagonals), twice (one axis), eight times (glitter pairs) is the designer's folded points: each point one V
+    fold moved along the axis (new `chevron` kind), glitter pairs under the diagonals, the axes on top, a badge;
+    R40 skips parts built whole (R74; only S68-19). Color 0.966 -> 1.000.
   - Open (need new reading, not done):
     57 S5-15 (cross loops), 58 S52-19 (layered loops), 63 S57-17 (0.857),
-    65 S59-17 (0.876), 71 S68-19 (head drawn as a plain disc), 75 S8-15 (star around the rose read as
+    65 S59-17 (0.876), 75 S8-15 (star around the rose read as
     loops, 0.640).
 - Next (owner, at the office): verify Claude's work from line 56 (S51-19) one photo at a time with the
   normal loop below (show photo | ours | designer, wait for "works next" or a fix request). Then the open
@@ -95,7 +99,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
 4. Owner says "works next" -> commit, then the next photo. "not works fix" or a specific
    remark -> fix, re-render, show again.
 5. Fix as a narrow, numbered rule (R-number in a comment, constants named, designer
-   proportions cited). Latest rule: R73 (`rosette/pipeline.py` `_loops_under_top_star`).
+   proportions cited). Latest rule: R74 (`rosette/vision/folded_points.py` `folded_points`).
 6. Before showing a fix: check which of the 76 photos the rule fires on
    (`.venv/Scripts/python.exe tools/review_fire.py <rule function>` or `--part <part id>`), and compare scores
    before/after (`git stash` baseline) for those photos. Narrow the rule until no other photo

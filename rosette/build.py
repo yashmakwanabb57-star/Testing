@@ -8,7 +8,7 @@ from shapely import LineString, Polygon, make_valid, set_precision, unary_union
 from shapely.affinity import affine_transform
 
 from .geometry import disc, outlines, pinked_circle, pinked_ring, place_rose, points_ring, ring, tails
-from .geometry.points import split_arms
+from .geometry.points import chevrons, split_arms
 from .geometry.clip import SIMPLIFY, clip_occluded, clip_visible, from_geom, to_geom, xor_all
 from .model import Part, RosetteModel
 from .shapes import Shape
@@ -267,6 +267,9 @@ def color_shapes(model: RosetteModel) -> list[tuple[Shape, Part]]:
         elif p.role == "ring":
             ring_of = pinked_ring if int(q.get("pinked", 0)) else ring
             finish(p, [ring_of(q["cx"], q["cy"], q["r_outer"], q["r_inner"])])
+        elif p.role == "points" and q.get("kind") == "chevron":  # R74
+            finish(p, chevrons(q["cx"], q["cy"], int(q["count"]), q["r_outer"], q["r_outer"] - q["r_inner"],
+                               q["fold_half"], q.get("fold_notch", 0.0), q["rotation_deg"]))
         elif p.role == "points" and q.get("kind") == "split_arm":  # R70
             finish(p, split_arms(q["cx"], q["cy"], int(q["count"]), q["r_outer"], q["axis_deg"], int(q["side"])))
         elif p.role == "points":

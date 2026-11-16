@@ -1373,16 +1373,20 @@ def _badge_under_loops(parts: list[Part], p: Prepared | None = None, labels: np.
 # bases tucked under the center: the set in the pleats' color on top, the other under it, and the center a disc in the color the photo shows
 # inside them, out to where they start.
 TWIN_AXIS_DEG, TWIN_START_UNITS = 6.0, 3.0
+TWIN_SKIP_KEPT = True  # parts built whole by a rule (R74's folds) are not twin kites
 
 
 def _twin_points(parts: list[Part], p: Prepared, labels: np.ndarray) -> bool:
     """R40: interleaved kite pairs on the center become two sets of leaves (in place)."""
+    from rosette.vision.layer_classify import KEEP_PARAM  # layer_classify imports this module
     kites = [q for q in parts if q.role == "points" and q.params.get("kind") in ("diamond", "star")
              and q.params.get("edge_width") is None and not q.params.get("leaf")]
     for a in kites:
         for b in kites:
             if (a is b or a.color_group == b.color_group or int(a.params["count"]) != int(b.params["count"])
                     or "diamond" not in (a.params["kind"], b.params["kind"])):
+                continue
+            if TWIN_SKIP_KEPT and (a.params.get(KEEP_PARAM) or b.params.get(KEEP_PARAM)):
                 continue
             n = int(a.params["count"])
             step = 360.0 / n

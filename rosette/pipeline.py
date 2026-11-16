@@ -52,6 +52,7 @@ from .vision import groups as vgroups
 from .vision import judge as vjudge
 from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_groups
 from .vision.one_color import ONE_COLOR_INFO, badge_in_pleats, rose_center
+from .vision.folded_points import folded_points
 from .vision.stacked_stars import edged_star_between_bows, stacked_stars, star_on_square
 from .vision.shaded_rings import HUE_INFO, dark_loop_edges, shaded_rings
 from .vision.parts_head import _badge_under_loops, _loops_on_rim, _petals_between_loops, _twin_points
@@ -2586,6 +2587,9 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     _star_on_pleated_ring(tidy.parts)  # R71: a twelve-point star on a pleated ring, its tips at the rim
     _loops_in_chevron_stars(tidy.parts)  # R72: edged loops between chevron stars round a pleated ring
     _loops_under_top_star(tidy.parts)  # R73: edged loops between chevron stars and a top star, no head disc
+    folded = folded_points(p, labels, tidy.parts)  # R74: a head of folded points in four colors
+    if folded is not None:
+        tidy.parts = folded
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower
