@@ -73,6 +73,9 @@ only give proportions for parts the photo cannot show, for example hidden star v
   - 73 S70-19 - owner-approved after a fix: six loops between chevron stars (outer and inner of one color, the
     head's color between) round a pleated ring are the designer's stack: stars upright, loops edged in the head's
     color, the designer's radii (R72; only S70-19). 0.980 -> 0.993.
+  - 72 S69-19 - owner-approved after a fix: six loops round chevron stars and a top star, no head disc, are the
+    designer's stack: back and middle star, loops edged in the middle color, the top star over the loops, upright
+    (R73; only S69-19). 0.972 -> 0.982, head 0.780 -> 0.790.
   - Open (need new reading, not done):
     57 S5-15 (cross loops), 58 S52-19 (layered loops), 63 S57-17 (0.857),
     65 S59-17 (0.876), 71 S68-19 (head drawn as a plain disc), 75 S8-15 (star around the rose read as
@@ -92,7 +95,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
 4. Owner says "works next" -> commit, then the next photo. "not works fix" or a specific
    remark -> fix, re-render, show again.
 5. Fix as a narrow, numbered rule (R-number in a comment, constants named, designer
-   proportions cited). Latest rule: R72 (`rosette/pipeline.py` `_loops_in_chevron_stars`).
+   proportions cited). Latest rule: R73 (`rosette/pipeline.py` `_loops_under_top_star`).
 6. Before showing a fix: check which of the 76 photos the rule fires on
    (`.venv/Scripts/python.exe tools/review_fire.py <rule function>` or `--part <part id>`), and compare scores
    before/after (`git stash` baseline) for those photos. Narrow the rule until no other photo

@@ -2348,6 +2348,61 @@ def _loops_in_chevron_stars(parts: list) -> bool:
     return True
 
 
+# R73: six loops round three six-point layers and no head disc, the outer and the top layer of one color, the
+# middle one of another, round a ring of that other color on a center of the first (S69-19: navy chevron stars
+# edged in white, horse-print loops edged in white, a navy star on top, a white ruffle round the badge; read
+# as diamonds with the loops on top). Designer S69-19 measured along rays (the back star's tip = 1), bottom
+# to top: the back star 1.0, the middle star 0.90, the loops 0.48-0.90 edged in the middle color (0.1 of
+# their width), the top star 0.815 over the loops, the ruffle 0.29-0.44, the center 0.29. The valleys are
+# hidden (under the loops or the ruffle): half-widths as the designer (back 6.5 deg at 0.85, middle 8.5 deg
+# at 0.73, top 26 deg at 0.5).
+TRI_TIPS = (1.0, 0.90, 0.815)  # back, middle, top star
+TRI_VALLEYS = (0.60, 0.55, 0.48)
+TRI_LOOPS = (0.48, 0.90, 0.1)  # inner, outer, edge share of the width
+TRI_RUFFLE = (0.29, 0.44)
+
+
+def _loops_under_top_star(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    if any(q.role == "head" for q in parts):
+        return False
+    c = next((q for q in parts if q.role == "center"), None)
+    pts = [q for q in parts if q.role == "points"]
+    rings = [q for q in parts if q.role == "ring"]
+    if c is None or len(pts) != 4 or len(rings) != 1 or any(q.params.get(KEEP_PARAM) for q in pts):
+        return False
+    bows = [q for q in pts if q.params.get("kind") == "bow"]
+    stars = sorted((q for q in pts if q.params.get("kind") in ("star", "diamond")),
+                   key=lambda q: -float(q.params["r_outer"]))
+    if len(bows) != 1 or len(stars) != 3 or any(int(q.params["count"]) != 6 for q in pts):
+        return False
+    bow = bows[0]
+    a, b = stars[0].color_group, stars[1].color_group
+    if [q.color_group for q in stars] != [a, b, a] or a == b or bow.color_group in (a, b):
+        return False
+    if rings[0].color_group != b or c.color_group != a:
+        return False
+    off = (float(stars[0].params["rotation_deg"]) - float(bow.params["rotation_deg"])) % 60.0
+    if abs(off - 30.0) > CHEVRON_PHASE_TOL:
+        return False
+    u = float(stars[0].params["r_outer"])
+    up = (float(stars[0].params["rotation_deg"]) + 90.0 + 30.0) % 60.0 - 30.0
+    srot = 30.0 if abs(up) <= CHEVRON_UPRIGHT_TOL else float(stars[0].params["rotation_deg"])
+    for q, tip, v, z in zip(stars, TRI_TIPS, TRI_VALLEYS, (20, 21, 23)):
+        q.params.update(kind="star", r_outer=round(tip * u, 3), r_inner=round(v * u, 3), rotation_deg=srot,
+                        width_ratio=0.5, tips=1, **{KEEP_PARAM: 1})
+        q.z = z
+    ri, ro = TRI_LOOPS[0] * u, TRI_LOOPS[1] * u
+    w = float(bow.params["width_ratio"]) * (float(bow.params["r_outer"]) - float(bow.params["r_inner"]))
+    bow.params.update(r_inner=round(ri, 3), r_outer=round(ro, 3), rotation_deg=round((srot + 30.0) % 60.0, 3),
+                      width_ratio=round(w / (ro - ri), 4), tips=1, **{KEEP_PARAM: 1})
+    bow.z = 22
+    parts.append(Part(f"edge-{bow.id}", "points", dict(bow.params, edge_width=round(TRI_LOOPS[2] * w, 3)), b, 22, 0.5))
+    rings[0].params.update(r_inner=round(TRI_RUFFLE[0] * u, 3), r_outer=round(TRI_RUFFLE[1] * u, 3))
+    c.params["r"] = round(TRI_RUFFLE[0] * u, 3)
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -2530,6 +2585,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     _split_star_flower(tidy.parts)  # R70: two banded stars 30 degrees apart under squares and a star
     _star_on_pleated_ring(tidy.parts)  # R71: a twelve-point star on a pleated ring, its tips at the rim
     _loops_in_chevron_stars(tidy.parts)  # R72: edged loops between chevron stars round a pleated ring
+    _loops_under_top_star(tidy.parts)  # R73: edged loops between chevron stars and a top star, no head disc
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower
