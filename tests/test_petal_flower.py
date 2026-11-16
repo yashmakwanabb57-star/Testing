@@ -306,3 +306,36 @@ def test_r61_needs_a_satin_hue_between_the_points():
     p, labels, parts, hr = _s40_photo()
     p.rgb[...] = np.where(p.rgb.sum(-1, keepdims=True) > 100, np.array(_hue_rgb(21, 222), dtype=np.uint8), p.rgb)
     assert _satin_star_third_color(p, labels, parts) is None
+
+
+def _s41_parts(hr=155.0):
+    geo = {"cx": 300.0, "cy": 180.0}
+    return [Part("head", "head", dict(geo, r=hr), 0, 10, 0.9),
+            Part("points-1", "points", dict(geo, kind="star", count=6, r_inner=77.5, r_outer=112.5, rotation_deg=57.3), 2, 20, 0.9),
+            Part("front-2", "points", dict(geo, kind="star", count=6, r_inner=62.5, r_outer=82.5, rotation_deg=25.3), 0, 22, 0.9),
+            Part("front-3", "points", dict(geo, kind="star", count=6, r_inner=62.5, r_outer=116.5, rotation_deg=25.3), 1, 21, 0.9),
+            Part("center", "center", dict(geo, r=44.5), 1, 50, 0.9),
+            Part("ring-0", "ring", dict(geo, r_inner=44.5, r_outer=63.5), 0, 30, 0.9)]
+
+
+def test_r62_three_nested_stars_stack_as_the_designer():
+    # S41-15, the owner's check: white star, glitter star on it, a wine star of the pleats' color on top
+    from rosette.pipeline import _three_nested_stars
+    from rosette.vision.layer_classify import KEEP_PARAM
+    parts = _s41_parts()
+    assert _three_nested_stars(parts)
+    ids = {q.id: q for q in parts}
+    white, glit, wine = ids["front-3"], ids["points-1"], ids["front-2"]
+    assert white.z < glit.z < wine.z < ids["center"].z
+    assert [round(q.params["r_outer"] / 155.0, 2) for q in (white, glit, wine)] == [0.91, 0.8, 0.67]
+    assert all(q.params["r_inner"] == round(0.577 * q.params["r_outer"], 3) for q in (white, glit, wine))
+    assert all(q.params[KEEP_PARAM] == 1 and q.params["tips"] == 1 for q in (white, glit, wine))
+    assert "ring-0" not in ids and ids["center"].params["r"] == round(0.34 * 155.0, 3)
+    assert white.params["rotation_deg"] == 30.0 and wine.params["rotation_deg"] == 30.0 and glit.params["rotation_deg"] == 0.0
+
+
+def test_r62_needs_two_stars_on_one_axis_and_one_half_a_step_off():
+    from rosette.pipeline import _three_nested_stars
+    parts = _s41_parts()
+    parts[1].params["rotation_deg"] = 25.3  # all three on one axis
+    assert not _three_nested_stars(parts)

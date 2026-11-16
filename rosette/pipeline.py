@@ -1677,6 +1677,64 @@ def _satin_star_third_color(p, labels: np.ndarray, parts: list) -> list | None:
     return out
 
 
+# R62: three stars of one count: two on one axis, one of the head's color and one of another, and a
+# third color half a step off (S41-15: a white star, pink glitter points between its points, a wine
+# star of the pleats' color round the badge; the glitter read under the white, the wine star's body
+# as a pleated ring). Designer S41-15, bottom to top: the other color's star (tips 0.91 of the
+# head), the half-step star (0.80), the head color's star (0.67), all hexagrams, no ring, the
+# center 0.34 (the owner's check).
+NESTED_TIPS = (0.91, 0.80, 0.67)
+NESTED_CENTER = 0.34
+NESTED_AXIS_DEG = 8.0
+NESTED_SNAP_DEG = 6.0  # the stars stand upright: angles within this of the half-step grid snap to it
+
+
+def _three_nested_stars(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    head = next((q for q in parts if q.role == "head"), None)
+    pts = [q for q in parts if q.role == "points"]
+    if head is None or len(pts) != 3 or any(q.params.get("kind") not in ("star", "diamond", "petal") for q in pts):
+        return False
+    n = int(pts[0].params["count"])
+    if any(int(q.params["count"]) != n for q in pts) or len({q.color_group for q in pts}) != 3:
+        return False
+    step = 360.0 / n
+
+    def off(a, b):
+        d = (float(a.params["rotation_deg"]) - float(b.params["rotation_deg"])) % step
+        return min(d, step - d)
+    inner = next((q for q in pts if q.color_group == head.color_group), None)
+    if inner is None:
+        return False
+    rest = [q for q in pts if q is not inner]
+    same = [q for q in rest if off(q, inner) <= NESTED_AXIS_DEG]
+    half = [q for q in rest if abs(off(q, inner) - step / 2) <= NESTED_AXIS_DEG]
+    if len(same) != 1 or len(half) != 1:
+        return False
+    outer, mid = same[0], half[0]
+    hr = float(head.params["r"])
+    z0 = min(q.z for q in pts)
+    half_step = step / 2
+    for q in pts:  # the photo's slight tilt (S41-15: 25.3 for 30): upright as the designer draws them
+        rot = float(q.params["rotation_deg"])
+        snap = round(rot / half_step) * half_step
+        if abs(rot - snap) <= NESTED_SNAP_DEG:
+            q.params["rotation_deg"] = round(snap % step, 3)
+    for k, (q, tip) in enumerate(zip((outer, mid, inner), NESTED_TIPS)):
+        ro = tip * hr
+        q.params.update({"kind": "star", "r_outer": round(ro, 3), "r_inner": round(UNDER_VALLEY * ro, 3),
+                         "tips": 1, KEEP_PARAM: 1})
+        q.params.pop("edge_width", None)
+        q.z = z0 + k
+    rim = NESTED_TIPS[2] * hr
+    parts[:] = [q for q in parts if not (q.role == "ring" and q.color_group == head.color_group
+                                         and float(q.params["r_outer"]) <= rim)]
+    c = next((q for q in parts if q.role == "center"), None)
+    if c is not None:
+        c.params["r"] = round(max(float(c.params["r"]), NESTED_CENTER * hr), 3)
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -1846,6 +1904,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     third = _satin_star_third_color(p, labels, tidy.parts)  # R61: glitter points between satin points of a third color
     if third is not None:
         tidy.parts = third
+    _three_nested_stars(tidy.parts)  # R62: three stars of one count, nested as the designer stacks them
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower
