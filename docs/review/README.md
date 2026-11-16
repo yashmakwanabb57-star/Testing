@@ -38,7 +38,9 @@ only give proportions for parts the photo cannot show, for example hidden star v
     54 S48-17 (stacked stars, 0.672), 57 S5-15 (cross loops), 58 S52-19 (layered loops), 63 S57-17 (0.857),
     65 S59-17 (0.876), 71 S68-19 (head drawn as a plain disc), 75 S8-15 (star around the rose read as
     loops, 0.640), and 43 S38-15 above.
-- Next: the open list above, starting with the worst (S8-15, s44-15, S48-17, S68-19, S4-15).
+- Next (owner, at the office): verify Claude's work from line 31 (S28-15) one photo at a time with the
+  normal loop below (show photo | ours | designer, wait for "works next" or a fix request). Then the open
+  list above, worst first (S8-15, s44-15, S48-17, S68-19, S4-15).
 - Update this section after each photo.
 
 ## Loop for one photo
