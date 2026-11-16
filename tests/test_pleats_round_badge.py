@@ -69,3 +69,36 @@ def test_r42_long_star_under_its_body_ring_goes_to_the_bottom_and_is_kept():
     z = long_.z
     _long_star_under(parts, long_)  # already at the bottom: stays
     assert long_.z == z
+
+
+def test_r55_points_between_an_edged_star_go_under_the_star():
+    # s34-15, the owner's check: bottom to top the lavender edge star, the black points, the white star
+    from rosette.pipeline import _points_under_edged_star
+    geo = {"cx": 300.0, "cy": 200.0}
+    star = Part("points-0", "points", dict(geo, kind="star", count=6, r_inner=92.5, r_outer=135.5, rotation_deg=32.6), 1, 21, 0.9)
+    pts = Part("points-1", "points", dict(geo, kind="diamond", count=6, r_inner=41.5, r_outer=139.5, rotation_deg=2.2), 2, 22, 0.9)
+    edge = Part("points-2", "points", dict(geo, kind="star", count=6, r_inner=92.5, r_outer=158.5, rotation_deg=32.6), 0, 20, 0.9)
+    parts = [star, pts, edge]
+    assert _points_under_edged_star(parts)
+    assert edge.z < pts.z < star.z
+    assert star.params["r_inner"] == round(92.5 * 135.5 / 158.5, 3)  # the edge star scaled down
+    assert not _points_under_edged_star(parts)  # already in order: no change
+
+
+def test_r55_leaves_loops_and_stars_between():
+    from rosette.pipeline import _points_under_edged_star
+    geo = {"cx": 300.0, "cy": 200.0}
+    for kind in ("bow", "star", "petal"):
+        star = Part("points-0", "points", dict(geo, kind="star", count=6, r_inner=92.5, r_outer=135.5, rotation_deg=32.6), 1, 21, 0.9)
+        mid = Part("points-1", "points", dict(geo, kind=kind, count=6, r_inner=41.5, r_outer=139.5, rotation_deg=2.2), 2, 22, 0.9)
+        edge = Part("points-2", "points", dict(geo, kind="star", count=6, r_inner=92.5, r_outer=158.5, rotation_deg=32.6), 0, 20, 0.9)
+        assert not _points_under_edged_star([star, mid, edge])
+
+
+def test_r55_needs_the_edge_star():
+    from rosette.pipeline import _points_under_edged_star
+    geo = {"cx": 300.0, "cy": 200.0}
+    star = Part("points-0", "points", dict(geo, kind="star", count=6, r_inner=92.5, r_outer=135.5, rotation_deg=32.6), 1, 21, 0.9)
+    pts = Part("points-1", "points", dict(geo, kind="diamond", count=6, r_inner=41.5, r_outer=139.5, rotation_deg=2.2), 2, 22, 0.9)
+    assert not _points_under_edged_star([star, pts])
+    assert pts.z == 22

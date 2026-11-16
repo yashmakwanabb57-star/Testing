@@ -1191,6 +1191,51 @@ def _pleats_round_badge(parts: list, p, labels: np.ndarray) -> bool:
     return True
 
 
+# R55: a star laid on a longer star of its count and axes in another color (its edge) with a
+# third points layer of that count half a step off on top of it (s34-15: black glitter kites
+# over the white star edged lavender). The third layer lies between the edge and the star:
+# only its tips show between the star's points (the owner's check of s34-15, as the designer),
+# and the star is the edge star scaled down (its valleys in by the same share as its tips), so
+# the edge shows as an even border (the owner's check of s34-15). Kites only, and no layer
+# read from tips (S17-15's stacked stars, S26-15's loops keep their order).
+EDGE_STAR_AXES_DEG = 3.0  # star and edge star on the same axes
+EDGE_STAR_INNER = 0.05  # and the same valleys, within this share of the radius
+HALF_STEP_DEG = 8.0  # the third layer half a step off, within this
+
+
+def _points_under_edged_star(parts: list) -> bool:
+    pts = [q for q in parts if q.role == "points"]
+    stars = [q for q in pts if q.params.get("kind") == "star"]
+    for star in stars:
+        n = int(star.params["count"])
+        step = 360.0 / n
+        rot = float(star.params["rotation_deg"])
+        edge = next((e for e in stars if e is not star and int(e.params["count"]) == n
+                     and e.color_group != star.color_group
+                     and float(e.params["r_outer"]) > float(star.params["r_outer"])
+                     and abs(((float(e.params["rotation_deg"]) - rot + step / 2) % step) - step / 2) <= EDGE_STAR_AXES_DEG
+                     and abs(float(e.params["r_inner"]) - float(star.params["r_inner"]))
+                     <= EDGE_STAR_INNER * float(star.params["r_outer"])), None)
+        if edge is None:
+            continue
+        if star.params.get("tips") or edge.params.get("tips"):
+            continue
+        mid = [q for q in pts if q is not star and q is not edge and int(q.params["count"]) == n
+               and q.params.get("kind") == "diamond" and not q.params.get("tips")
+               and q.color_group not in (star.color_group, edge.color_group)
+               and abs(((float(q.params["rotation_deg"]) - rot) % step) - step / 2) <= HALF_STEP_DEG]
+        if len(mid) != 1 or edge.z < mid[0].z < star.z:
+            continue
+        lo, md, hi = sorted((edge.z, mid[0].z, star.z))
+        if md == lo or md == hi:  # make room: three distinct levels
+            md, hi = lo + 1, max(hi, lo + 2)
+        edge.z, mid[0].z, star.z = lo, md, hi
+        star.params["r_inner"] = round(float(edge.params["r_inner"]) * float(star.params["r_outer"])
+                                       / float(edge.params["r_outer"]), 3)
+        return True
+    return False
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -1389,6 +1434,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     _star_as_loops(out.parts)  # R47: a blunt star between loops of its count is loops too
     _taper_edged_bows(out.parts)  # R45: loops edged by a wider loop narrow toward the center
     _petals_between_loops(out.parts)  # R36: petals on top of loops (final stacking known here)
+    _points_under_edged_star(out.parts)  # R55: points half a step off an edged star go under it
     _badge_under_loops(out.parts, p, labels)  # R39: a badge inside loops, read as print
     if _loops_on_rim(out.parts, p, labels, out.groups):  # R41: loops on a dark rim, star between
         out.rose = True
