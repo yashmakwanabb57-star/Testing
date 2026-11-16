@@ -1255,12 +1255,41 @@ FLOWER_START = 0.85  # petals start at this share of the rose radius: their base
 FLOWER_ROSE = 2.55  # tip radius / rose radius (designer S36-15)
 
 
+# R57: as R56, but the petals alternate two colors and the rose has the color of one set, joined
+# to those petals (S36-15B: red and white petals round a red rose). The flower's middle is the
+# center of the largest circle inside the head's outline (above the tails); each lobe's color is
+# read along its axis; two sets of n / 2 petals half a step apart, the set of the rose's color
+# underneath (designer S36-15B: its second color's petals on top).
+ROSE_COMPACT = 0.6  # rose area / circle through its farthest pixel at least (a rose, not petals)
+LOBE_COLOR = (0.45, 0.75)  # a lobe's color read along its axis between these shares of the reach
+LOBE_SHARE = 0.6  # that color's share there at least
+ROSE_SAMPLE = 0.25  # the rose's color read within this share of the reach
+
+
+def _flower_lobes(p, mx: float, my: float, r: float):
+    """(count, tip angle, reach in px, profile window ok) of the outline round (mx, my), or None."""
+    from .vision.parts_common import polar_sample
+    radii = np.arange(0.0, 1.6 * r, 1.0)
+    m = polar_sample(p.mask.astype(np.int32), mx, my, radii, 360, fill=0)
+    prof = np.array([radii[np.flatnonzero(m[:, j])].max() if m[:, j].any() else 0.0 for j in range(360)])
+    th = np.radians(np.arange(360.0))
+    win = np.abs(np.degrees(th) - 90.0) > FLOWER_TAILS_DEG
+    pw, tw = prof[win], th[win]
+    if pw.max() <= 0 or (pw.max() - pw.min()) / pw.max() < FLOWER_DEPTH:
+        return None
+    x = pw - pw.mean()
+    spec = {n: np.sum(x * np.exp(-1j * n * tw)) for n in FLOWER_COUNTS}
+    mags = sorted((abs(v), n) for n, v in spec.items())
+    if mags[-1][0] < FLOWER_PEAK * mags[-2][0]:
+        return None
+    n = mags[-1][1]
+    return n, (float(np.degrees(np.angle(spec[n]))) / n) % (360.0 / n), float(np.percentile(pw, 95))
+
+
 def _petal_flower(p, labels: np.ndarray, parts: list) -> list | None:
     if any(q.role in ("points", "template") for q in parts):
         return None
     from scipy import ndimage
-    from .vision.layer_classify import KEEP_PARAM
-    from .vision.parts_common import polar_sample
     cx, cy, r = (float(v) for v in p.head)
     h, w = labels.shape
     yy, xx = np.mgrid[:h, :w]
@@ -1276,36 +1305,63 @@ def _petal_flower(p, labels: np.ndarray, parts: list) -> list | None:
             if xs.size < FLOWER_ROSE_MIN * np.pi * r * r:
                 continue
             mx, my = xs.mean(), ys.mean()
+            far = float(np.hypot(xs - mx, ys - my).max())
+            if xs.size < ROSE_COMPACT * np.pi * far * far:
+                continue  # petals joined to a rose (R57), not a rose
             d = np.hypot(mx - cx, my - cy)
             if rose is None or d < rose[0]:
-                rose = (d, mx, my, float(np.sqrt(xs.size / np.pi)), g)
-    if rose is None:
-        return None
-    _, mx, my, rr, rose_g = rose
-    radii = np.arange(0.0, 1.6 * r, 1.0)
-    m = polar_sample(p.mask.astype(np.int32), mx, my, radii, 360, fill=0)
-    prof = np.array([radii[np.flatnonzero(m[:, j])].max() if m[:, j].any() else 0.0 for j in range(360)])
-    th = np.radians(np.arange(360.0))
-    win = np.abs(np.degrees(th) - 90.0) > FLOWER_TAILS_DEG
-    pw, tw = prof[win], th[win]
-    if pw.max() <= 0 or (pw.max() - pw.min()) / pw.max() < FLOWER_DEPTH:
-        return None
-    x = pw - pw.mean()
-    spec = {n: np.sum(x * np.exp(-1j * n * tw)) for n in FLOWER_COUNTS}
-    mags = sorted((abs(v), n) for n, v in spec.items())
-    if mags[-1][0] < FLOWER_PEAK * mags[-2][0]:
-        return None
-    n = mags[-1][1]
-    rot = (float(np.degrees(np.angle(spec[n]))) / n) % (360.0 / n)
+                rose = (d, mx, my, g)
+    lobes = None
+    if rose is not None:  # R56: one color round a rose of its own
+        _, mx, my, rose_g = rose
+        lobes = _flower_lobes(p, mx, my, r)
+    if lobes is not None:
+        n, rot, reach = lobes
+        sets = [(head_g, n, rot)]
+    else:  # R57: two colors alternating, the rose joined to one set
+        dt = ndimage.distance_transform_edt(p.mask[: int(cy + 0.2 * r)])
+        my, mx = (float(v) for v in np.unravel_index(np.argmax(dt), dt.shape))
+        lobes = _flower_lobes(p, mx, my, r)
+        if lobes is None or lobes[0] % 2:
+            return None
+        n, rot, reach = lobes
+        from .vision.parts_common import polar_sample
+        radii = np.arange(LOBE_COLOR[0] * reach, LOBE_COLOR[1] * reach, 1.0)
+        cols = []
+        for k in range(n):
+            a = np.radians(rot + 360.0 * k / n)
+            v = labels[np.clip(np.rint(my + radii * np.sin(a)).astype(int), 0, h - 1),
+                       np.clip(np.rint(mx + radii * np.cos(a)).astype(int), 0, w - 1)]
+            v = v[v >= 0]
+            if v.size == 0:
+                return None
+            g = int(np.bincount(v).argmax())
+            if (v == g).mean() < LOBE_SHARE:
+                return None
+            cols.append(g)
+        a_g, b_g = cols[0], cols[1]
+        if a_g == b_g or any(c != (a_g, b_g)[k % 2] for k, c in enumerate(cols)):
+            return None
+        v = polar_sample(labels, mx, my, np.arange(1.0, ROSE_SAMPLE * reach, 1.0), 72).ravel()
+        v = v[v >= 0]
+        if v.size == 0:
+            return None
+        rose_g = int(np.bincount(v).argmax())
+        step = 360.0 / n
+        sets = [(a_g, n // 2, rot), (b_g, n // 2, (rot + step) % (2 * step))]
+        sets.sort(key=lambda t: t[0] != rose_g)  # the rose's color underneath
+    from .vision.layer_classify import KEEP_PARAM
     fr = Frame.of(p)
     ccx, ccy = round(float(fr.x(mx)), 3), round(float(fr.y(my)), 3)
-    ro = float(np.percentile(pw, 95)) / fr.scale
+    ro = reach / fr.scale
     ri = FLOWER_START * ro / FLOWER_ROSE
     out = [q for q in parts if q.role not in ("unknown", "ring", "center", "head")]
-    out.append(Part("points-petals", "points", {"cx": ccx, "cy": ccy, "kind": "petal", "count": n,
-                                                "r_inner": round(ri, 3), "r_outer": round(ro, 3),
-                                                "rotation_deg": round(rot, 3), "width_ratio": FLOWER_WIDTH,
-                                                "flower": 1, "tips": 1, KEEP_PARAM: 1}, head_g, 20, 0.6))
+    for k, (g, cnt, rt) in enumerate(sets):
+        pid = "points-petals" if len(sets) == 1 else f"points-petals-{k}"
+        out.append(Part(pid, "points", {"cx": ccx, "cy": ccy, "kind": "petal", "count": cnt,
+                                        "r_inner": round(ri, 3), "r_outer": round(ro, 3),
+                                        "rotation_deg": round(rt, 3), "width_ratio": FLOWER_WIDTH,
+                                        "flower": 1, "tips": 1, KEEP_PARAM: 1}, g, 20 + k, 0.6))
     out.append(Part("center", "center", {"cx": ccx, "cy": ccy, "r": round(ro / FLOWER_ROSE, 3)}, rose_g, 50, 0.6))
     return out
 

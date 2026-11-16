@@ -60,3 +60,32 @@ def test_r56_a_round_head_or_a_head_with_layers_stays():
                                                          "r_inner": 70.0, "r_outer": 200.0, "rotation_deg": 0.0,
                                                          "width_ratio": 0.5}, 0, 20, 0.9)]
     assert _petal_flower(p, labels, parts) is None
+
+
+def _two_color_flower():
+    """Six lobes alternating red (0) and white (1) around a red rose (0) joined to the red petals."""
+    p, labels = _flower(6)
+    h, w = labels.shape
+    yy, xx = np.mgrid[:h, :w]
+    th = np.degrees(np.arctan2(yy - 230.0, xx - 300.0)) % 360
+    lobe = np.rint(th / 60.0).astype(int) % 6
+    r = np.hypot(xx - 300.0, yy - 230.0)
+    head = p.mask & (r <= 215)
+    labels[head] = np.where(lobe[head] % 2 == 0, 0, 1)
+    labels[r <= 70] = 0
+    return p, labels
+
+
+def test_r57_alternating_petals_of_two_colors_round_a_rose():
+    from rosette.pipeline import _petal_flower
+    p, labels = _two_color_flower()
+    out = _petal_flower(p, labels, _rules_parts())
+    assert out is not None
+    pets = sorted((q for q in out if q.role == "points"), key=lambda q: q.z)
+    c = next(q for q in out if q.role == "center")
+    assert [q.params["count"] for q in pets] == [3, 3]
+    assert [q.color_group for q in pets] == [0, 1]  # the rose's color underneath
+    assert c.color_group == 0 and c.z > pets[-1].z
+    d = (pets[1].params["rotation_deg"] - pets[0].params["rotation_deg"]) % 120
+    assert abs(d - 60) < 5
+    assert abs(((pets[0].params["rotation_deg"] + 30) % 60) - 30) < 6  # a red tip on +x
