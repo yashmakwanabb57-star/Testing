@@ -474,3 +474,35 @@ def test_r65_the_apps_reading_a_head_color_star_for_the_petals():
                                             "r_outer": 100.0, "rotation_deg": 31.0}, 0, 21, 0.9))
     assert _loops_under_petals(parts)
     assert "front-2" not in {q.id for q in parts}
+
+
+def _s44_parts(hr=131.5):
+    geo = {"cx": 300.0, "cy": 155.0}
+    def pt(pid, g, z, kind, ro, rot):
+        return Part(pid, "points", dict(geo, kind=kind, count=4, r_inner=51.5, r_outer=ro, rotation_deg=rot), g, z, 0.9)
+    return [Part("head", "head", dict(geo, r=hr), 0, 10, 0.9),
+            pt("points-1", 1, 24, "petal", 105.5, 46.2), pt("front-2", 0, 21, "star", 101.5, 3.0),
+            pt("front-3", 2, 20, "star", 116.5, 3.0), pt("points-7", 2, 22, "star", 87.5, 3.0), pt("points-6", 0, 23, "star", 71.5, 3.0),
+            Part("center", "center", dict(geo, r=38.5), 1, 50, 0.9),
+            Part("ring-0", "ring", dict(geo, r_inner=38.5, r_outer=51.5), 0, 30, 0.9)]
+
+
+def test_r66_a_cross_of_banded_four_point_stars():
+    # s44-15, the owner's check: gold banded star on the axes, cream banded star on the diagonals on it
+    from rosette.pipeline import _banded_cross_stars
+    parts = _s44_parts()
+    assert _banded_cross_stars(parts)
+    pts = sorted((q for q in parts if q.role == "points"), key=lambda q: q.z)
+    hr = 131.5
+    got = [(q.color_group, q.params["count"], round(q.params["r_outer"] / hr, 3), q.params["rotation_deg"]) for q in pts]
+    assert got == [(2, 4, 0.898, 0.0), (0, 4, 0.748, 0.0), (2, 4, 0.623, 0.0),
+                   (1, 4, 0.895, 45.0), (1, 4, 0.748, 45.0), (1, 4, 0.622, 45.0), (0, 8, 0.52, 0.0)]
+    assert all(q.params["tips"] == 1 for q in pts)
+    ids = {q.id: q for q in parts}
+    assert "ring-0" not in ids and ids["center"].color_group == 1 and ids["center"].z > pts[-1].z
+
+
+def test_r66_needs_the_diagonal_layer():
+    from rosette.pipeline import _banded_cross_stars
+    parts = [q for q in _s44_parts() if q.id != "points-1"]
+    assert not _banded_cross_stars(parts)

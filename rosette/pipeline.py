@@ -1932,6 +1932,66 @@ def _loops_under_petals(parts: list) -> bool:
     return True
 
 
+# R66: four-point layers only, one color on an axis pair besides the head's, another on the diagonals
+# (s44-15: an eight-point star of a gold banded star on the axes and a cream banded star on the
+# diagonals on black pleats, read as scattered stars and blobs). Designer s44-15 (head radii, the
+# bands' gaps the head's color): on the axes stars of the axis color at 0.898 and 0.623 with one of
+# the head's color at 0.748 between; on them on the diagonals stars of the diagonal color at 0.895,
+# 0.748, 0.622 (outlined bands); an eight-point star of the head's color at 0.52 over both; four-point
+# valleys at 0.456 of the tips, the eight-point's 0.577; upright as R62 (the owner's check).
+CROSS_AXIS = (0.898, 0.748, 0.623)  # axis color, head color, axis color
+CROSS_DIAG = (0.895, 0.748, 0.622)  # all the diagonal color
+CROSS_INNER = 0.52
+CROSS_VALLEY4 = 0.456
+CROSS_VALLEY8 = 0.577
+
+
+def _banded_cross_stars(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    head = next((q for q in parts if q.role == "head"), None)
+    pts = [q for q in parts if q.role == "points"]
+    if head is None or len(pts) < 2 or any(int(q.params["count"]) != 4 or q.params.get(KEEP_PARAM) for q in pts):
+        return False
+    if any(q.params.get("kind") == "bow" for q in pts):
+        return False  # loops are another layout (S28-15: R48's star on four loops)
+    g = head.color_group
+    colored = [q for q in pts if q.color_group != g]
+
+    def off(q, a):
+        d = (float(q.params["rotation_deg"]) - a) % 90.0
+        return min(d, 90.0 - d)
+    axis = max(colored, key=lambda q: float(q.params["r_outer"]), default=None)
+    if axis is None:
+        return False
+    a0 = float(axis.params["rotation_deg"])
+    on_axis = [q for q in colored if off(q, a0) <= NESTED_AXIS_DEG]
+    on_diag = [q for q in colored if abs(off(q, a0) - 45.0) <= NESTED_AXIS_DEG]
+    if len(on_axis) + len(on_diag) != len(colored) or not on_diag:
+        return False
+    xc = {q.color_group for q in on_axis}
+    yc = {q.color_group for q in on_diag}
+    if len(xc) != 1 or len(yc) != 1 or xc == yc:
+        return False
+    x, y = xc.pop(), yc.pop()
+    snap = round(a0 / 45.0) * 45.0
+    rot = (snap if abs(a0 - snap) <= NESTED_SNAP_DEG else a0) % 90.0
+    hr = float(head.params["r"])
+    geo = {"cx": head.params["cx"], "cy": head.params["cy"]}
+    stack = [(x, 4, CROSS_AXIS[0], rot), (g, 4, CROSS_AXIS[1], rot), (x, 4, CROSS_AXIS[2], rot)]
+    stack += [(y, 4, t, (rot + 45.0) % 90.0) for t in CROSS_DIAG]
+    stack.append((g, 8, CROSS_INNER, rot))
+    z0 = min(q.z for q in pts)
+    parts[:] = [q for q in parts if q.role != "points"
+                and not (q.role == "ring" and q.color_group == g and float(q.params["r_outer"]) <= CROSS_INNER * hr)]
+    for k, (col, n, tip, r_) in enumerate(stack):
+        ro = tip * hr
+        parts.append(Part(f"points-cross-{k}", "points", dict(geo, kind="star", count=n, r_outer=round(ro, 3),
+                                                              r_inner=round((CROSS_VALLEY4 if n == 4 else CROSS_VALLEY8) * ro, 3),
+                                                              rotation_deg=round(r_, 3), width_ratio=0.5,
+                                                              tips=1, **{KEEP_PARAM: 1}), col, z0 + k, 0.5))
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -2107,6 +2167,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
         tidy.parts = tone
     _star_under_petals(tidy.parts)  # R64: star tips round a ring of the head's color are a star under petals
     _loops_under_petals(tidy.parts)  # R65: loops round a ring of the head's color run in under petals
+    _banded_cross_stars(tidy.parts)  # R66: banded four-point stars on the axes and the diagonals
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower
