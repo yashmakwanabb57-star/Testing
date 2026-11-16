@@ -18,7 +18,16 @@ only give proportions for parts the photo cannot show, for example hidden star v
   - 34 S31-15 - loops on a star around a bare center: both run in under the center, loops edged in the
     center's color, a 6-point flower of the star's color over the loops' bases (R51; only S31-15). 0.929 -> 0.933.
   - 35 S3-15, 36 S32-15, 37 S33-15 - already match the designer (1.000), no change.
-- Next: line 38.
+  - 38 s34-15, 39 S35-19, 40 S36-15 - structure matches the designer (0.956 / 0.962 / 1.000), no change.
+    Small differences left: s34-15's dark points are longer than the designer's; S36-15's loop ends are
+    square where the designer's are pointed petals.
+  - 41 S36-15B - library head (S1-15B) is right in shape, but its red/white loop order is one step off
+    the photo's (0.778); the rules head reads it worse. Left as is.
+  - 42 S37-15 - the review run (design left out of the learned classifier) reads the glitter points as
+    loops; with the full classifier (the shop's run) they are a star, as the designer draws. Left as is.
+  - 43 S38-15 - colors read lighter than the designer's slots (orange pleats as Color 3); the star on top
+    is missing. Open (0.865).
+- Next: line 44.
 - Update this section after each photo.
 
 ## Loop for one photo
