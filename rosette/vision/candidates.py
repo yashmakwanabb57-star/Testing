@@ -215,6 +215,10 @@ def open_decisions(rules: RosetteModel, groups: list[Group], reading: Reading) -
     pairs = [(groups[k], q) for k, q in layer_of.items()]
     out = (_count_decisions(pairs) + _order_decisions(rules, groups, reading, layer_of)
            + _nested_decisions(rules, pairs) + _center_decisions(rules, groups) + _kind_decisions(pairs))
+    # a layer a rule built whole from the photo (R48) is not reopened: no decision touches it
+    from .layer_classify import KEEP_PARAM
+    kept = {q.id for q in rules.parts if q.params.get(KEEP_PARAM)}
+    out = [d for d in out if not kept & set(d.part_ids)]
     return out[:MAX_DECISIONS]
 
 

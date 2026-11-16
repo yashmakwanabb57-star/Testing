@@ -9,6 +9,7 @@ import numpy as np
 from scipy import ndimage
 
 from ..model import Part
+from .layer_classify import KEEP_PARAM
 from .parts_common import Frame
 
 STACK_COUNTS = (8, 10, 12)  # 6-point heads are loops and petals (S26-15, S70-19 ...)
@@ -285,4 +286,6 @@ def star_on_square(p, labels: np.ndarray, parts: list) -> list | None:
                                                 "r_outer": round(SQUARE_TIP * hu, 3),
                                                 "rotation_deg": bow.params["rotation_deg"], "width_ratio": 0.5, "tips": 1},
                     bow.color_group, 23, 0.5))
+    for q in (bow, star, out[-2], out[-1]):  # built whole here: the layer classifier keeps them
+        q.params[KEEP_PARAM] = 1
     return out

@@ -19,6 +19,8 @@ tidied and assigned (`pipeline.detect`), on the same rows the classifier was tra
   or the base star, or a backing without a host, needs geometry the model does not give.
   Below the bar, or where the change cannot be made, a disagreement within that scope
   adds KIND_WARNING for the part. The role is never changed.
+- a layer a rule built whole from the photo (params[KEEP_PARAM], R48 on S28-15) keeps its kind
+  and count: the classifier was trained on the rules' first reading, not on that rule's.
 
 Without a saved model (`rosette.layer_model.load` -> None) nothing changes.
 """
@@ -47,6 +49,7 @@ COUNT_WARNING = "Part {pid}: the point count is uncertain - check the number of 
 RING_CLASSES = ("ring", "pinked_ring")
 SHAPE_CLASSES = ("loop", "kite", "petal", "star", "backing", "edge", "base_star")
 _KIND_PARAM = {"loop": "bow", "kite": "diamond", "petal": "petal", "star": "star"}
+KEEP_PARAM = "rule_kept"  # set by a rule that built the layer whole: kind and count stay
 
 
 def rules_class(part, parts) -> str:
@@ -197,7 +200,7 @@ def apply_counts(rows: list[dict], u: HeadUnwrap, lm: LayerModel, parts) -> tupl
     for r, (n, score) in zip(hosts, lm.predict_count([r["features"] for r in hosts])):
         q = r["part"]
         old = int(q.params["count"])
-        if n == old:
+        if n == old or q.params.get(KEEP_PARAM):
             continue
         if score < bar:
             warnings.append(COUNT_WARNING.format(pid=q.id))
@@ -220,6 +223,8 @@ def apply_kinds(rows: list[dict], lm: LayerModel, parts) -> tuple[list[str], lis
     changed, warnings = [], []
     for r, (cls, prob) in zip(rows, lm.predict_kind([r["features"] for r in rows])):
         q, rc = r["part"], r["rules"]
+        if q.params.get(KEEP_PARAM):
+            continue
         scope = RING_CLASSES if rc in RING_CLASSES else SHAPE_CLASSES if rc in SHAPE_CLASSES else ()
         if cls == rc or cls not in scope:
             continue

@@ -279,3 +279,12 @@ def test_photo_stacking_records_each_voted_pair_on_both_parts(monkeypatch):
     assert (star.params["vote_third"], third.params["vote_star-a"]) == ("undecided", "undecided")
     assert (blocks.params["vote_third"], third.params["vote_blocks"]) == ("undecided", "undecided")
     assert star.z > blocks.z
+
+
+def test_a_layer_a_rule_built_whole_gets_no_reader_decision():
+    # S28-15: R48's loops were turned into kites by the reader's judge on a near tie in the app
+    from rosette.vision.layer_classify import KEEP_PARAM
+    loops = _points("loops", "bow", 4, 60, 100, 2, 20)
+    loops.params[KEEP_PARAM] = 1
+    rules = _model(loops)
+    assert cd.open_decisions(rules, [_group("kite", 60, 100, 2, 6, alts=(4,))], _reading()) == []

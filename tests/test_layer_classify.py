@@ -177,3 +177,17 @@ def test_rings_near_the_pleat_bar_are_flagged():
     ring.params["pleats"] = 24  # an H11 pleated edge: read from its teeth, not checked
     assert pleat_warnings([ring], p, labels) == []
     assert "—" not in PLEAT_WARNING and "-" in PLEAT_WARNING
+
+
+def test_a_layer_a_rule_built_keeps_its_kind_and_count():
+    # S28-15: R48's loops, edged and under a star, read as kites by the classifier in the app
+    loops = _pts("points-0", "bow", n=4, g=1, **{lc.KEEP_PARAM: 1})
+    plain = _pts("points-1", "bow", n=4, g=2, rot=45.0)
+    parts = [loops, plain]
+    changed, warnings = lc.apply_kinds(_rows(parts), _Stub(kinds=[("kite", 0.99), ("kite", 0.99)]), parts)
+    assert loops.params["kind"] == "bow" and plain.params["kind"] == "diamond"
+    assert changed == ["points-1"] and warnings == []
+    stub = _Stub(counts=[(6, 0.99)])
+    stub.count_gate = 0.5
+    changed, warnings = lc.apply_counts(_rows([loops]), _unwrap(6, 10.0), stub, [loops])
+    assert changed == [] and warnings == [] and loops.params["count"] == 4
