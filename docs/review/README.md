@@ -15,7 +15,10 @@ only give proportions for parts the photo cannot show, for example hidden star v
     still swapped (glitter <-> wine: the designer breaks its own out-to-in rule here), score 0.334 -> 0.257.
   - 33 S30-15 - diamonds between edged loops are a star behind them, the loops run in under the ring,
     no library head (R50; also S35-19, unchanged 0.963). 0.972 -> 0.979.
-- Next: line 34.
+  - 34 S31-15 - loops on a star around a bare center: both run in under the center, loops edged in the
+    center's color, a 6-point flower of the star's color over the loops' bases (R51; only S31-15). 0.929 -> 0.933.
+  - 35 S3-15, 36 S32-15, 37 S33-15 - already match the designer (1.000), no change.
+- Next: line 38.
 - Update this section after each photo.
 
 ## Loop for one photo

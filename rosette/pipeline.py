@@ -979,6 +979,53 @@ def _diamonds_behind_loops(parts: list) -> bool:
     return done
 
 
+# R51: one loop set on a star of its count half a step away, around a center with no ring or
+# head disc (S31-15: glitter loops edged in lilac on a blue star, a lilac rose, a blue flower over
+# the loops), is the designer's head: the star and the loops run in under the center, the loops
+# edged in the center's color, and a 6-point flower of the star's color lies over the loops'
+# bases. Odd point sets of the center's color (read from the loop edges) go. Proportions are the
+# designer's (S31-15, share of the star's tips).
+FLOWER_LOOPS = (0.43, 0.92, 0.42, 0.15)  # loops: inner, outer, width, edge share
+FLOWER_TIP = 0.62  # the flower over the loops: its tips
+FLOWER_VALLEY = 0.42  # and its valleys
+FLOWER_BACK_VALLEY = 0.55  # the star behind the loops: its valleys
+FLOWER_MIN_LOOP_WIDTH = 0.6  # the read loops' width / length at least
+
+
+def _loops_on_star_flower(parts: list) -> bool:
+    c = next((q for q in parts if q.role == "center"), None)
+    if c is None or any(q.role in ("ring", "head") for q in parts):
+        return False
+    bows = [q for q in parts if q.role == "points" and q.params.get("kind") == "bow"]
+    stars = [q for q in parts if q.role == "points" and q.params.get("kind") == "star"]
+    if len(bows) != 1 or len(stars) != 1 or bows[0].params.get("edge_width") is not None:
+        return False
+    bow, star = bows[0], stars[0]
+    n = int(bow.params["count"])
+    if n != int(star.params["count"]) or n < 5 or star.params.get("tips"):
+        return False
+    if float(bow.params["width_ratio"]) < FLOWER_MIN_LOOP_WIDTH:  # thin strips (S56-17B's loop edges)
+        return False
+    step = 360.0 / n
+    if abs(((float(star.params["rotation_deg"]) - float(bow.params["rotation_deg"])) % step) - step / 2) > 8.0:
+        return False
+    if len({c.color_group, bow.color_group, star.color_group}) != 3:
+        return False
+    tip, rc = float(star.params["r_outer"]), float(c.params["r"])
+    ri, ro = FLOWER_LOOPS[0] * tip, FLOWER_LOOPS[1] * tip
+    w = FLOWER_LOOPS[2] * tip
+    bow.params.update(r_inner=round(ri, 3), r_outer=round(ro, 3), width_ratio=round(w / (ro - ri), 4))
+    star.params.update(r_inner=round(FLOWER_BACK_VALLEY * tip, 3), tips=1)
+    star.z, bow.z = 20, 21
+    parts[:] = [q for q in parts if not (q.role in ("points", "unknown") and q.color_group == c.color_group)]
+    parts.append(Part(f"edge-{bow.id}", "points", dict(bow.params, edge_width=round(FLOWER_LOOPS[3] * w, 3)),
+                      c.color_group, 22, bow.confidence))
+    parts.append(Part("points-flower", "points", dict(star.params, r_inner=round(max(rc, FLOWER_VALLEY * tip), 3),
+                                                      r_outer=round(FLOWER_TIP * tip, 3)),
+                      star.color_group, 23, star.confidence))
+    return True
+
+
 def _taper_edged_bows(parts: list) -> bool:
     """R45: a loop set laid on a wider loop set of another color, one count and angle (S2-15B:
     blue loops on white), is the designer's edged loops: both narrow toward the center to
@@ -1232,6 +1279,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
         out.parts = edged
     if _rose_over_bows(out.parts, out.groups):  # R44: bows and a star of one hue under a rose
         out.rose = True
+    _loops_on_star_flower(out.parts)  # R51: loops on a star around a bare center
     _diamonds_behind_loops(out.parts)  # R50: points between edged loops are a star behind them
     _star_as_loops(out.parts)  # R47: a blunt star between loops of its count is loops too
     _taper_edged_bows(out.parts)  # R45: loops edged by a wider loop narrow toward the center
