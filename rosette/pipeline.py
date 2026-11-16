@@ -2326,6 +2326,33 @@ def _three_color_rings(parts: list) -> bool:
     return True
 
 
+# R73: only a head disc and a badge of its color, and a blob of a second color over the badge (A12-15:
+# a peach pleated ring round a wine badge on wine pleats; the ring read as a blob). A pleated ring of the
+# blob's color round the badge. Designer A12-15 (head radii): the ring 0.38-0.60, the badge 0.38.
+BADGE_RING = (0.38, 0.60)
+BADGE_RING_NEAR = 0.5  # the blob's middle within this share of the badge's radius of the badge's
+
+
+def _ring_round_badge(parts: list) -> bool:
+    head = next((q for q in parts if q.role == "head"), None)
+    c = next((q for q in parts if q.role == "center"), None)
+    if head is None or c is None or any(q.role in ("points", "ring", "template") for q in parts):
+        return False
+    blobs = [q for q in parts if q.role == "unknown"]
+    if len(blobs) != 1 or c.color_group != head.color_group or blobs[0].color_group == head.color_group:
+        return False
+    b, rc = blobs[0], float(c.params["r"])
+    if np.hypot(float(b.params["cx"]) - float(c.params["cx"]), float(b.params["cy"]) - float(c.params["cy"])) > BADGE_RING_NEAR * rc:
+        return False
+    hr = float(head.params["r"])
+    ri, ro = BADGE_RING[0] * hr, BADGE_RING[1] * hr
+    parts.remove(b)
+    parts.append(Part("ring-badge", "ring", {"cx": c.params["cx"], "cy": c.params["cy"], "r_inner": round(ri, 3),
+                                             "r_outer": round(ro, 3), "pinked": 1}, b.color_group, 30, 0.5))
+    c.params["r"] = round(ri, 3)
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -2508,6 +2535,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     _split_star_flower(tidy.parts)  # R70: two banded stars 30 degrees apart under squares and a star
     _star_on_pleated_ring(tidy.parts)  # R71: a twelve-point star on a pleated ring, its tips at the rim
     _three_color_rings(tidy.parts)  # R72: pleated rings of three colors round a rose
+    _ring_round_badge(tidy.parts)  # R73: a blob of a second color at the badge is a pleated ring round it
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower
