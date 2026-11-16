@@ -1236,6 +1236,80 @@ def _points_under_edged_star(parts: list) -> bool:
     return False
 
 
+# R56: no points layer read, and a head of one color whose outline has a clear count of lobes
+# around a rose of another color (S36-15: six pointed red satin petals round a white rose on a
+# black ground; the rules read rings and blobs and a library head of square loops won). The head
+# is a petal flower: petals of the head's color with the outline's count, phase and tip reach
+# around the rose's center, starting under the rose; the rose is the center. The designer's
+# petals (S36-15, the owner's check: as the reference) run from under the rose's edge to the tip, widest at a third of that length, 1.05 times as wide as long (geometry
+# FLOWER_PROFILE), and the rose's radius is the tip radius / 2.55 (the photo's white reads
+# smaller, 1 / 3.0, its folds shaded). The head circle is not used: it takes in the
+# top of the tails (S36-15: 45 px below the rose).
+FLOWER_COUNTS = range(4, 10)
+FLOWER_PEAK = 2.0  # the best lobe count's strength over the next one's at least
+FLOWER_DEPTH = 0.3  # (deepest valley to highest tip) / tip radius at least
+FLOWER_TAILS_DEG = 45.0  # the sector round straight down left out (the tails)
+FLOWER_ROSE_MIN = 0.02  # rose area / head circle area at least
+FLOWER_WIDTH = 1.05  # petal width / length (designer S36-15)
+FLOWER_START = 0.85  # petals start at this share of the rose radius: their bases tuck under it (designer S36-15)
+FLOWER_ROSE = 2.55  # tip radius / rose radius (designer S36-15)
+
+
+def _petal_flower(p, labels: np.ndarray, parts: list) -> list | None:
+    if any(q.role in ("points", "template") for q in parts):
+        return None
+    from scipy import ndimage
+    from .vision.layer_classify import KEEP_PARAM
+    from .vision.parts_common import polar_sample
+    cx, cy, r = (float(v) for v in p.head)
+    h, w = labels.shape
+    yy, xx = np.mgrid[:h, :w]
+    inside = (np.hypot(xx - cx, yy - cy) <= r) & p.mask & (labels >= 0)
+    if not inside.any():
+        return None
+    head_g = int(np.bincount(labels[inside]).argmax())
+    rose = None
+    for g in {int(v) for v in np.unique(labels[inside])} - {head_g}:
+        lab, n = ndimage.label((labels == g) & inside)
+        for i in range(1, n + 1):
+            ys, xs = np.nonzero(lab == i)
+            if xs.size < FLOWER_ROSE_MIN * np.pi * r * r:
+                continue
+            mx, my = xs.mean(), ys.mean()
+            d = np.hypot(mx - cx, my - cy)
+            if rose is None or d < rose[0]:
+                rose = (d, mx, my, float(np.sqrt(xs.size / np.pi)), g)
+    if rose is None:
+        return None
+    _, mx, my, rr, rose_g = rose
+    radii = np.arange(0.0, 1.6 * r, 1.0)
+    m = polar_sample(p.mask.astype(np.int32), mx, my, radii, 360, fill=0)
+    prof = np.array([radii[np.flatnonzero(m[:, j])].max() if m[:, j].any() else 0.0 for j in range(360)])
+    th = np.radians(np.arange(360.0))
+    win = np.abs(np.degrees(th) - 90.0) > FLOWER_TAILS_DEG
+    pw, tw = prof[win], th[win]
+    if pw.max() <= 0 or (pw.max() - pw.min()) / pw.max() < FLOWER_DEPTH:
+        return None
+    x = pw - pw.mean()
+    spec = {n: np.sum(x * np.exp(-1j * n * tw)) for n in FLOWER_COUNTS}
+    mags = sorted((abs(v), n) for n, v in spec.items())
+    if mags[-1][0] < FLOWER_PEAK * mags[-2][0]:
+        return None
+    n = mags[-1][1]
+    rot = (float(np.degrees(np.angle(spec[n]))) / n) % (360.0 / n)
+    fr = Frame.of(p)
+    ccx, ccy = round(float(fr.x(mx)), 3), round(float(fr.y(my)), 3)
+    ro = float(np.percentile(pw, 95)) / fr.scale
+    ri = FLOWER_START * ro / FLOWER_ROSE
+    out = [q for q in parts if q.role not in ("unknown", "ring", "center", "head")]
+    out.append(Part("points-petals", "points", {"cx": ccx, "cy": ccy, "kind": "petal", "count": n,
+                                                "r_inner": round(ri, 3), "r_outer": round(ro, 3),
+                                                "rotation_deg": round(rot, 3), "width_ratio": FLOWER_WIDTH,
+                                                "flower": 1, "tips": 1, KEEP_PARAM: 1}, head_g, 20, 0.6))
+    out.append(Part("center", "center", {"cx": ccx, "cy": ccy, "r": round(ro / FLOWER_ROSE, 3)}, rose_g, 50, 0.6))
+    return out
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -1397,6 +1471,9 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     edged = edged_star_between_bows(p, labels, tidy.parts)  # R46: a star edged in a third color
     if edged is not None:
         tidy.parts = edged
+    flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
+    if flower is not None:
+        tidy.parts = flower
     square = star_on_square(p, labels, tidy.parts)  # R48: a star on four loops, a square over its base
     if square is not None:
         tidy.parts = square

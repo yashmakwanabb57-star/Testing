@@ -7,7 +7,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
 
 ## Progress
 
-- Owner-approved: lines 1-39 of `photo-order.txt` (A10-15 ... S35-19). Each approval is a commit.
+- Owner-approved: lines 1-40 of `photo-order.txt` (A10-15 ... S36-15). Each approval is a commit.
 - Done by Claude on its own (the owner asked it to continue alone; owner to review later):
   - 31 S28-15 - owner-approved after a fix: loops run in to the center, order loops, star, square (R48).
   - 32 S29-15 - owner-approved after a fix: a pinked ring of the inner star's color round the badge
@@ -21,9 +21,10 @@ only give proportions for parts the photo cannot show, for example hidden star v
     after a fix: R42's long star goes under the other stars and is kept in the app (also S15-15B's app run).
   - 38 s34-15 - owner-approved after a fix: the black kites go between the lavender edge star and the white
     star, and the white star is the edge star scaled down (R55; only s34-15). 0.956 -> 0.961.
-  - 39 S35-19, 40 S36-15 - structure matches the designer (0.956 / 0.962 / 1.000), no change.
-    Small differences left: s34-15's dark points are longer than the designer's; S36-15's loop ends are
-    square where the designer's are pointed petals.
+  - 39 S35-19 - structure matches the designer, no change (owner-approved).
+  - 40 S36-15 - owner-approved after a fix: a one-color lobed head round a rose is a petal flower read from
+    the outline round the rose, petals and rose in the designer's proportions (R56, geometry FLOWER_PROFILE;
+    only S36-15). Head 0.846 -> 0.883; the app now draws it too (no library head).
   - 41 S36-15B - library head (S1-15B) is right in shape, but its red/white loop order is one step off
     the photo's (0.778); the rules head reads it worse. Left as is.
   - 42 S37-15 - the review run (design left out of the learned classifier) reads the glitter points as
@@ -41,7 +42,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
     54 S48-17 (stacked stars, 0.672), 57 S5-15 (cross loops), 58 S52-19 (layered loops), 63 S57-17 (0.857),
     65 S59-17 (0.876), 71 S68-19 (head drawn as a plain disc), 75 S8-15 (star around the rose read as
     loops, 0.640), and 43 S38-15 above.
-- Next (owner, at the office): verify Claude's work from line 40 (S36-15) one photo at a time with the
+- Next (owner, at the office): verify Claude's work from line 41 (S36-15B) one photo at a time with the
   normal loop below (show photo | ours | designer, wait for "works next" or a fix request). Then the open
   list above, worst first (S8-15, s44-15, S48-17, S68-19, S4-15).
 - Update this section after each photo.
@@ -56,7 +57,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
 4. Owner says "works next" -> commit, then the next photo. "not works fix" or a specific
    remark -> fix, re-render, show again.
 5. Fix as a narrow, numbered rule (R-number in a comment, constants named, designer
-   proportions cited). Latest rule: R55 (`rosette/pipeline.py` `_points_under_edged_star`).
+   proportions cited). Latest rule: R56 (`rosette/pipeline.py` `_petal_flower`).
 6. Before showing a fix: check which of the 76 photos the rule fires on
    (`.venv/Scripts/python.exe tools/review_fire.py <rule function>` or `--part <part id>`), and compare scores
    before/after (`git stash` baseline) for those photos. Narrow the rule until no other photo
