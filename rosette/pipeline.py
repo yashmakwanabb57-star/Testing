@@ -2101,12 +2101,12 @@ def _loops_between_stars(parts: list) -> bool:
 # square loops). They are leaf petals (geometry LEAF_PETAL_PROFILE, as R64). Pointed: the color's
 # share of a circle at 0.95 of the loops' reach is under POINTED_SHARE of its share at 0.6 (square
 # loops keep it). Designer S47-15 (head radii): petal tips 0.81, kites from the center, widest 0.68 of that radius
-# (geometry SATIN_PETAL_PROFILE), three in front and three behind, alternating (the owner's check).
+# (geometry SATIN_FRONT_PROFILE), three in front and three behind, alternating (the owner's check).
 POINTED_AT = (0.6, 0.95)
 POINTED_SHARE = 0.6
 POINTED_TIP = 0.81
 POINTED_SPAN = 0.69
-POINTED_START = 0.02  # the kite starts at the flower's center (SATIN_PETAL_PROFILE)
+POINTED_START = 0.02  # the kite starts at the flower's center (SATIN_FRONT_PROFILE)
 POINTED_ROSE = 0.325  # rose radius / head radius (designer S47-15)
 ROSE_STAR_REACH = 1.0  # a small star inside the loops' inner end (x1.5) is the rose
 
@@ -2160,6 +2160,82 @@ def _pointed_loops_as_petals(parts: list, p, labels: np.ndarray) -> bool:
     if small is not None:
         parts.remove(small)
         parts.append(c)
+    return True
+
+
+# R70: three four-point layers of three colors and no head disc: one on the diagonals, the other two
+# 30 degrees either side of them (S48-17: dark and light blue banded arms whose tips pair up round
+# each axis, white stepped squares at the corners, a white star and a blue rose; read as a yellow
+# blob with loose petals). Designer S48-17 (shares of the outer tips' reach T, measured along rays
+# on its rendering and traced from its outlines), bottom to top: nested squares of the diagonal
+# color stepping down each diagonal, scaled with the arm bands; the arms of the 75-degree and the
+# 15-degree layers (geometry SPLIT_ARM: a pair meets on the axis), each with scaled band copies; the
+# middle (SPLIT_CENTER); the rose 0.29; T the read layers' reach / SPLIT_READ (the owner's check).
+SPLIT_ARM_BANDS = (1.0, 0.88, 0.73)  # the arms (geometry SPLIT_ARM: a pair meets on the axis) and their band
+# copies, the same arm scaled about the center (designer S48-17 along rays at 10, 15, 20 degrees: band edges at
+# 0.71/0.81, 0.73/0.88, 0.60/0.73; the owner's check)
+SPLIT_SQUARE_TIP = 0.89  # the outer square's corner (share of T)
+SPLIT_FOURTH = 0.64  # a fourth square step inside the band ones (designer S48-17: 0.57)
+# the squares scale with the arm bands (SPLIT_ARM_BANDS), so each yellow step ends where a band line meets the
+# arm's edge (designer S48-17: corners 0.89, 0.78, 0.65; the owner's check)
+SPLIT_SQUARE_VALLEY = 0.7071  # a four-point star with these valleys is a square
+SPLIT_CENTER = ((0.0, 0.56, 0.79, "star8"),)  # the middle, of the diagonal color: one eight-point star on the axes
+# and diagonals (tips 0.56 of T, valleys 0.79 of them), one outline (the owner's check)
+SPLIT_ROSE = 0.29
+SPLIT_READ = 0.9  # the read reach / the tips' (the satin tips thin out, as R58's glitter)
+SPLIT_OFF = 30.0
+
+
+def _split_star_flower(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    if any(q.role in ("head", "ring", "template") for q in parts):
+        return False
+    pts = [q for q in parts if q.role == "points"]
+    c = next((q for q in parts if q.role == "center"), None)
+    if c is None or len(pts) != 3 or any(int(q.params["count"]) != 4 or q.params.get(KEEP_PARAM) for q in pts):
+        return False
+    if len({q.color_group for q in pts}) != 3:
+        return False
+
+    def m90(a):
+        return float(a) % 90.0
+    diag = [q for q in pts if abs(m90(q.params["rotation_deg"]) - 45.0) <= NESTED_AXIS_DEG]
+    if len(diag) != 1:
+        return False
+    sq = diag[0]
+    lo = [q for q in pts if abs(m90(q.params["rotation_deg"]) - (45.0 - SPLIT_OFF)) <= NESTED_AXIS_DEG]
+    hi = [q for q in pts if abs(m90(q.params["rotation_deg"]) - (45.0 + SPLIT_OFF)) <= NESTED_AXIS_DEG]
+    if len(lo) != 1 or len(hi) != 1:
+        return False
+    T = max(float(q.params["r_outer"]) for q in pts) / SPLIT_READ
+    geo = {"cx": sq.params["cx"], "cy": sq.params["cy"]}
+    # bottom to top: the 75-degree arms (leaning from the 90-degree axes, side -1) and the 15-degree arms
+    # (from the 0-degree axes, +1), each with its inset bands; the square corners on them, largest first;
+    # the eight-point star
+    # the colors as the designer lays them round each axis (the owner's check): the 15-degree layer's color
+    # (on top) on the arms leaning from the 90-degree axes, the 75-degree layer's under it
+    # the squares go first: full nested squares stepping down each diagonal, their sides under the arms
+    # (designer S48-17 close up; the owner's check)
+    stack = [(sq.color_group, 4, SPLIT_SQUARE_TIP * k, 45.0, SPLIT_SQUARE_VALLEY, "star") for k in SPLIT_ARM_BANDS + (SPLIT_FOURTH,)]
+    stack += [(hi[0].color_group, 4, b, 0.0, 1, "split_arm") for b in SPLIT_ARM_BANDS]
+    stack += [(lo[0].color_group, 4, b, 90.0, -1, "split_arm") for b in SPLIT_ARM_BANDS]
+    stack += [(sq.color_group, 8, tip, rot, val, "star") for rot, tip, val, _ in SPLIT_CENTER]
+    z0 = min(q.z for q in pts)
+    parts[:] = [q for q in parts if q.role != "points"]
+    for k, (col, n, a, b, c_, kind) in enumerate(stack):
+        if kind == "split_arm":  # a: the band's scale, b: the axis, c_: the side
+            prm = dict(geo, kind=kind, count=n, r_outer=round(a * T, 3), r_inner=round(0.44 * a * T, 3), axis_deg=b,
+                       side=c_, rotation_deg=round(b + c_ * 16.9, 3), width_ratio=0.5)
+        elif kind == "diamond":  # a: the tip share, b: the rotation, c_: (start share of T, width / length)
+            prm = dict(geo, kind=kind, count=n, r_outer=round(a * T, 3), r_inner=round(c_[0] * T, 3),
+                       rotation_deg=round(b, 3), width_ratio=c_[1])
+        else:  # a: the tip share, b: the rotation, c_: the valley share
+            ro = a * T
+            prm = dict(geo, kind=kind, count=n, r_outer=round(ro, 3), r_inner=round(c_ * ro, 3),
+                       rotation_deg=round(b, 3), width_ratio=0.5)
+        parts.append(Part(f"points-split-{k}", "points", dict(prm, tips=1, **{KEEP_PARAM: 1}), col, z0 + k, 0.5))
+    c.params["r"] = round(SPLIT_ROSE * T, 3)
+    c.color_group = hi[0].color_group
     return True
 
 
@@ -2342,6 +2418,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     _star_round_rings(tidy.parts)  # R67: an eight-point star round a ring of a third color, a ruffle, a small star
     _loops_between_stars(tidy.parts)  # R68: loops between an outer and an inner star of one color
     _pointed_loops_as_petals(tidy.parts, p, labels)  # R69: loops narrowing to points round a rose are leaf petals
+    _split_star_flower(tidy.parts)  # R70: two banded stars 30 degrees apart under squares and a star
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower

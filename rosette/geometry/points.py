@@ -39,10 +39,6 @@ FLOWER_PROFILE = (0.70, 0.82, 0.93, 0.99, 0.94, 0.85, 0.70, 0.55, 0.37, 0.19, 0.
 # A leaf petal (R64, S42-15's designer petals, median of its six, from the rose's center): full width
 # just past the rose's edge, then a straight taper to a sharp tip.
 LEAF_PETAL_PROFILE = (0.55, 0.72, 0.99, 1.0, 0.90, 0.80, 0.66, 0.50, 0.34, 0.17, 0.0)
-# A satin petal (R69, S47-15's designer petals, the front three, from the flower's center to the tip):
-# a kite whose sides run from the center to its widest at 0.6 on a slight outward curve (the owner's
-# check), then curve to a sharp tip.
-SATIN_PETAL_PROFILE = (0.02, 0.218, 0.393, 0.555, 0.708, 0.856, 1.0, 0.81, 0.57, 0.29, 0.0)  # (t/0.6)^0.85 to the peak: slightly convex
 # A satin flower's petal (designer S47-15's petals, widths over its tip radius every 0.05 of the length
 # from the center, / 0.69): the bottom a smooth line widening from the center with a slight curve into
 # its widest at 0.55 (no bump at the rose's edge), then nearly straight sides to a sharp tip (the owner's
@@ -98,8 +94,6 @@ def _profile(kind: str, inner_ratio: float | None, lens: bool = False) -> tuple[
         return FLOWER_PROFILE
     if kind == "leaf_petal":
         return LEAF_PETAL_PROFILE
-    if kind == "satin_petal":
-        return SATIN_PETAL_PROFILE
     if kind == "satin_front":
         return SATIN_FRONT_PROFILE
     raise ValueError(f"unknown point kind {kind!r}")
@@ -155,6 +149,24 @@ def _edge_strips(kind: str, r_in: float, r_out: float, w: float, inner_ratio: fl
     return [one, [(r, -l) for r, l in reversed(one)]]
 
 
+# A split arm (R70, S48-17's designer arms, traced from its rendered outline): two arms of a pair meet on
+# the axis between their tips. Vertices as (radius / the tip's, degrees off the axis toward the tip): the
+# tip, the notch on the axis, down the axis, the base, out along 31.7 degrees to the back edge, which runs
+# to the tip (the designer's steps along it are the corner pieces lying on it; the owner's check).
+SPLIT_ARM = ((1.0, 16.9), (0.731, 0.0), (0.583, 0.0), (0.437, 22.0), (0.478, 31.7), (0.66, 31.7))
+
+
+def split_arms(cx: float, cy: float, count: int, r_tip: float, axis_deg: float, side: int) -> list[Shape]:
+    """One SPLIT_ARM per axis (axis_deg + k * 360 / count), its tip on the `side` (+1 / -1) of the axis.
+    The designer's band copies are the same arms at a smaller r_tip (R70)."""
+    out = []
+    for k in range(count):
+        a0 = axis_deg + 360.0 * k / count
+        pts = [polar(cx, cy, r * r_tip, a0 + side * d) for r, d in SPLIT_ARM]
+        out.append(Shape("polygon", {"points": points_attr(pts)}, None))
+    return out
+
+
 def points_ring(cx: float, cy: float, kind: Literal["star", "diamond", "bow", "petal"],
                 count: int, r_inner: float, r_outer: float,
                 rotation_deg: float, width_ratio: float, inner_ratio: float | None = None,
@@ -176,8 +188,8 @@ def points_ring(cx: float, cy: float, kind: Literal["star", "diamond", "bow", "p
             pts.append(polar(cx, cy, r_inner, rotation_deg + 360.0 * (k + 0.5) / count))
         return [Shape("polygon", {"points": points_attr(pts)}, None)]
     w = width_ratio * (r_outer - r_inner)
-    if kind == "petal" and flower:  # R56: the satin flower's petal (FLOWER_PROFILE); R64: 2, the leaf petal
-        kind = {2: "leaf_petal", 3: "satin_petal", 4: "satin_front"}.get(int(flower), "flower")  # type: ignore[assignment]
+    if kind == "petal" and flower:  # R56: the satin flower's petal (FLOWER_PROFILE); R64: 2, the leaf petal; R69: 4
+        kind = {2: "leaf_petal", 4: "satin_front"}.get(int(flower), "flower")  # type: ignore[assignment]
     if edge_width:
         outlines_ = _edge_strips(kind, r_inner, r_outer, w, inner_ratio, edge_width)
     else:

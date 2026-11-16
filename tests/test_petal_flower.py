@@ -619,3 +619,34 @@ def test_r69_square_loops_stay():
     p, labels, parts, hr = _s47_photo(False)
     assert not _pointed_loops_as_petals(parts, p, labels)
     assert parts[1].params["kind"] == "bow"
+
+
+def _s48_parts():
+    geo = {"cx": 300.0, "cy": 148.0}
+    def pt(pid, g, z, kind, ro, rot):
+        return Part(pid, "points", dict(geo, kind=kind, count=4, r_inner=62.5, r_outer=ro, rotation_deg=rot, width_ratio=0.6), g, z, 0.9)
+    return [pt("points-0", 1, 20, "star", 119.5, 47.4), pt("points-1", 2, 22, "petal", 122.5, 18.9),
+            pt("points-2", 0, 21, "petal", 122.5, 75.4), Part("center", "center", dict(geo, r=26.5), 0, 50, 0.9)]
+
+
+def test_r70_two_banded_stars_thirty_degrees_apart_under_squares_and_a_star():
+    # S48-17, the owner's check: dark and light banded stars, white banded squares, a white star, the rose
+    from rosette.pipeline import _split_star_flower
+    parts = _s48_parts()
+    assert _split_star_flower(parts)
+    pts = sorted((q for q in parts if q.role == "points"), key=lambda q: q.z)
+    assert [q.color_group for q in pts] == [1, 1, 1, 1, 0, 0, 0, 2, 2, 2, 1]  # the squares, the arms on them, the middle
+    assert [q.params["kind"] for q in pts] == ["star"] * 4 + ["split_arm"] * 6 + ["star"]
+    assert [q.params.get("axis_deg") for q in pts[4:10]] == [0.0] * 3 + [90.0] * 3
+    assert [round(q.params["r_outer"] / pts[4].params["r_outer"], 2) for q in pts[4:7]] == [1.0, 0.88, 0.73]  # scaled bands
+    assert [q.params["count"] for q in pts] == [4] * 10 + [8]  # the middle: one eight-point star
+    assert all(q.params["tips"] == 1 for q in pts)
+    c = next(q for q in parts if q.role == "center")
+    assert c.color_group == 0 and c.z > pts[-1].z
+
+
+def test_r70_needs_the_thirty_degree_pair():
+    from rosette.pipeline import _split_star_flower
+    parts = _s48_parts()
+    parts[1].params["rotation_deg"] = 45.0
+    assert not _split_star_flower(parts)
