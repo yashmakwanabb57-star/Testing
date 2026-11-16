@@ -150,9 +150,12 @@ FAN = dict(top_y=300.0, top_width=60.0, bottom_width=110.0, stripes=(0.3, 0.4, 0
 
 
 @pytest.mark.parametrize("spread", [60.0, 40.0, 28.0])  # 28: tails part only below ~80 % height
-def test_three_fanned_tails_constructed(spread):
+def test_three_fanned_tails_constructed(spread, monkeypatch):
     # head disc + 3 tails drawn by geometry.tails with known params, through the
-    # normal photo path
+    # normal photo path; the multi-tail measurement (R24 reads tails that touch higher up as
+    # one block, so it is switched off here)
+    from rosette.vision import parts_tails
+    monkeypatch.setattr(parts_tails, "ONE_BLOCK", False)
     p = prepare(fan_rosette_png(3, spread, **FAN))
     labels, groups = pixel_groups(p)
     parts = detect_parts(p, labels)
@@ -171,6 +174,16 @@ def test_three_fanned_tails_constructed(spread):
         cg = [x.color_group for x in sorted(stripes, key=lambda x: int(x.params["stripe_index"]))]
         assert len(set(cg)) == 3
     assert not [x for x in parts if x.role == "unknown"]
+
+
+@pytest.mark.parametrize("spread, count", [(60.0, 3), (28.0, 1)])
+def test_fanned_tails_touching_higher_up_are_one_block(spread, count):
+    # R24: tails that run as one ribbon on a measured row higher up are the designer's one
+    # tail block; tails apart on every measured row stay separate
+    p = prepare(fan_rosette_png(3, spread, **FAN))
+    labels, groups = pixel_groups(p)
+    t = [q for q in detect_parts(p, labels) if q.role == "tail_stripe"]
+    assert {int(q.params["tails_count"]) for q in t} == {count}
 
 
 def _stripe_width_at(q, y):

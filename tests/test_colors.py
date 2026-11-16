@@ -224,13 +224,24 @@ def test_similar_hue_stripes_stay_apart(sid):
 
 
 def test_partly_patterned_plain_group_reported():
-    # S2-15B: white satin and a white-on-blue snowflake print merged into one plain
-    # group; on the tails almost half of it has patterned texture
+    # a plain group whose tail half is plain satin and half a print (what S2-15B's
+    # white + snowflake group was before the print split): reported for a check
+    h, w = 800, 400
+    lab = np.zeros((h, w, 3), np.float32)
+    lab[:] = (95, 0, 0)
+    yy, xx = np.mgrid[:h, :w]
+    flakes = ((yy // 6 + xx // 6) % 2 == 0) & (xx >= w // 2)
+    lab[flakes] = (60, -5, -25)
+    p = _synthetic(lab)
+    labels = np.zeros((h, w), np.int32)
+    groups = [ColorGroup(0, (230, 235, 240), False, 1.0, 1.0, None, 0.0)]
+    assert mixed_texture_groups(p, labels, groups) == [0]
+
+
+def test_s2_15b_print_split_off_so_no_group_is_partly_patterned():
     p = prepare((PHOTOS / "S2-15B.png").read_bytes())
     labels, groups = pixel_groups(p)
-    mixed = mixed_texture_groups(p, labels, groups)
-    assert len(mixed) == 1 and not groups[mixed[0]].pattern
-    assert min(groups[mixed[0]].rgb) > 150  # the light (white + snowflake) group
+    assert mixed_texture_groups(p, labels, groups) == []
 
 
 def test_clean_groups_not_reported_as_partly_patterned(s35):
@@ -483,3 +494,33 @@ def test_a_small_piece_inside_the_head_or_a_rim_sliver_is_still_a_motif():
         labels, groups = pixel_groups(p)
         tail = _label_at(labels, 300, 600)
         assert (labels[piece] == tail).mean() < 0.1, where
+
+
+def _halves(grain_small: float, grain_big: float) -> np.ndarray:
+    from rosette.vision.colors import GRAIN_WEIGHT
+    return np.array([[30.0, 0.0, 0.0, grain_big * GRAIN_WEIGHT], [25.0, -9.0, -10.0, grain_small * GRAIN_WEIGHT]])
+
+
+def test_print_beside_plain_waives_share_only_for_a_textured_half_on_satin():
+    from rosette.vision.colors import GRAIN_WEIGHT, _print_beside_plain
+    feat = np.zeros((10, 10, 4), np.float32)
+    feat[..., 3] = 0.5 * GRAIN_WEIGHT  # the cluster reads as satin overall: no glitter split
+    region = np.ones((10, 10), bool)
+    assert _print_beside_plain(_halves(5.4, 0.8), 1, feat, region)
+    assert not _print_beside_plain(_halves(1.1, 0.6), 1, feat, region)  # two plain tones
+    assert not _print_beside_plain(_halves(5.4, 2.0), 1, feat, region)  # larger half not satin
+
+
+def test_print_beside_plain_leaves_glitter_to_the_glitter_split():
+    from rosette.vision.colors import GRAIN_WEIGHT, _print_beside_plain
+    feat = np.zeros((10, 10, 4), np.float32)
+    feat[:, :5, 3] = 0.5 * GRAIN_WEIGHT
+    feat[:, 5:, 3] = 10.0 * GRAIN_WEIGHT  # half satin, half sparkle: _split_glitter's case
+    assert not _print_beside_plain(_halves(9.5, 0.7), 1, feat, np.ones((10, 10), bool))
+
+
+@pytest.mark.slow
+def test_s2_15b_snowflake_print_and_white_satin_are_two_groups():
+    p = prepare((PHOTOS / "S2-15B.png").read_bytes())
+    _, groups = pixel_groups(p)
+    assert len(groups) == 3

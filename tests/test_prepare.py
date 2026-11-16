@@ -286,3 +286,41 @@ def test_prepared_exposes_the_fit_ratio_and_coverage(monkeypatch):
     monkeypatch.setattr(prep, "_head", lambda m, ax, top, bottom: (ax, top + 160.0, 160.0))
     q = _prep(img)  # fit 180 against symmetry 160: 1.125, kept (no takeover)
     assert q.fit_ratio == pytest.approx(180 / 160, abs=0.03) and q.head[2] == pytest.approx(160.0)
+
+
+def _tail_runs(p: Prepared, frac: float) -> int:
+    y = int(p.tails_top_y + frac * (p.bottom_y - p.tails_top_y))
+    row = p.mask[y].astype(int)
+    return int((np.diff(np.r_[0, row, 0]) == 1).sum())
+
+
+def _white_stripe_photo(stripe_rgb, sheen_rgb) -> bytes:
+    """Disc head over one wide tail with a background-colored stripe down its middle;
+    the stripe's upper part carries a faint sheen (foreground), its lower half none."""
+    a = np.full((1200, 600, 3), 255, np.uint8)
+    yy, xx = np.mgrid[:1200, :600]
+    a[(yy - 260) ** 2 + (xx - 300) ** 2 <= 170 ** 2] = (40, 60, 160)
+    a[400:1150, 180:420] = (40, 60, 160)
+    a[400:1150, 280:320] = sheen_rgb
+    a[780:1150, 280:320] = stripe_rgb
+    return _png(Image.fromarray(a))
+
+
+def test_background_colored_stripe_is_filled_not_a_split():
+    p = prepare(_white_stripe_photo((255, 255, 255), (235, 235, 238)))
+    assert _tail_runs(p, 0.85) == 1
+    assert p.mask[1000, 300]
+
+
+def test_ribbon_split_into_legs_stays_open():
+    # the same notch under a stripe of the ribbon's own color: two legs, not a white ribbon
+    p = prepare(_white_stripe_photo((255, 255, 255), (40, 60, 160)))
+    assert _tail_runs(p, 0.85) == 2
+    assert not p.mask[1000, 300]
+
+
+@pytest.mark.slow
+def test_s53_white_satin_stripes_keep_one_tail():
+    p = prepare((REF / "photos" / "S53-19.png").read_bytes())
+    for frac in (0.6, 0.75, 0.9):
+        assert _tail_runs(p, frac) == 1

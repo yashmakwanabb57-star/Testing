@@ -51,6 +51,13 @@ from .vision import candidates as vcandidates
 from .vision import groups as vgroups
 from .vision import judge as vjudge
 from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_groups
+from .vision.one_color import ONE_COLOR_INFO, badge_in_pleats, rose_center
+from .vision.stacked_stars import edged_star_between_bows, stacked_stars, star_on_square
+from .vision.shaded_rings import HUE_INFO, dark_loop_edges, shaded_rings
+from .vision.parts_head import _badge_under_loops, _loops_on_rim, _petals_between_loops, _twin_points
+
+# R32: the center of a hue-rebuilt head is checked for a badge from this share of the head radius.
+HUE_BADGE_BIG = 0.3
 from .vision.layer_classify import classify_head_layers
 from .vision.parts import detect_parts
 from .vision.parts_common import Frame, majority
@@ -846,6 +853,407 @@ def reader_step(p: Prepared, labels: np.ndarray, pieces: list | None, model: Ros
         return model, done(status="failed", message=f"ML-4 reader failed - {type(exc).__name__}: {exc}")
 
 
+# R32: the rebuilt pleat rings are widened outward by HUE_TUCK of the head radius (each ring's
+# pleats run on under the ring outside it: A3-15's designer rings end at 0.58 and 0.78 head radii,
+# the photo shows them to 0.40 and 0.60), and each ring starts where the ring inside it starts,
+# so no head color shows between them (the inner ring lies on top).
+HUE_TUCK = 0.18
+
+
+# R33: a ring starting at most SEAM_GAP_UNITS outside the center or the ring inside it, over a
+# gap that shows the head disc in the ring's own color, runs in to meet it: the gap is the same
+# ribbon, not a part of its own (A9-15: a 9-unit red band between the badge and the red pleat
+# ring drew an extra circle line and a pleated edge inside the red).
+SEAM_GAP_UNITS = 12.0
+SEAM_INFO = "A narrow band of the head's color between rings was joined to the ring around it."
+
+
+# R44: a head of only bows over a star, no center found, the bows a light tint of the star's
+# hue (S2-15: pink loops over a wine star) is the designer's rose head: a rose of the star's
+# color over the center, the star's points and the loops running in under it, the loops edged
+# in the star's color. The rose stands where the loops start in the photo.
+ROSE_BOW_HUE_DEG, ROSE_BOW_DL = 20.0, 25.0
+ROSE_BOW_SHARE = 0.8  # rose radius / where the loops start in the photo (designer rose 0.36 of the head)
+ROSE_BOW_SPAN = 34.0  # a loop's span at its end, edges included (designer S2-15)
+ROSE_BOW_BASE = 0.4  # a loop's width at the rose / its widest (designer S2-15)
+ROSE_BOW_EDGE = 0.22  # each edge strip's share of the loop's width (designer S2-15)
+ROSE_BOW_TUCK = 0.5  # the loops start at this share of the rose radius
+
+
+def _hue_l(rgb) -> tuple[float, float]:
+    import cv2
+    lab = cv2.cvtColor(np.array([[rgb]], np.float32) / 255.0, cv2.COLOR_RGB2Lab)[0, 0]
+    return float(np.degrees(np.arctan2(lab[2], lab[1]))), float(lab[0])
+
+
+def _rose_over_bows(parts: list, groups: list) -> bool:
+    head = [q for q in parts if q.role not in ("tail_stripe",)]
+    bows = [q for q in head if q.role == "points" and q.params.get("kind") == "bow"]
+    stars = [q for q in head if q.role == "points" and q.params.get("kind") == "star"]
+    if (len(bows) != 1 or len(stars) != 1 or any(q.role in ("center", "ring", "head") for q in head)
+            or bows[0].color_group == stars[0].color_group):
+        return False
+    bow, star = bows[0], stars[0]
+    rgb = {g.id: g.rgb for g in groups}
+    if bow.color_group not in rgb or star.color_group not in rgb:
+        return False
+    hb, lb = _hue_l(rgb[bow.color_group])
+    hs, ls = _hue_l(rgb[star.color_group])
+    if abs((hb - hs + 180.0) % 360.0 - 180.0) > ROSE_BOW_HUE_DEG or lb - ls < ROSE_BOW_DL:
+        return False
+    rr = round(ROSE_BOW_SHARE * float(bow.params["r_inner"]), 3)
+    star.params["r_inner"] = rr
+    ri, ro = ROSE_BOW_TUCK * rr, float(bow.params["r_outer"])
+    w = float(bow.params["width_ratio"]) * (float(bow.params["r_outer"]) - float(bow.params["r_inner"]))
+    # the photo's loops spread flat; the designer's span ROSE_BOW_SPAN degrees at their ends
+    w = min(w, 2.0 * ro * np.sin(np.radians(ROSE_BOW_SPAN / 2.0)))
+    bow.params["r_inner"] = round(ri, 3)
+    bow.params["width_ratio"] = round(w / (ro - ri), 4)  # the loops keep their width
+    bow.params["inner_ratio"] = ROSE_BOW_BASE  # and narrow in toward the rose
+    parts.append(Part(f"edge-{bow.id}", "points", dict(bow.params, edge_width=round(ROSE_BOW_EDGE * w, 3)),
+                      star.color_group, bow.z + 1, bow.confidence))
+    parts.append(Part("center", "center", {"cx": star.params["cx"], "cy": star.params["cy"], "r": rr},
+                      star.color_group, 50, star.confidence))
+    return True
+
+
+# R47: a star whose valleys lie past half its reach, between loops of its count half a step
+# away (S27-15: purple corners between white loops), is a second set of loops: the photo's loop
+# ends read as blunt star points. Both sets take the loops' width and run in under the ring
+# around the center, the star's loops on top (designer S27-15: the purple loops over the white).
+STAR_LOOP_VALLEY = 0.5
+
+
+def _star_as_loops(parts: list) -> bool:
+    ring = min((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_inner"]), default=None)
+    bows = [q for q in parts if q.role == "points" and q.params.get("kind") == "bow"
+            and q.params.get("edge_width") is None]
+    if sum(1 for q in parts if q.role == "points") != 2:  # just the star and the loops (not S29-15's layers)
+        return False
+    done = False
+    for a in parts:
+        pa = a.params
+        if (a.role != "points" or pa.get("kind") != "star" or pa.get("tips") or pa.get("leaf")
+                or float(pa["r_inner"]) <= STAR_LOOP_VALLEY * float(pa["r_outer"])):
+            continue
+        n = int(pa["count"])
+        step = 360.0 / n
+        mates = [b for b in bows if int(b.params["count"]) == n and b.color_group != a.color_group
+                 and abs(((float(pa["rotation_deg"]) - float(b.params["rotation_deg"])) % step) - step / 2) <= 8.0]
+        if not mates or ring is None:
+            continue
+        b = mates[0]
+        ri = float(ring.params["r_inner"])
+        w = float(b.params["width_ratio"]) * (float(b.params["r_outer"]) - float(b.params["r_inner"]))
+        for q in (a, b):
+            ro = float(q.params["r_outer"])
+            q.params.update(kind="bow", r_inner=round(ri, 3), width_ratio=round(w / max(ro - ri, 1e-6), 4))
+        if a.z <= b.z:  # the read star's loops lie on top (designer S27-15: purple over white)
+            a.z, b.z = b.z, a.z
+            if a.z == b.z:
+                a.z += 1
+        done = True
+    return done
+
+
+# R50: diamonds half a step from edged loops of their count, with a ring around the center
+# (S30-15: lilac points between heart-print loops edged in pink), are a star behind the loops:
+# its body runs in under them to the ring, and the loops run in under the ring, as the designer
+# draws them. Read from the photo's tips, the library head does not replace it.
+def _diamonds_behind_loops(parts: list) -> bool:
+    ring = max((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]), default=None)
+    if ring is None:
+        return False
+    loops = [q for q in parts if q.role == "points" and q.params.get("kind") == "bow" and q.params.get("edge_width") is None]
+    edged = {(int(q.params["count"]), round(float(q.params["rotation_deg"]), 1)) for q in parts
+             if q.role == "points" and q.params.get("kind") == "bow" and q.params.get("edge_width") is not None}
+    done = False
+    for a in parts:
+        pa = a.params
+        if a.role != "points" or pa.get("kind") != "diamond":
+            continue
+        n = int(pa["count"])
+        step = 360.0 / n
+        mates = [b for b in loops if int(b.params["count"]) == n
+                 and (n, round(float(b.params["rotation_deg"]), 1)) in edged
+                 and abs(((float(pa["rotation_deg"]) - float(b.params["rotation_deg"])) % step) - step / 2) <= 8.0]
+        if not mates:
+            continue
+        ri = float(ring.params["r_outer"])
+        pa.update(kind="star", r_inner=round(ri, 3), tips=1)
+        a.z = min(b.z for b in mates) - 1
+        for q in parts:  # the loops and their edges run in under the ring
+            if q.role == "points" and q.params.get("kind") == "bow" and int(q.params["count"]) == n:
+                ro = float(q.params["r_outer"])
+                w = float(q.params["width_ratio"]) * (ro - float(q.params["r_inner"]))
+                q.params.update(r_inner=round(float(ring.params["r_inner"]), 3), width_ratio=round(w / (ro - float(ring.params["r_inner"])), 4))
+        done = True
+    return done
+
+
+# R51: one loop set on a star of its count half a step away, around a center with no ring or
+# head disc (S31-15: glitter loops edged in lilac on a blue star, a lilac rose, a blue flower over
+# the loops), is the designer's head: the star and the loops run in under the center, the loops
+# edged in the center's color, and a 6-point flower of the star's color lies over the loops'
+# bases. Odd point sets of the center's color (read from the loop edges) go. Proportions are the
+# designer's (S31-15, share of the star's tips).
+FLOWER_LOOPS = (0.43, 0.92, 0.42, 0.15)  # loops: inner, outer, width, edge share
+FLOWER_TIP = 0.62  # the flower over the loops: its tips
+FLOWER_VALLEY = 0.42  # and its valleys
+FLOWER_BACK_VALLEY = 0.55  # the star behind the loops: its valleys
+FLOWER_MIN_LOOP_WIDTH = 0.6  # the read loops' width / length at least
+
+
+def _loops_on_star_flower(parts: list) -> bool:
+    c = next((q for q in parts if q.role == "center"), None)
+    if c is None or any(q.role in ("ring", "head") for q in parts):
+        return False
+    bows = [q for q in parts if q.role == "points" and q.params.get("kind") == "bow"]
+    stars = [q for q in parts if q.role == "points" and q.params.get("kind") == "star"]
+    if len(bows) != 1 or len(stars) != 1 or bows[0].params.get("edge_width") is not None:
+        return False
+    bow, star = bows[0], stars[0]
+    n = int(bow.params["count"])
+    if n != int(star.params["count"]) or n < 5 or star.params.get("tips"):
+        return False
+    if float(bow.params["width_ratio"]) < FLOWER_MIN_LOOP_WIDTH:  # thin strips (S56-17B's loop edges)
+        return False
+    step = 360.0 / n
+    if abs(((float(star.params["rotation_deg"]) - float(bow.params["rotation_deg"])) % step) - step / 2) > 8.0:
+        return False
+    if len({c.color_group, bow.color_group, star.color_group}) != 3:
+        return False
+    tip, rc = float(star.params["r_outer"]), float(c.params["r"])
+    ri, ro = FLOWER_LOOPS[0] * tip, FLOWER_LOOPS[1] * tip
+    w = FLOWER_LOOPS[2] * tip
+    bow.params.update(r_inner=round(ri, 3), r_outer=round(ro, 3), width_ratio=round(w / (ro - ri), 4))
+    star.params.update(r_inner=round(FLOWER_BACK_VALLEY * tip, 3), tips=1)
+    star.z, bow.z = 20, 21
+    parts[:] = [q for q in parts if not (q.role in ("points", "unknown") and q.color_group == c.color_group)]
+    parts.append(Part(f"edge-{bow.id}", "points", dict(bow.params, edge_width=round(FLOWER_LOOPS[3] * w, 3)),
+                      c.color_group, 22, bow.confidence))
+    parts.append(Part("points-flower", "points", dict(star.params, r_inner=round(max(rc, FLOWER_VALLEY * tip), 3),
+                                                      r_outer=round(FLOWER_TIP * tip, 3)),
+                      star.color_group, 23, star.confidence))
+    return True
+
+
+# R53: no center, and a small blunt star in the middle of the head (S47-15: the white rose's
+# petals read as a 6-point star inside the pink loops) is the rose: a center of its color at its
+# reach, the loops running in under it.
+ROSE_STAR_REACH = 0.45  # the star's tips / the head's reach at most
+ROSE_STAR_BLUNT = 0.6  # its valleys / its tips at least
+
+
+def _rose_from_small_star(parts: list) -> bool:
+    if any(q.role == "center" for q in parts):
+        return False
+    pts = [q for q in parts if q.role == "points"]
+    reach = max([float(q.params["r_outer"]) for q in pts]
+                + [float(q.params["r"]) for q in parts if q.role == "head"], default=0.0)
+    for a in pts:
+        pa = a.params
+        if (pa.get("kind") == "star" and float(pa["r_outer"]) <= ROSE_STAR_REACH * reach
+                and float(pa["r_inner"]) >= ROSE_STAR_BLUNT * float(pa["r_outer"])):
+            rr = float(pa["r_outer"])
+            parts.remove(a)
+            parts.append(Part("center", "center", {"cx": pa["cx"], "cy": pa["cy"], "r": round(rr, 3)},
+                              a.color_group, 50, a.confidence))
+            for q in parts:  # the loops run in under the rose
+                if q.role == "points" and q.params.get("kind") == "bow" and float(q.params["r_inner"]) > 0.6 * rr:
+                    ro, ri = float(q.params["r_outer"]), float(q.params["r_inner"])
+                    w = float(q.params["width_ratio"]) * (ro - ri)
+                    q.params.update(r_inner=round(0.6 * rr, 3), width_ratio=round(w / (ro - 0.6 * rr), 4))
+            return True
+    return False
+
+
+def _taper_edged_bows(parts: list) -> bool:
+    """R45: a loop set laid on a wider loop set of another color, one count and angle (S2-15B:
+    blue loops on white), is the designer's edged loops: both narrow toward the center to
+    ROSE_BOW_BASE of their widest, as in R44, and start together under the center."""
+    if not any(q.role == "center" for q in parts):
+        return False
+    bows = [q for q in parts if q.role == "points" and q.params.get("kind") == "bow"
+            and q.params.get("edge_width") is None and q.params.get("inner_ratio") is None]
+    done = False
+    for a in bows:
+        for b in bows:
+            if a is b or a.color_group == b.color_group or a.z <= b.z:
+                continue
+            if int(a.params["count"]) != int(b.params["count"]):
+                continue
+            step = 360.0 / int(a.params["count"])
+            d = (float(a.params["rotation_deg"]) - float(b.params["rotation_deg"])) % step
+            if min(d, step - d) > 3.0:
+                continue
+            wa = float(a.params["width_ratio"]) * (float(a.params["r_outer"]) - float(a.params["r_inner"]))
+            wb = float(b.params["width_ratio"]) * (float(b.params["r_outer"]) - float(b.params["r_inner"]))
+            if wb <= wa:
+                continue
+            ri = min(float(a.params["r_inner"]), float(b.params["r_inner"]))
+            for q, w in ((a, wa), (b, wb)):
+                q.params["r_inner"] = round(ri, 3)
+                q.params["width_ratio"] = round(w / (float(q.params["r_outer"]) - ri), 4)
+                q.params["inner_ratio"] = ROSE_BOW_BASE
+            done = True
+    return done
+
+
+def close_seams(parts: list) -> bool:
+    head = next((q for q in parts if q.role == "head"), None)
+    center = next((q for q in parts if q.role == "center"), None)
+    if head is None and center is None:
+        return False
+    edges = ([float(center.params["r"])] if center is not None else [])
+    changed = False
+    prev = None
+    for q in sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_inner"])):
+        ri = float(q.params["r_inner"])
+        inner = max((e for e in edges if e <= ri), default=None)
+        if (prev is not None and 0 <= ri - float(prev.params["r_outer"]) <= SEAM_GAP_UNITS and prev.z > q.z):
+            # the ring inside lies on top: this ring runs in under it, so one edge shows
+            q.params["r_inner"] = prev.params["r_inner"]
+            changed = True
+        elif (inner is not None and 0 < ri - inner <= SEAM_GAP_UNITS
+                and ((head is not None and q.color_group == head.color_group)
+                     or (center is not None and inner == float(center.params["r"])))):
+            # a gap of the head's color, or any gap at the center (it lies on top of every ring)
+            q.params["r_inner"] = round(inner, 3)
+            changed = True
+        edges.append(float(q.params["r_outer"]))
+        prev = q
+    return changed
+
+
+# R49: a center far smaller than the ring of its own color right around it (S29-15: a 7-unit
+# center inside a wine ring at 40-52, the badge's print read apart) is that badge: the center
+# grows to the ring's outer edge and the ring goes.
+BADGE_SPECK = 0.25  # center radius / the ring's inner radius at most
+
+
+def _fill_badge(parts: list) -> bool:
+    c = next((q for q in parts if q.role == "center"), None)
+    if c is None:
+        return False
+    rc = float(c.params["r"])
+    rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_inner"]))
+    if not rings or rings[0].color_group != c.color_group or rc > BADGE_SPECK * float(rings[0].params["r_inner"]):
+        return False
+    c.params["r"] = rings[0].params["r_outer"]
+    parts[:] = [q for q in parts if q is not rings[0] and not (q.role == "unknown" and float(q.params.get("r", 0)) <= float(c.params["r"]))]
+    return True
+
+
+def _tuck_rings(parts: list) -> None:
+    head = next((q for q in parts if q.role == "head"), None)
+    rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
+    if head is None or not rings:
+        return
+    rim, grow = float(head.params["r"]), HUE_TUCK * float(head.params["r"])
+    for i, q in enumerate(rings):
+        q.params["r_outer"] = round(min(float(q.params["r_outer"]) + grow, 0.95 * rim), 3)
+        if i:
+            q.params["r_inner"] = rings[i - 1].params["r_inner"]
+        q.z = 30 + len(rings) - i  # inner rings on top
+
+
+# R42: two plain color groups of one hue (within SHADE_HUE_DEG; lightness and chroma within
+# SHADE_DL / SHADE_DC) are one ribbon in light and shade when merging them makes the tail
+# stripes mirror-symmetric (S15-15: the light and dark red read red | blue | yellow | blue |
+# yellow). The tails are always symmetric in the designer files with a single block; A14-17's
+# two oranges (as close) already are, so they stay apart. The larger group keeps its color.
+SHADE_HUE_DEG, SHADE_DL, SHADE_DC, SHADE_MIN_CHROMA = 12.0, 12.0, 12.0, 25.0
+SHADE_INFO = "Two shades of one ribbon were read as one color (light and shadow) - check the colors."
+
+
+def _short_star_on_top(parts: list, p=None, labels=None) -> None:
+    """R42: of two interleaved stars of one count (half a step apart), the shorter lies on top,
+    as the designer stacks them (S15-15: blue star over the red; the photo vote reads the red
+    over it once the red's two shades are one group)."""
+    stars = [q for q in parts if q.role == "points" and q.params.get("kind") == "star"]
+    for a in stars:
+        for b in stars:
+            if a is b or int(a.params["count"]) != int(b.params["count"]):
+                continue
+            step = 360.0 / int(a.params["count"])
+            if abs(((float(a.params["rotation_deg"]) - float(b.params["rotation_deg"])) % step) - step / 2) > 8.0:
+                continue
+            if float(a.params["r_outer"]) == float(b.params["r_outer"]):
+                continue  # one length (S18-15): the photo's order stands
+            short, long_ = (a, b) if float(a.params["r_outer"]) < float(b.params["r_outer"]) else (b, a)
+            if short.z <= long_.z:
+                short.z, long_.z = long_.z, short.z
+                if short.z == long_.z:
+                    short.z += 1
+            if p is not None and labels is not None:
+                _body_ring(parts, long_, short, p, labels)
+            return
+
+
+def _body_ring(parts: list, long_, short, p, labels) -> None:
+    """R42: the long star's body showing as a full band inside the short star (S15-15: the red
+    pleated ring between the blue ring and the blue star) is a pinked ring on top of the stars."""
+    fr = Frame.of(p)
+    th = np.linspace(0, 2 * np.pi, 720, endpoint=False)
+    vis = np.abs(np.degrees(th) - 90.0) > 35.0
+    h, w = labels.shape
+    inner = max([float(q.params["r_outer"]) for q in parts if q.role == "ring"]
+                + [float(q.params["r"]) for q in parts if q.role == "center"], default=0.0)
+    full = []
+    for ru in np.arange(inner, float(short.params["r_inner"]), 1.0):
+        rp = ru * fr.scale
+        xs = np.clip(np.rint(p.head[0] + rp * np.cos(th)).astype(int), 0, w - 1)
+        ys = np.clip(np.rint(p.head[1] + rp * np.sin(th)).astype(int), 0, h - 1)
+        if float((labels[ys, xs][vis] == long_.color_group).mean()) >= 0.8:
+            full.append(ru)
+    if len(full) < 5:
+        return
+    from rosette.model import Part
+    # the pleated ring runs out under the short star's valleys (no head color between them)
+    parts.append(Part("ring-body", "ring", {"cx": long_.params["cx"], "cy": long_.params["cy"],
+                                            "r_inner": round(inner, 3),
+                                            "r_outer": round(float(short.params["r_inner"]) + 2.0, 3),
+                                            "pinked": 1}, long_.color_group, 29, 0.5))
+    c = next((q for q in parts if q.role == "center"), None)
+    if c is not None:  # rings start at the center: no band of other color, no extra edge lines
+        rc = float(c.params["r"])
+        for q in parts:
+            if q.role == "ring" and q.id != "ring-body" and 0 < float(q.params["r_inner"]) - rc <= 12.0:
+                q.params["r_inner"] = round(rc, 3)
+            if q.id == "ring-body":  # under the ring inside it: one pinked edge where they meet
+                q.params["r_inner"] = round(rc, 3)
+        parts[:] = [q for q in parts if not (q.role == "unknown" and float(q.params.get("r", 0)) <= rc)]
+
+
+def shade_pair(parts: list, groups: list) -> tuple[int, int] | None:
+    """R42: (group kept, group merged into it) or None."""
+    import itertools
+    import cv2
+    st = sorted((q for q in parts if q.role == "tail_stripe"),
+                key=lambda q: (int(q.params["tail_index"]), int(q.params["stripe_index"])))
+    def runs(x: list) -> list:  # consecutive repeats collapsed (slivers between stripes)
+        return [v for i, v in enumerate(x) if i == 0 or v != x[i - 1]]
+    seq = runs([q.color_group for q in st])
+    if len(seq) < 3 or seq == seq[::-1] or len({int(q.params["tail_index"]) for q in st}) != 1:
+        return None
+
+    def lab(g):
+        return cv2.cvtColor(np.array([[g.rgb]], np.float32) / 255.0, cv2.COLOR_RGB2Lab)[0, 0]
+    for a, b in itertools.combinations([g for g in groups if not g.pattern], 2):
+        la, lb = lab(a), lab(b)
+        ca, cb = float(np.hypot(*la[1:])), float(np.hypot(*lb[1:]))
+        if min(ca, cb) < SHADE_MIN_CHROMA:
+            continue
+        dh = abs((np.degrees(np.arctan2(la[2], la[1])) - np.degrees(np.arctan2(lb[2], lb[1])) + 180) % 360 - 180)
+        if dh > SHADE_HUE_DEG or abs(la[0] - lb[0]) > SHADE_DL or abs(ca - cb) > SHADE_DC:
+            continue
+        merged = runs([a.id if g == b.id else g for g in seq])
+        if merged == merged[::-1]:
+            return (a.id, b.id) if a.area >= b.area else (b.id, a.id)
+    return None
+
+
 def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -> Detection:
     """prepare -> pixel_groups -> detect_parts -> tidy -> RosetteModel -> assign -> the
     learned layer classifier (ML-1) -> the piece reader (ML-4, reader_step). classify=False:
@@ -864,19 +1272,84 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
         seen = dict(seen, status="failed", message=f"SAM 2 pieces failed in the detector - {type(exc).__name__}: {exc}")
         pieces = None  # rejected: the reader never reads them either
         found = detect_parts(p, labels, groups)
+    pair = shade_pair(found, groups)  # R42: one ribbon in light and shade read as two colors
+    if pair is not None:
+        keep, drop = pair
+        labels = labels.copy()
+        labels[labels == drop] = keep
+        groups = [g for g in groups if g.id != drop]
+        try:
+            found = detect_parts(p, labels, groups, pieces)
+        except Exception:  # noqa: BLE001
+            found = detect_parts(p, labels, groups)
     tidy = merge_tail_slivers(drop_two_point_layers(drop_specks(
         RosetteModel(parts=found), head_r=Frame.of(p).d(p.head[2]))))
+    if pair is not None:
+        tidy.info.append(SHADE_INFO)
+    _short_star_on_top(tidy.parts, p, labels)
+    stack = stacked_stars(p, labels, tidy.parts)  # R43: a head of stacked stars read along rays
+    if stack is not None:
+        tidy.parts = stack
+    edged = edged_star_between_bows(p, labels, tidy.parts)  # R46: a star edged in a third color
+    if edged is not None:
+        tidy.parts = edged
+    square = star_on_square(p, labels, tidy.parts)  # R48: a star on four loops, a square over its base
+    if square is not None:
+        tidy.parts = square
     parts = tidy.parts
+    _fill_badge(parts)  # R49: a speck of center inside a ring of its color is the badge
+    badge = badge_in_pleats(p, parts)  # R31: a badge inside pleats of its own color
+    if badge is not None:
+        parts = badge
+    one = rose_center(p, parts)  # R29: the rose of a one-color rosette, same color
+    if one is not None:
+        parts = one
+        tidy.info.append(ONE_COLOR_INFO)
     tidy.warnings.extend(pleat_warnings(parts, p, labels))  # ML-1: rings near the pleat bar
     used = {q.color_group for q in parts}
     model = RosetteModel(parts=parts, groups=[g for g in groups if g.id in used],
                          rose=any(q.role == "center" for q in parts), warnings=tidy.warnings,
                          info=list(tidy.info) + alt_ring_info(parts))  # A16: a one-color two-tone edge
     out = assign(model)
+    # R32: shaded pleat rings read from hue, after the Colors are numbered on the labels' reading
+    # (the rebuilt head reuses the same groups, so their Colors stand)
     # assign keeps the parts (same order and ids) and only relabels merged groups
     assert [q.id for q in model.parts] == [q.id for q in out.parts]
     merged = {a.color_group: b.color_group for a, b in zip(model.parts, out.parts)
               if a.color_group != b.color_group}
+    edged = dark_loop_edges(p, labels, out.parts, out.groups)  # R34: dark loop edges (on the photo's loops)
+    if edged is not None:
+        out.parts = edged
+    if _rose_from_small_star(out.parts):  # R53: a small blunt star with no center is the rose
+        out.rose = True
+    if _rose_over_bows(out.parts, out.groups):  # R44: bows and a star of one hue under a rose
+        out.rose = True
+    _loops_on_star_flower(out.parts)  # R51: loops on a star around a bare center
+    _diamonds_behind_loops(out.parts)  # R50: points between edged loops are a star behind them
+    _star_as_loops(out.parts)  # R47: a blunt star between loops of its count is loops too
+    _taper_edged_bows(out.parts)  # R45: loops edged by a wider loop narrow toward the center
+    _petals_between_loops(out.parts)  # R36: petals on top of loops (final stacking known here)
+    _badge_under_loops(out.parts, p, labels)  # R39: a badge inside loops, read as print
+    if _loops_on_rim(out.parts, p, labels, out.groups):  # R41: loops on a dark rim, star between
+        out.rose = True
+    if _twin_points(out.parts, p, labels):  # R40: two sets of points around the center
+        out.rose = True
+    if close_seams(out.parts):
+        out.info.append(SEAM_INFO)
+    hue = shaded_rings(p, out.parts, out.groups)
+    if hue is not None:
+        badged = badge_in_pleats(p, hue, big=HUE_BADGE_BIG, outer=True)  # the badge in the light pleats
+        if badged is not None:
+            # its print is no ribbon color: it takes the next ring's out (A3-15's designer badge is
+            # the mid ring's Color 3); flagged with the rebuilt rings
+            mid = sorted((q for q in badged if q.role == "ring" and q.id != "ring-badge"),
+                         key=lambda q: float(q.params["r_inner"]))
+            c = next(q for q in badged if q.role == "center")
+            if mid:
+                c.color_group, c.confidence = mid[0].color_group, min(c.confidence, 0.5)
+        out.parts = badged or hue
+        _tuck_rings(out.parts)
+        out.info.append(HUE_INFO)
     # ML-1: the learned classifier's count, and its kind where it is sure (layer_classify)
     rules_model = copy.deepcopy(out)
     read_status = None
@@ -903,7 +1376,8 @@ def analyze_with_context(data: bytes, template: bool = True,
     ctx = PhotoContext(p, labels, groups, merged, copy.deepcopy(out), d.rules_model, d.perception, d.reader)
     used = {q.color_group for q in out.parts} | set(merged)
     lib = None
-    if template:
+    tip_star = any(q.params.get("tips") for q in out.parts)  # R37: a star read from its tips
+    if template and ONE_COLOR_INFO not in out.info and HUE_INFO not in out.info and not tip_star:  # the rules head stands
         lib = with_template(out, p.mask, labels, p.head, Frame.of(p), groups, merged, exclude_key=exclude_key)
     cache: dict[int, tuple] = {}  # one render per head model (fit and overlap share it)
 

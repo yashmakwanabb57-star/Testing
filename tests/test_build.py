@@ -301,3 +301,64 @@ def test_a_stripe_narrowing_downward_keeps_its_bottom():
     shapes = build(m)
     fills = [to_geom(s) for s in shapes if s.role == "tail_stripe" and s.kind == "color"]
     assert max(f.bounds[3] for f in fills) <= 800 + 1e-6
+
+
+def test_raised_stripe_keeps_its_side_lines():
+    # R26: a one-tail stripe moved up to a new top runs on along its own side lines
+    from rosette.build import _raised_stripe
+    from rosette.geometry.tails import tails
+    key = (1, 315.0, 825.0, 166.0, 324.0, 0.0, "0.18,0.64,0.18", "0.33,0.34,0.33")
+    old = tails(315.0, 825.0, 1, 166.0, 324.0, 0.0, [0.18, 0.64, 0.18], stripes_bottom=[0.33, 0.34, 0.33])[0][1]
+    new = _raised_stripe(key, 0, 1, 155.0)
+    pts_old = [tuple(float(v) for v in p.split(",")) for p in old.attrs["points"].split()]
+    pts_new = [tuple(float(v) for v in p.split(",")) for p in new.attrs["points"].split()]
+    (tl, tr, br, bl), (ntl, ntr, nbr, nbl) = pts_old[:2] + [pts_old[2], pts_old[-1]], pts_new[:2] + [pts_new[2], pts_new[-1]]
+    assert ntl[1] == 155.0 and ntr[1] == 155.0
+    assert (nbl, nbr) == (bl, br)  # same bottom
+    for top, bot, ntop in ((tl, bl, ntl), (tr, br, ntr)):  # the old top lies on the new side line
+        x_at = ntop[0] + (bot[0] - ntop[0]) * (top[1] - ntop[1]) / (bot[1] - ntop[1])
+        assert abs(x_at - top[0]) < 1e-3  # points are written to 3 decimals
+
+
+def test_raised_stripe_refuses_when_a_stripe_vanishes():
+    from rosette.build import _raised_stripe
+    key = (1, 315.0, 825.0, 166.0, 324.0, 0.0, "0.02,0.96,0.02", "0.4,0.2,0.4")
+    assert _raised_stripe(key, 0, 0, 25.0) is None
+
+
+@pytest.mark.slow
+def test_s36_15_tail_runs_up_under_a_smaller_library_head(monkeypatch):
+    monkeypatch.setenv("ROSETTE_READER", "off")
+    monkeypatch.setenv("ROSETTE_SAM2", "off")
+    from pathlib import Path
+    from rosette.pipeline import analyze_with_context, render
+    from rosette.vision.templates import design_key
+    photo = Path(__file__).resolve().parent.parent / "reference" / "photos" / "S36-15.png"
+    model, _, _ = analyze_with_context(photo.read_bytes(), exclude_key=design_key("S36-15"))
+    render(model)
+    assert not any("Tail top is not under" in w for w in model.warnings)
+
+
+def test_rose_sits_on_a_library_heads_round_middle_piece():
+    # R27: S36-15's library head has no center piece; its badge disc (classed as points)
+    # lies 0.18 head radii above the head circle's middle: the rose goes on that disc
+    from rosette.build import template_center
+    from rosette.model import Part
+    t = Part("template", "template", {"template_id": "S36-15", "cx": 300.0, "cy": 200.0, "r": 100.0,
+                                      "rotation_deg": 0.0}, 0, 10, 0.9)
+    cx, cy, r = template_center(t)
+    assert cx == pytest.approx(301.3, abs=0.2) and cy == pytest.approx(181.9, abs=0.2)
+    assert r == pytest.approx(37.0, abs=0.2)
+
+
+def test_center_disc_ignores_petals_and_far_pieces():
+    from rosette.build import _center_disc
+    from types import SimpleNamespace
+    import numpy as np
+    th = np.linspace(0, 2 * np.pi, 64, endpoint=False)
+    disc_ = SimpleNamespace(rings=[np.c_[0.3 * np.cos(th), 0.3 * np.sin(th) - 0.1]])
+    petal = SimpleNamespace(rings=[np.array([[0.0, 0.0], [0.6, 0.1], [0.0, 0.2]])])
+    far = SimpleNamespace(rings=[np.c_[0.1 * np.cos(th) + 0.7, 0.1 * np.sin(th)]])
+    (mx, my), r = _center_disc([petal, far, disc_])
+    assert (round(mx, 3), round(my, 3), round(r, 3)) == (0.0, -0.1, 0.3)
+    assert _center_disc([petal, far]) is None

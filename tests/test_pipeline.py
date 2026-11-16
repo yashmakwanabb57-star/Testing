@@ -65,11 +65,20 @@ def test_low_confidence_points_ring_is_flagged():
     assert is_flagged(m, [])
 
 
-def test_merged_print_and_satin_is_flagged():
-    # S2-15B: two colors found for a three-color ribbon (print merged with satin)
+def test_merged_print_and_satin_is_flagged(monkeypatch):
+    # a plain group that looks partly patterned (a print merged with satin) is warned and flagged
+    import rosette.pipeline as pl
+    monkeypatch.setattr(pl, "mixed_texture_groups", lambda p, labels, groups: [0])
     model = analyze(_photo("S2-15B"))
     assert any("partly patterned" in w for w in model.warnings)
     assert is_flagged(model, render(model).issues)
+
+
+def test_s2_15b_print_and_satin_are_separate_colors_not_warned():
+    # S2-15B: the snowflake print is split from the white satin (STRIPE_PRINT_GRAIN)
+    model = analyze(_photo("S2-15B"))
+    assert len({q.color_group for q in model.parts}) == 3
+    assert not any("partly patterned" in w for w in model.warnings)
 
 
 def test_low_confidence_part_of_any_role_is_flagged():
@@ -434,3 +443,15 @@ def test_the_reader_server_starts_once_per_process_and_stops_at_exit(monkeypatch
     assert len(started) == 1 and len(registered) == 1
     registered[0]()
     assert stopped == started and pl._READER_SERVER is None
+
+
+def test_close_seams_joins_a_same_color_gap_and_tucks_a_ring_under_the_inner_one():
+    from rosette.model import Part
+    from rosette.pipeline import close_seams
+    head = Part("head", "head", {"cx": 300.0, "cy": 170.0, "r": 143.0}, 0, 10, 0.9)
+    center = Part("center", "center", {"cx": 300.0, "cy": 170.0, "r": 54.5}, 1, 50, 0.9)
+    inner = Part("ring-1", "ring", {"cx": 300.0, "cy": 170.0, "r_inner": 63.5, "r_outer": 83.5}, 0, 31, 0.9)
+    outer = Part("ring-0", "ring", {"cx": 300.0, "cy": 170.0, "r_inner": 84.5, "r_outer": 113.5}, 1, 30, 0.9)
+    assert close_seams([head, center, inner, outer])
+    assert inner.params["r_inner"] == 54.5  # A9-15: the red band of the head's color joins the red ring
+    assert outer.params["r_inner"] == 54.5  # runs in under the ring on top of it: one edge at 83.5

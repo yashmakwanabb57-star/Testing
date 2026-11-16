@@ -1,1 +1,2 @@
 *.bat text eol=crlf
+rosette/data/*.csv text eol=lf

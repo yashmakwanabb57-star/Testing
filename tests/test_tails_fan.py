@@ -1,6 +1,8 @@
 import numpy as np
 import pytest
 
+from rosette.vision import parts_tails
+
 from rosette.build import build
 from rosette.model import ColorGroup, RosetteModel
 from rosette.validate import validate
@@ -36,7 +38,8 @@ def tails_of(parts):
                   key=lambda q: (q.params["tail_index"], q.params["stripe_index"]))
 
 
-def test_asymmetric_diverging_ribbons_become_a_fan():
+def test_asymmetric_diverging_ribbons_become_a_fan(monkeypatch):
+    monkeypatch.setattr(parts_tails, "FAN_SEPARATE", True)  # the switched-off R24 path
     # A13-15B: light | glitter | royal, the left inner boundary straight down, the right
     # one leaning out like the sides: three ribbons fanning out, not one striped tail
     b = [(250, -0.16), (350, 0.0), (430, 0.14), (550, 0.16)]
@@ -89,7 +92,8 @@ def test_parallel_stripes_stay_one_tail():
     assert {int(q.params["tails_count"]) for q in t} == {1} and len(t) == 3
 
 
-def test_fan_stacking_follows_the_boundaries():
+def test_fan_stacking_follows_the_boundaries(monkeypatch):
+    monkeypatch.setattr(parts_tails, "FAN_SEPARATE", True)  # the switched-off R24 path
     # the left inner boundary runs with the middle ribbon's axis (middle over left), the
     # right one with the right ribbon's (right over middle): z rises left to right
     b = [(250, -0.16), (350, 0.0), (430, 0.14), (550, 0.16)]
@@ -97,6 +101,17 @@ def test_fan_stacking_follows_the_boundaries():
     t = tails_of(detect_parts(p, labels, groups))
     z = [q.z for q in t]
     assert z[0] < z[1] < z[2]
+
+
+def test_asymmetric_diverging_ribbons_stay_one_striped_tail_by_default():
+    # R24: the designer draws the tails as one ribbon block; the fan stays one tail of three
+    # stripes, flagged (its asymmetry is still read)
+    b = [(250, -0.16), (350, 0.0), (430, 0.14), (550, 0.16)]
+    p, labels, groups = photo(b, [1, 2, 3])
+    t = tails_of(detect_parts(p, labels, groups))
+    assert [int(q.params["tails_count"]) for q in t] == [1, 1, 1]
+    assert [q.color_group for q in t] == [1, 2, 3]
+    assert all(q.confidence <= parts_tails.FAN_FLAG_CONF for q in t)
 
 
 def test_fan_z_from_boundary_angles():
@@ -121,7 +136,8 @@ def bottom_spans(t):
     return out
 
 
-def test_fan_tails_take_the_measured_bottom_shares():
+def test_fan_tails_take_the_measured_bottom_shares(monkeypatch):
+    monkeypatch.setattr(parts_tails, "FAN_SEPARATE", True)  # the switched-off R24 path
     # unequal ribbons (bottom shares 0.40 / 0.33 / 0.27): each tail its own width, the
     # middle one centered on the axis, bottoms edge to edge (no gap, no overlap)
     b = [(250, -0.16), (350, 0.0), (430, 0.14), (550, 0.16)]

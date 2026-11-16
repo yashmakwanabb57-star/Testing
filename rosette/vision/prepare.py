@@ -85,6 +85,19 @@ FIT_TAKEOVER = 1.25
 # (the takeovers on the 76 photos and reference renders: 0.67-0.94; broken fits through
 # a 6-point star's arms, s34-15 photo and S80-22 reference: 0.31 and 0.29).
 FIT_MIN_COVERAGE = 0.5
+# Background-colored ribbons (white satin on a white backdrop). Such a stripe reads as
+# background where its sheen fades, so the mask gets a notch cut up from the tails' bottom
+# and the tails read as several. A notch inside the tails (between the outer tail edges,
+# below the head) whose top lies above NOTCH_MAX_TOP of the tails' height (from the tails
+# start), and whose column above its top, over NOTCH_LOOK_FRAC of the tails' height and
+# NOTCH_LOOK_PX either side of its top center, is near the background color (Lab distance
+# under NOTCH_BG_DELTA) on at least NOTCH_MIN_BG of the pixels, is that ribbon's lower end
+# and is filled. Color masks only (an alpha cutout keeps a white ribbon). Over the 76
+# photos the notches reaching above 0.9 measure 0.10-0.21 near-white above except
+# S53-19's two white stripes (0.70-1.00); a ribbon split into two legs (A13-15) is its
+# own color above the split (0.12) and stays open. Pinked-end notches start at 0.92+.
+NOTCH_MAX_TOP, NOTCH_LOOK_FRAC, NOTCH_LOOK_PX = 0.9, 0.15, 2
+NOTCH_BG_DELTA, NOTCH_MIN_BG = 8.0, 0.65
 
 NO_ROSETTE = "No rosette found in the image."
 UNREADABLE = "Could not read the image file."
@@ -150,6 +163,42 @@ def _color_mask(rgb: np.ndarray) -> np.ndarray:
     if noise > MAX_BG_NOISE:
         raise InputError(NO_ROSETTE)
     return dist > max(MIN_DELTA_E, NOISE_FACTOR * noise)
+
+
+def _bg_distance(rgb: np.ndarray) -> np.ndarray:
+    """Lab distance of every pixel from the border's median color."""
+    lab = cv2.cvtColor(rgb.astype(np.float32) / 255.0, cv2.COLOR_RGB2Lab)
+    border = np.zeros(rgb.shape[:2], bool)
+    b = BORDER_PX
+    border[:b, :] = border[-b:, :] = border[:, :b] = border[:, -b:] = True
+    return np.linalg.norm(lab - np.median(lab[border], axis=0), axis=2)
+
+
+def _fill_bg_ribbons(rgb: np.ndarray, mask: np.ndarray, top: int, bottom: int) -> np.ndarray:
+    """The mask with the notches of background-colored ribbons filled (NOTCH_*)."""
+    span = bottom - top
+    if span <= 0:
+        return mask
+    inner = np.zeros_like(mask)
+    for y in range(top, bottom + 1):
+        xs = np.flatnonzero(mask[y])
+        if len(xs) >= 2:
+            inner[y, xs[0]:xs[-1] + 1] = ~mask[y, xs[0]:xs[-1] + 1]
+    labels, n = ndimage.label(inner)
+    if n == 0:
+        return mask
+    near_bg = _bg_distance(rgb) < NOTCH_BG_DELTA
+    look = max(1, int(round(NOTCH_LOOK_FRAC * span)))
+    out = mask.copy()
+    for i, sl in enumerate(ndimage.find_objects(labels), start=1):
+        y0 = sl[0].start
+        if (y0 - top) / span >= NOTCH_MAX_TOP or y0 <= top:
+            continue
+        x0 = int(round(np.flatnonzero(labels[y0] == i).mean()))
+        win = near_bg[max(top, y0 - look):y0, max(0, x0 - NOTCH_LOOK_PX):x0 + NOTCH_LOOK_PX + 1]
+        if win.size and win.mean() >= NOTCH_MIN_BG:
+            out |= labels == i
+    return out
 
 
 def _clean(raw: np.ndarray) -> np.ndarray:
@@ -360,6 +409,8 @@ def prepare(data: bytes) -> Prepared:
         if r >= FIT_TAKEOVER * head[2] and coverage >= FIT_MIN_COVERAGE:
             head = (ax, cy, r)
     tails_top = min(float(bottom), float(np.floor(head[1] + head[2]) + 1))
+    if alpha is None:
+        mask = _fill_bg_ribbons(rgb, mask, int(tails_top), bottom)
     return Prepared(rgb=np.ascontiguousarray(rgb, dtype=np.uint8), mask=mask, axis_x=ax,
                     head=head, tails_top_y=tails_top, bottom_y=float(bottom),
                     scale=(bottom - top) / CANVAS_SPAN, fit_ratio=ratio, fit_coverage=coverage)

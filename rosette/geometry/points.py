@@ -23,9 +23,14 @@ from .common import Pt, points_attr, polar
 #   head IoU mean 0.7702 vs 0.7606 (better on 6, worse on 2: S40-15 -0.004, S58-17
 #   -0.007, equal on 6), whole shape 0.8897 vs 0.8866, color 0.8291 vs 0.8265.
 _T = tuple(i / 10 for i in range(11))
+LOOP_CURVE_BELOW = 0.6  # a bow base narrower than this share of its widest widens on a curve
 LOOP_PROFILE = (0.85, 0.85, 0.89, 0.92, 0.94, 0.96, 0.98, 1.0, 1.0, 1.0, 1.0)
 KITE_PEAK = 0.4
 KITE_PROFILE = tuple(round(t / KITE_PEAK if t <= KITE_PEAK else (1 - t) / (1 - KITE_PEAK), 4) for t in _T)
+# A lens kite (R37, S11-15's designer leaves over the 12-point star): a triangle standing on the
+# center, widest at its base, tapering almost straight to its tip.
+LENS_TAPER = 0.9  # S11-15's designer leaves: width 0.40 at the base to 0 at the tip, nearly straight
+LENS_PROFILE = tuple(round(math.sin(math.pi * t) ** 0.75, 4) for t in tuple(i / 10 for i in range(11)))
 PETAL_PROFILE = (0.75, 0.75, 0.86, 0.96, 0.98, 1.0, 0.83, 0.60, 0.41, 0.23, 0.0)
 # A loop's outer end is a shallow convex curve: r_outer is its radius on the axis and
 # its corners lie END_SAG times a straight cut's sag (sqrt(r^2 + h^2) - r) further from
@@ -40,6 +45,14 @@ ARC_POINTS = 9
 # strip's center lies EDGE_OUTSIDE strip widths outside the loop's side edge (median
 # 0.19, quartiles 0.00-0.34).
 EDGE_OUTSIDE = 0.19
+# A leaf star (R30, A14-17's designer star): each arm fills its share of the circle at the
+# valleys and narrows to its tip with sides bowing outward. Share of the arm's angular span
+# (360 / count) it covers at t = 0, 0.1, ..., 1 from the valleys to the tip, measured on the
+# designer file (circles every 6 units from r 50 to 110 around the head center).
+LEAF_COVER = (1.0, 0.91, 0.76, 0.62, 0.51, 0.40, 0.30, 0.21, 0.13, 0.05, 0.0)
+# A petal flower (R36, S10-19's designer flower between the loops): fuller petals, measured the
+# same way on that file (valleys 0.63, tips 1.0 of its radius).
+ROUND_COVER = (1.0, 0.97, 0.91, 0.83, 0.73, 0.62, 0.50, 0.38, 0.25, 0.12, 0.0)
 
 
 def _to_world(cx, cy, theta_deg, radial, lateral) -> Pt:
@@ -49,27 +62,34 @@ def _to_world(cx, cy, theta_deg, radial, lateral) -> Pt:
     return (cx + radial * ca - lateral * sa, cy + radial * sa + lateral * ca)
 
 
-def _profile(kind: str, inner_ratio: float | None) -> tuple[float, ...]:
+def _profile(kind: str, inner_ratio: float | None, lens: bool = False) -> tuple[float, ...]:
     if kind == "bow":
         if inner_ratio is None:
             return LOOP_PROFILE
+        if inner_ratio < LOOP_CURVE_BELOW:
+            # a loop narrowed hard toward the center (R44/R45: the designer's rose loops) widens
+            # on a smooth curve, no corner where the straight profile would level off
+            return tuple(round(inner_ratio + (1 - inner_ratio) * math.sin(math.pi / 2 * t), 4) for t in _T)
         # an edited base width: the loop profile rescaled between it and full width
         base = LOOP_PROFILE[0]
         return tuple(inner_ratio + (p - base) * (1 - inner_ratio) / (1 - base) for p in LOOP_PROFILE)
     if kind == "diamond":
-        return KITE_PROFILE
+        return LENS_PROFILE if lens else KITE_PROFILE
     if kind == "petal":
         return PETAL_PROFILE
     raise ValueError(f"unknown point kind {kind!r}")
 
 
 def _side(kind: str, r_in: float, r_out: float, h: float, inner_ratio: float | None,
-          offset: float = 0.0) -> list[tuple[float, float]]:
+          offset: float = 0.0, lens: bool = False) -> list[tuple[float, float]]:
     """(radial, lateral) points of one side (lateral >= 0) from the inner to the outer
     end, the profile's half-width plus `offset`. A bow's side stops at the corner of
     its convex outer end (`_end_radial`, END_SAG)."""
-    prof = _profile(kind, inner_ratio)
-    pts = [(r_in + (r_out - r_in) * t, max(0.0, h * p + offset)) for t, p in zip(_T, prof)]
+    prof = _profile(kind, inner_ratio, lens)
+    ts = _T if not lens else tuple(i / 30 for i in range(31))
+    if lens:  # a triangle on the center: widest at its base, tapering straight to its tip
+        prof = tuple((1 - t) ** LENS_TAPER for t in ts)
+    pts = [(r_in + (r_out - r_in) * t, max(0.0, h * p + offset)) for t, p in zip(ts, prof)]
     if kind != "bow":
         return pts
     lat = pts[-1][1]
@@ -86,10 +106,10 @@ def _end_radial(r_out: float, h: float, l: float) -> float:
 
 
 def _outline(kind: str, r_in: float, r_out: float, w: float,
-             inner_ratio: float | None = None) -> list[tuple[float, float]]:
+             inner_ratio: float | None = None, lens: bool = False) -> list[tuple[float, float]]:
     """(radial, lateral) vertices, symmetric about the axis: out along one side, back
     along the other (a bow crosses its outer end on an arc around the head center)."""
-    side = _side(kind, r_in, r_out, w / 2, inner_ratio)
+    side = _side(kind, r_in, r_out, w / 2, inner_ratio, lens=lens)
     out = [(r, -l) for r, l in side]
     if kind == "bow":
         h = side[-1][1]
@@ -111,13 +131,16 @@ def _edge_strips(kind: str, r_in: float, r_out: float, w: float, inner_ratio: fl
 def points_ring(cx: float, cy: float, kind: Literal["star", "diamond", "bow", "petal"],
                 count: int, r_inner: float, r_outer: float,
                 rotation_deg: float, width_ratio: float, inner_ratio: float | None = None,
-                edge_width: float | None = None) -> list[Shape]:
+                edge_width: float | None = None, leaf: int = 0, lens: bool = False) -> list[Shape]:
     """Angles run clockwise on screen from +x; point k is centered on
     rotation_deg + k*360/count. Width = width_ratio * (r_outer - r_inner) is the widest
     lateral width; the width profile is the designer's for the kind (LOOP_PROFILE,
     KITE_PROFILE, PETAL_PROFILE). An explicit inner_ratio sets a bow's base width
     (share of the widest; LOOP_PROFILE[0] = 0.85 when unset), the profile rescaled. With edge_width the shapes are
     the two edge strips along each point's sides instead (two-tone loops)."""
+    if kind == "star" and leaf:
+        return [_leaf_star(cx, cy, count, r_inner, r_outer, rotation_deg,
+                           ROUND_COVER if int(leaf) == 2 else LEAF_COVER)]
     if kind == "star":
         pts = []
         for k in range(count):
@@ -128,7 +151,7 @@ def points_ring(cx: float, cy: float, kind: Literal["star", "diamond", "bow", "p
     if edge_width:
         outlines_ = _edge_strips(kind, r_inner, r_outer, w, inner_ratio, edge_width)
     else:
-        outlines_ = [_outline(kind, r_inner, r_outer, w, inner_ratio)]
+        outlines_ = [_outline(kind, r_inner, r_outer, w, inner_ratio, lens)]
     shapes = []
     for k in range(count):
         th = rotation_deg + 360.0 * k / count
@@ -136,3 +159,17 @@ def points_ring(cx: float, cy: float, kind: Literal["star", "diamond", "bow", "p
             pts = [_to_world(cx, cy, th, r, l) for r, l in o]
             shapes.append(Shape("polygon", {"points": points_attr(pts)}, None))
     return shapes
+
+
+def _leaf_star(cx: float, cy: float, count: int, r_inner: float, r_outer: float, rotation_deg: float,
+               cover: tuple = LEAF_COVER) -> Shape:
+    """One polygon: a star whose arms run from the valleys (r_inner) to the tips (r_outer),
+    covering LEAF_COVER of their angular span, the valleys shared by neighbouring arms."""
+    span = 360.0 / count
+    pts: list[Pt] = []
+    for k in range(count):
+        th = rotation_deg + span * k
+        side = [(r_inner + (r_outer - r_inner) * t, c * span / 2) for t, c in zip(_T, cover)]
+        arm = [(r, th - h) for r, h in side] + [(r, th + h) for r, h in reversed(side[:-1])]
+        pts += [polar(cx, cy, r, a) for r, a in arm[:-1]]  # the last valley starts the next arm
+    return Shape("polygon", {"points": points_attr(pts)}, None)

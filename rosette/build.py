@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 from shapely import LineString, Polygon, make_valid, set_precision, unary_union
 from shapely.affinity import affine_transform
 
@@ -34,6 +35,9 @@ _GRID = 1e-3
 # on its head circle, piece i (the reference's paint order) at z TEMPLATE_Z + i, so the
 # occlusion cuts stack them exactly as the reference does whatever Colors they map to.
 TEMPLATE_Z = 10
+
+# R26: step (canvas units) by which a tail whose top the head leaves open is raised.
+RAISE_STEP = 5.0
 
 _TAIL_KEYS = ("tails_count", "top_y", "bottom_y", "top_width", "bottom_width",
               "spread_deg", "stripes", "stripes_bottom")
@@ -68,6 +72,29 @@ def _under_head(stripe: Shape, top_y: float, bottom_y: float, head) -> tuple[Sha
     covered = top.difference(unary_union([head, *gaps]).buffer(0.01)).length < 0.5
     shape = from_geom(unary_union([Polygon(pts), *gaps]).difference(head).simplify(SIMPLIFY), stripe)
     return shape, covered
+
+
+def _raised_stripe(key: tuple, ti: int, si: int, new_top: float) -> Shape | None:
+    """R26: stripe (ti, si) of a one-tail group `key` with its top moved up to new_top: every
+    stripe boundary runs on along its own straight line (bottom point to old top point), so
+    the raised stripes share their edges. None when a stripe would vanish on the way."""
+    top_y, bottom_y, tw, bw = float(key[1]), float(key[2]), float(key[3]), float(key[4])
+    f_top, f_bot = _parse_stripes(key[6]), _parse_stripes(key[7]) or None
+    old = tails(top_y, bottom_y, 1, tw, bw, float(key[5]), f_top, stripes_bottom=f_bot)[0]
+    pts = [[tuple(float(v) for v in q.split(",")) for q in s.attrs["points"].split()] for s in old]
+    tops = [pts[0][0][0]] + [ps[1][0] for ps in pts]  # boundary x at the old top, left to right
+    bots = [pts[0][-1][0]] + [ps[2][0] for ps in pts]  # and at the bottom
+    k = (bottom_y - new_top) / (bottom_y - top_y)
+    xs = [xb + (xt - xb) * k for xt, xb in zip(tops, bots)]
+    widths = [b - a for a, b in zip(xs, xs[1:])]
+    if min(widths) <= 0:
+        return None
+    w2 = xs[-1] - xs[0]
+    polys = tails(new_top, bottom_y, 1, w2, bw, float(key[5]), [w / w2 for w in widths], stripes_bottom=f_bot)
+    try:
+        return polys[ti][si]
+    except IndexError:
+        return None
 
 
 def _template(part: Part):
@@ -115,12 +142,48 @@ def template_pieces(part: Part) -> list[tuple[Shape, int]]:
 
 def template_center(part: Part) -> tuple[float, float, float] | None:
     """(cx, cy, r) for the rose of a template head: its center pieces' reach, or None."""
-    reach = [float((ring_ ** 2).sum(axis=1).max() ** 0.5) for pc in _template(part).pieces
-             if pc.role == "center" for ring_ in pc.rings[:1]]
-    if not reach:
-        return None
     q = part.params
-    return float(q["cx"]), float(q["cy"]), max(reach) * float(q["r"])
+    pieces = _template(part).pieces
+    reach = [float((ring_ ** 2).sum(axis=1).max() ** 0.5) for pc in pieces
+             if pc.role == "center" for ring_ in pc.rings[:1]]
+    if reach:
+        return float(q["cx"]), float(q["cy"]), max(reach) * float(q["r"])
+    disc_ = _center_disc(pieces)
+    if disc_ is None:
+        return None
+    (dx, dy), dr = disc_
+    r = float(q["r"])
+    return float(q["cx"]) + dx * r, float(q["cy"]) + dy * r, dr * r
+
+
+# R27: a library head whose round middle piece is classed as points, not center (S36-15's
+# badge disc, 0.18 head radii above the head circle's middle): the rose sits on that disc. A
+# piece is that disc when its outline fills >= DISC_FILL of the circle through its bounding
+# box, its box is square within DISC_SQUARE, its radius is at most DISC_MAX_R head radii and its
+# middle lies within DISC_NEAR head radii of the head's; the nearest such piece wins.
+DISC_FILL, DISC_SQUARE, DISC_MAX_R, DISC_NEAR = 0.9, 0.1, 0.6, 0.35
+
+
+def _center_disc(pieces) -> tuple[tuple[float, float], float] | None:
+    """R27: ((x, y) middle, radius) of a template's round middle piece, in head radii, or None."""
+    best = None
+    for pc in pieces:
+        if not pc.rings:
+            continue
+        ring_ = np.asarray(pc.rings[0], dtype=float)
+        lo, hi = ring_.min(axis=0), ring_.max(axis=0)
+        w, h = hi - lo
+        if max(w, h) <= 0 or abs(w - h) > DISC_SQUARE * max(w, h):
+            continue
+        x, y = ring_[:, 0], ring_[:, 1]
+        area = 0.5 * abs(float(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1))))
+        rad = max(w, h) / 2
+        mid = (lo + hi) / 2
+        if area < DISC_FILL * np.pi * rad * rad or rad > DISC_MAX_R or float(np.hypot(*mid)) > DISC_NEAR:
+            continue
+        if best is None or float(np.hypot(*mid)) < float(np.hypot(*best[0])):
+            best = ((float(mid[0]), float(mid[1])), float(rad))
+    return best
 
 
 def _rose_center(model: RosetteModel) -> tuple[float, float, float, int] | None:
@@ -207,7 +270,8 @@ def color_shapes(model: RosetteModel) -> list[tuple[Shape, Part]]:
             ir, ew = q.get("inner_ratio"), q.get("edge_width")
             finish(p, points_ring(q["cx"], q["cy"], q["kind"], int(q["count"]), q["r_inner"],
                                   q["r_outer"], q["rotation_deg"], q["width_ratio"],
-                                  None if ir is None else float(ir), None if ew is None else float(ew)))
+                                  None if ir is None else float(ir), None if ew is None else float(ew),
+                                  leaf=int(q.get("leaf", 0)), lens=bool(int(q.get("lens", 0)))))
         elif p.role == "center":
             finish(p, [disc(q["cx"], q["cy"], q["r"])])
         elif p.role == "tail_stripe":
@@ -221,17 +285,39 @@ def color_shapes(model: RosetteModel) -> list[tuple[Shape, Part]]:
     head = [s for s, p in colors if id(p) in head_parts]
     # on a 0.001 grid: unions of pinked and cut shapes can trip GEOS on near-coincident edges
     head_geom = set_precision(unary_union([make_valid(to_geom(s)) for s in head]), 1e-3) if head else None
+    head_cy = next((float(p.params["cy"]) for p in model.parts if p.role in ("template", "head", "center")
+                    and "cy" in p.params), None)
     for key, parts in tail_groups.items():
         top_y, bottom_y, tw, bw, spread = key[1], key[2], key[3], key[4], key[5]
         polys = tails(top_y, bottom_y, int(key[0]), tw, bw, spread, _parse_stripes(key[6]),
                       stripes_bottom=_parse_stripes(key[7]) or None)
+        idx = []
         for p in parts:
             ti, si = int(p.params["tail_index"]), int(p.params["stripe_index"])
             try:
-                shape = polys[ti][si]
+                polys[ti][si]
             except IndexError:
                 raise ValueError(f"part {p.id}: tail {ti} stripe {si} out of range") from None
-            shape, covered = _under_head(shape, float(top_y), float(bottom_y), head_geom)
+            idx.append((ti, si))
+        cut = [_under_head(polys[ti][si], float(top_y), float(bottom_y), head_geom) for ti, si in idx]
+        if (not all(c for _, c in cut) and int(key[0]) == 1 and head_cy is not None
+                and head_cy < float(top_y)):
+            # R26: a stripe top lies in a gap the head does not close (a library head drawn
+            # smaller than the photo's: S36-15). The whole tail runs on up its side lines to the
+            # lowest top (RAISE_STEP at a time, no higher than the head's center) at which the head
+            # covers every stripe top, as the reference tails run up under the head; the gaps
+            # between its shapes then show the stripes.
+            y = float(top_y)
+            while y - RAISE_STEP >= head_cy:  # the lowest top, step by step, the head closes
+                y -= RAISE_STEP
+                raised = [_raised_stripe(key, ti, si, y) for ti, si in idx]
+                if any(r is None for r in raised):
+                    break
+                cut2 = [_under_head(r, y, float(bottom_y), head_geom) for r in raised]
+                if all(c for _, c in cut2):
+                    cut = cut2
+                    break
+        for p, (shape, covered) in zip(parts, cut):
             if not covered and TAIL_UNCOVERED_WARNING not in model.warnings:
                 model.warnings.append(TAIL_UNCOVERED_WARNING)
             if shape is None:
