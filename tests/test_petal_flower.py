@@ -139,3 +139,83 @@ def test_r58_a_thin_rim_of_the_glitter_color_round_the_center_is_the_rose():
     assert c.color_group == 1 and c.params["r"] == 44.5
     assert not any(q.id == "ring-1" for q in parts)
     assert any(q.id == "ring-0" for q in parts)
+
+
+def _hue_rgb(h_deg: float, v: float = 200.0):
+    """An orange of hue h (degrees) at brightness v."""
+    import math
+    h = math.radians(h_deg)
+    # R, G, B with 2R - G - B and sqrt(3)(G - B) in the ratio of cos h : sin h, B = 20
+    b = 20.0
+    k = (v - b)
+    g = b + k * (2 * math.sin(h)) / (math.sqrt(3) * math.cos(h) + math.sin(h))
+    return (v, g, b)
+
+
+def _satin_star_photo():
+    """Pleats of hue 26 and a six-point star of hue 16 (both one group, 0), light pleat rim and
+    tails of hue 33 (group 2), glitter loops between the star's points (group 1)."""
+    h = w = 600
+    yy, xx = np.mgrid[:h, :w]
+    cx, cy, hr = 300.0, 230.0, 180.0
+    r = np.hypot(xx - cx, yy - cy)
+    th = np.degrees(np.arctan2(yy - cy, xx - cx))
+    mask = r <= hr
+    mask |= (np.abs(xx - cx) <= 120) & (yy >= cy) & (yy < 590)
+    rgb = np.zeros((h, w, 3))
+    labels = np.full((h, w), -1, dtype=int)
+    labels[mask] = 0
+    rgb[mask] = _hue_rgb(26)
+    rim = mask & (r > 0.92 * hr) & (r <= hr)
+    labels[rim] = 2; rgb[rim] = _hue_rgb(33)
+    tail_out = mask & (yy > cy + hr) & (np.abs(xx - cx) > 60)
+    labels[tail_out] = 2; rgb[tail_out] = _hue_rgb(33)
+    tail_mid = mask & (yy > cy + hr) & (np.abs(xx - cx) <= 60)
+    rgb[tail_mid] = _hue_rgb(16)
+    loops = mask & (r > 0.45 * hr) & (r < 0.9 * hr) & (np.abs(((th + 30) % 60) - 30) < 12)
+    labels[loops] = 1; rgb[loops] = (110, 75, 40)
+    phi = np.radians(th - 30)
+    star_r = 0.35 * hr + (0.73 - 0.35) * hr * np.abs(np.cos(3 * phi)) ** 4
+    star = mask & (r <= star_r) & (r > 0.25 * hr)
+    labels[star] = 0; rgb[star] = _hue_rgb(16)
+    rose = r <= 0.25 * hr
+    labels[rose] = 0; rgb[rose] = _hue_rgb(24)
+    p = SimpleNamespace(axis_x=cx, scale=1.0, mask=mask, head=(cx, cy, hr), rgb=rgb.astype(np.uint8))
+    from rosette.vision.parts_common import Frame
+    fr = Frame.of(p)
+    geo = {"cx": 300.0, "cy": round(float(fr.y(cy)), 3)}
+    parts = [Part("head", "head", dict(geo, r=hr), 0, 10, 0.9),
+             Part("points-1", "points", dict(geo, kind="bow", count=6, r_inner=0.45 * hr, r_outer=0.9 * hr,
+                                             rotation_deg=0.0, width_ratio=0.6), 1, 21, 0.9),
+             Part("center", "center", dict(geo, r=17.5), 0, 50, 0.5),
+             Part("ring-0", "ring", dict(geo, r_inner=31.5, r_outer=70.5), 0, 30, 0.5)]
+    return p, labels, parts, hr
+
+
+def test_r59_a_dark_satin_star_on_lighter_pleats_of_one_group():
+    from rosette.pipeline import _satin_star_on_pleats
+    p, labels, parts, hr = _satin_star_photo()
+    out = _satin_star_on_pleats(p, labels, parts)
+    assert out is not None
+    ids = {q.id: q for q in out}
+    star = ids["points-star"]
+    assert star.color_group == 0 and star.params["count"] == 6 and star.params["kind"] == "star"
+    assert abs(((star.params["rotation_deg"] - 30) + 30) % 60 - 30) < 4  # tips between the loops
+    assert abs(star.params["r_outer"] / hr - 0.73) < 0.06
+    assert ids["head"].color_group == 2 and ids["center"].color_group == 2
+    assert abs(ids["center"].params["r"] / hr - 0.33) < 0.01
+    assert "ring-0" not in ids
+    loops, edge = ids["points-1"], ids["edge-points-1"]
+    assert loops.z < edge.z < star.z  # the loops and their edges run in under the star
+    assert edge.color_group == 0 and edge.params["edge_width"] == round(0.06 * hr, 3)
+    assert loops.params["r_inner"] == round(0.33 * hr, 3)
+    assert loops.params["r_outer"] <= round(0.84 * hr, 3)  # a band of pleats round the loops
+    width = 0.6 * (0.9 - 0.45) * hr
+    assert abs(loops.params["width_ratio"] * (loops.params["r_outer"] - loops.params["r_inner"]) - width) < 0.5
+
+
+def test_r59_a_star_of_the_pleats_own_hue_stays():
+    from rosette.pipeline import _satin_star_on_pleats
+    p, labels, parts, hr = _satin_star_photo()
+    p.rgb[...] = np.where(p.rgb.sum(-1, keepdims=True) > 0, np.array(_hue_rgb(26), dtype=np.uint8), 0)
+    assert _satin_star_on_pleats(p, labels, parts) is None

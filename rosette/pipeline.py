@@ -1426,6 +1426,120 @@ def _star_under_satin_star(parts: list) -> bool:
     return True
 
 
+# R59: the head's color group holds a satin star of a darker (redder) hue lying on pleats of a
+# lighter hue, and another plain group has the lighter hue (S38-15: a dark orange satin star on
+# orange pleats over glitter loops; one group took the star and the shaded pleats, the head was
+# read as the star's color and the star as a ring). The pleats are the lighter group, the star is
+# read from the dark-hue pixels: the run outward from just outside the rose along each ray, its
+# count and phase from the runs' lobes, its tips the median run on the tip axes. Designer S38-15:
+# leaf-shaped arms from under the rose, a rose of the pleats' color at 0.33 of the head.
+SATIN_SPLIT_GAP = 5.0  # the group's two hue clusters (Otsu split in the head) at least this far apart (degrees)
+SATIN_HUE_GAP = 8.0  # the light group's median hue at least this far above the head group's (degrees)
+SATIN_ANCHOR = 0.4  # runs start at this share of the head radius (outside the rose)
+SATIN_LOBE_PEAK = 1.8
+SATIN_TIP_MIN = 0.55  # star tips at least this share of the head radius
+SATIN_ROSE = 0.33  # rose radius / head radius (designer S38-15)
+SATIN_VALLEY_SHARE = 0.36  # star valleys / head radius, under and just outside the rose (photo S38-15)
+# the loops run in under the star to the rose, edged in the star's color (the owner's check of S38-15;
+# designer S38-15: edge strips 0.06 of the head radius wide), ending at 0.84 of the head radius on
+# their axes (their corners reach further) so a band of pleats shows round them (designer S38-15:
+# 0.92 at the corners; the owner's check asked for more band)
+SATIN_LOOP_EDGE = 0.06
+SATIN_LOOP_END = 0.84
+
+
+def _hue(rgb: np.ndarray) -> np.ndarray:
+    r, g, b = (rgb[..., k].astype(float) for k in range(3))
+    return np.degrees(np.arctan2(np.sqrt(3.0) * (g - b), 2.0 * r - g - b)) % 360.0
+
+
+def _satin_star_on_pleats(p, labels: np.ndarray, parts: list) -> list | None:
+    from .vision.layer_classify import KEEP_PARAM
+    from .vision.parts_common import polar_sample
+    head = next((q for q in parts if q.role == "head"), None)
+    pts = [q for q in parts if q.role == "points"]
+    if head is None or len(pts) != 1 or pts[0].params.get("kind") == "star" or getattr(p, "rgb", None) is None:
+        return None
+    g = head.color_group
+    hue = _hue(p.rgb)
+    inside = p.mask & (labels >= 0)
+    hv = hue[inside & (labels == g)]
+    hv = hv[(hv < 90.0)]
+    if hv.size < 100:
+        return None
+    hist, edges = np.histogram(hv, bins=90, range=(0.0, 90.0))
+    w0 = np.cumsum(hist); w1 = w0[-1] - w0
+    mids = (edges[:-1] + edges[1:]) / 2
+    m0 = np.cumsum(hist * mids) / np.maximum(w0, 1)
+    m1 = ((hist * mids).sum() - np.cumsum(hist * mids)) / np.maximum(w1, 1)
+    k = int(np.argmax(w0 * w1 * (m0 - m1) ** 2))
+    split, hg = float(edges[k + 1]), float(m0[k])
+    if m1[k] - m0[k] < SATIN_SPLIT_GAP:
+        return None
+    others = [(float(np.median(hue[inside & (labels == k)])), k) for k in {int(v) for v in np.unique(labels[inside])}
+              if k not in (g, pts[0].color_group)]
+    light = [(hk, k) for hk, k in others if hk - hg >= SATIN_HUE_GAP]
+    if not light:
+        return None
+    hl, lg = min(light)
+    dark = ((labels == g) & (hue < split)).astype(np.int32)
+    fr = Frame.of(p)
+    hr = float(head.params["r"])
+    cx, cy, r = p.axis_x + (float(head.params["cx"]) - 300.0) * fr.scale, fr.py(float(head.params["cy"])), hr * fr.scale
+    radii = np.arange(0.0, r, 1.0)
+    m = polar_sample(dark, cx, cy, radii, 720, fill=0).astype(float)
+    sm = np.apply_along_axis(lambda c: np.convolve(c, np.ones(9) / 9, mode="same"), 0, m) > 0.5
+    a0 = int(SATIN_ANCHOR * r)
+    ends = np.zeros(720)
+    for j in range(720):
+        col = sm[:, j]
+        if col[a0]:
+            e = a0
+            while e + 1 < len(col) and col[e + 1]:
+                e += 1
+            ends[j] = radii[e]
+    th = np.radians(np.arange(720) / 2.0)
+    win = np.abs(np.degrees(th) - 90.0) > 20.0
+    x = ends[win] - ends[win].mean()
+    spec = {n: np.sum(x * np.exp(-1j * n * th[win])) for n in FLOWER_COUNTS}
+    mags = sorted((abs(v), n) for n, v in spec.items())
+    if mags[-1][0] < SATIN_LOBE_PEAK * mags[-2][0]:
+        return None
+    n = mags[-1][1]
+    rot = (float(np.degrees(np.angle(spec[n]))) / n) % (360.0 / n)
+    tips = [float(np.median([ends[int(round((rot + 360.0 * k / n + d) * 2)) % 720] for d in (-1.5, -1, -0.5, 0, 0.5, 1, 1.5)]))
+            for k in range(n)]
+    tip = float(np.median(tips)) / fr.scale
+    if tip < SATIN_TIP_MIN * hr:
+        return None
+    head.color_group = lg
+    out = [q for q in parts if not (q.role in ("ring", "unknown"))]
+    c = next((q for q in out if q.role == "center"), None)
+    if c is None:
+        c = Part("center", "center", {"cx": head.params["cx"], "cy": head.params["cy"]}, lg, 50, 0.5)
+        out.append(c)
+    c.color_group, c.params["r"] = lg, round(SATIN_ROSE * hr, 3)
+    out.append(Part("points-star", "points", {"cx": head.params["cx"], "cy": head.params["cy"], "kind": "star", "count": n,
+                                              "r_inner": round(SATIN_VALLEY_SHARE * hr, 3), "r_outer": round(tip, 3),
+                                              "rotation_deg": round(rot, 3), "width_ratio": 0.5, "leaf": 1,
+                                              "tips": 1, KEEP_PARAM: 1}, g, pts[0].z + 2, 0.5))
+    bow = pts[0]
+    if bow.params.get("kind") == "bow":
+        ri_old, ro_old = float(bow.params["r_inner"]), float(bow.params["r_outer"])
+        ro = min(ro_old, SATIN_LOOP_END * hr)
+        bow.params["width_ratio"] = round(float(bow.params["width_ratio"]) * (ro_old - ri_old) / (ro - ri_old), 4)
+        bow.params["r_outer"] = round(ro, 3)
+        ri = SATIN_ROSE * hr
+        if ri < ri_old:  # same width, run in under the star
+            bow.params["width_ratio"] = round(float(bow.params["width_ratio"]) * (ro - ri_old) / (ro - ri), 4)
+            bow.params["r_inner"] = round(ri, 3)
+        out.append(Part(f"edge-{bow.id}", "points", dict(bow.params, edge_width=round(SATIN_LOOP_EDGE * hr, 3)),
+                        g, bow.z + 1, 0.5))
+        out[-1].params[KEEP_PARAM] = 1
+    bow.params[KEEP_PARAM] = 1
+    return out
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -1588,6 +1702,9 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     if edged is not None:
         tidy.parts = edged
     _star_under_satin_star(tidy.parts)  # R58: glitter points between satin points of the head's color
+    satin = _satin_star_on_pleats(p, labels, tidy.parts)  # R59: a darker satin star on pleats of one group
+    if satin is not None:
+        tidy.parts = satin
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower
