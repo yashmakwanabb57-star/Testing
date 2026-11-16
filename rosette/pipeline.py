@@ -905,6 +905,45 @@ def _rose_over_bows(parts: list, groups: list) -> bool:
     return True
 
 
+# R47: a star whose valleys lie past half its reach, between loops of its count half a step
+# away (S27-15: purple corners between white loops), is a second set of loops: the photo's loop
+# ends read as blunt star points. Both sets take the loops' width and run in under the ring
+# around the center, the star's loops on top (designer S27-15: the purple loops over the white).
+STAR_LOOP_VALLEY = 0.5
+
+
+def _star_as_loops(parts: list) -> bool:
+    ring = min((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_inner"]), default=None)
+    bows = [q for q in parts if q.role == "points" and q.params.get("kind") == "bow"
+            and q.params.get("edge_width") is None]
+    if sum(1 for q in parts if q.role == "points") != 2:  # just the star and the loops (not S29-15's layers)
+        return False
+    done = False
+    for a in parts:
+        pa = a.params
+        if (a.role != "points" or pa.get("kind") != "star" or pa.get("tips") or pa.get("leaf")
+                or float(pa["r_inner"]) <= STAR_LOOP_VALLEY * float(pa["r_outer"])):
+            continue
+        n = int(pa["count"])
+        step = 360.0 / n
+        mates = [b for b in bows if int(b.params["count"]) == n and b.color_group != a.color_group
+                 and abs(((float(pa["rotation_deg"]) - float(b.params["rotation_deg"])) % step) - step / 2) <= 8.0]
+        if not mates or ring is None:
+            continue
+        b = mates[0]
+        ri = float(ring.params["r_inner"])
+        w = float(b.params["width_ratio"]) * (float(b.params["r_outer"]) - float(b.params["r_inner"]))
+        for q in (a, b):
+            ro = float(q.params["r_outer"])
+            q.params.update(kind="bow", r_inner=round(ri, 3), width_ratio=round(w / max(ro - ri, 1e-6), 4))
+        if a.z <= b.z:  # the read star's loops lie on top (designer S27-15: purple over white)
+            a.z, b.z = b.z, a.z
+            if a.z == b.z:
+                a.z += 1
+        done = True
+    return done
+
+
 def _taper_edged_bows(parts: list) -> bool:
     """R45: a loop set laid on a wider loop set of another color, one count and angle (S2-15B:
     blue loops on white), is the designer's edged loops: both narrow toward the center to
@@ -1135,6 +1174,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
         out.parts = edged
     if _rose_over_bows(out.parts, out.groups):  # R44: bows and a star of one hue under a rose
         out.rose = True
+    _star_as_loops(out.parts)  # R47: a blunt star between loops of its count is loops too
     _taper_edged_bows(out.parts)  # R45: loops edged by a wider loop narrow toward the center
     _petals_between_loops(out.parts)  # R36: petals on top of loops (final stacking known here)
     _badge_under_loops(out.parts, p, labels)  # R39: a badge inside loops, read as print
