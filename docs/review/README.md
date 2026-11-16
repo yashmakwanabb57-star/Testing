@@ -7,9 +7,11 @@ only give proportions for parts the photo cannot show, for example hidden star v
 
 ## Progress
 
-- Approved: lines 1-30 of `photo-order.txt` (A10-15 ... S27-15). Each approval is a commit.
-- Next: line 31, **S28-15** (proposed fix below, not yet started).
-- Update this section after each approval.
+- Owner-approved: lines 1-30 of `photo-order.txt` (A10-15 ... S27-15). Each approval is a commit.
+- Done by Claude on its own (the owner asked it to continue alone; owner to review later):
+  - 31 S28-15 - R48: star on four loops, a square of the loops' color over its base, loops edged.
+- Next: line 32.
+- Update this section after each photo.
 
 ## Loop for one photo
 
@@ -36,9 +38,3 @@ only give proportions for parts the photo cannot show, for example hidden star v
 - Photo colour groups along rays: `pixel_groups(prepare(bytes))` labels, sampled around `p.head`
   with `Frame.of(p).scale` (see `rosette/vision/stacked_stars.py` for an example).
 - Library heads are skipped when a part has `params["tips"]`.
-
-## S28-15 (next) - proposed fix
-
-Yellow star must lie on top of the blue loops with long points (up/down/left/right) nearly to
-the rim; the loops run in under the star and center, meeting in a blue square with curved
-sides (designer).

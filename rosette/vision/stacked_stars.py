@@ -239,3 +239,48 @@ def edged_star_between_bows(p, labels: np.ndarray, parts: list) -> list | None:
                                                  r_outer=round(TOP_STAR[1] * head_u, 3)),
                     head.color_group, bow.z + 2, 0.5))
     return out
+
+
+# R48: four loops on a head disc with a star of a third color half a step away (S28-15: glitter
+# loops on the diagonals of blue pleats, light blue points on the axes). The designer lays the
+# star on top of the loops, and a 4-point star of the loops' color on the loops' axes over the
+# star's base (a square with drawn-in sides around the center), the loops edged in the head's
+# color. Radii are the designer's (S28-15, head radii).
+SQUARE_LOOPS = (0.45, 0.9, 0.42, 0.2)  # loops: inner, outer, width, edge share
+SQUARE_STAR_TIP = 0.85  # the star's points
+SQUARE_TIP = 0.69  # the square's corners (on the loops' axes)
+SQUARE_SIDE = 0.33  # the middle of its drawn-in sides
+
+
+def star_on_square(p, labels: np.ndarray, parts: list) -> list | None:
+    head = next((q for q in parts if q.role == "head"), None)
+    c = next((q for q in parts if q.role == "center"), None)
+    pts = [q for q in parts if q.role == "points"]
+    if head is None or c is None or len(pts) != 2 or any(q.role == "ring" for q in parts):
+        return None
+    bow = next((q for q in pts if q.params.get("kind") == "bow"), None)
+    star = next((q for q in pts if q.params.get("kind") == "star"), None)
+    if bow is None or star is None or int(bow.params["count"]) != 4 or int(star.params["count"]) != 4:
+        return None
+    if len({head.color_group, bow.color_group, star.color_group}) != 3:
+        return None
+    off = (float(star.params["rotation_deg"]) - float(bow.params["rotation_deg"])) % 90.0
+    if abs(off - 45.0) > 10.0:
+        return None
+    hu, rc = float(head.params["r"]), float(c.params["r"])
+    ri, ro = SQUARE_LOOPS[0] * hu, SQUARE_LOOPS[1] * hu
+    bow.params.update(r_inner=round(ri, 3), r_outer=round(ro, 3),
+                      width_ratio=round(SQUARE_LOOPS[2] * hu / (ro - ri), 4))
+    bow.z = 20
+    star.params.update(r_inner=round(rc, 3), r_outer=round(SQUARE_STAR_TIP * hu, 3),
+                       rotation_deg=round((float(bow.params["rotation_deg"]) + 45.0) % 90.0, 3), tips=1)
+    star.z = 22
+    out = list(parts)
+    out.append(Part(f"edge-{bow.id}", "points", dict(bow.params, edge_width=round(SQUARE_LOOPS[3] * SQUARE_LOOPS[2] * hu, 3)),
+                    head.color_group, 21, 0.5))
+    out.append(Part("points-square", "points", {"cx": bow.params["cx"], "cy": bow.params["cy"], "kind": "star", "count": 4,
+                                                "r_inner": round(max(rc, SQUARE_SIDE * hu), 3),
+                                                "r_outer": round(SQUARE_TIP * hu, 3),
+                                                "rotation_deg": bow.params["rotation_deg"], "width_ratio": 0.5, "tips": 1},
+                    bow.color_group, 23, 0.5))
+    return out

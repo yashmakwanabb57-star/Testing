@@ -52,7 +52,7 @@ from .vision import groups as vgroups
 from .vision import judge as vjudge
 from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_groups
 from .vision.one_color import ONE_COLOR_INFO, badge_in_pleats, rose_center
-from .vision.stacked_stars import edged_star_between_bows, stacked_stars
+from .vision.stacked_stars import edged_star_between_bows, stacked_stars, star_on_square
 from .vision.shaded_rings import HUE_INFO, dark_loop_edges, shaded_rings
 from .vision.parts_head import _badge_under_loops, _loops_on_rim, _petals_between_loops, _twin_points
 
@@ -1149,6 +1149,9 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     edged = edged_star_between_bows(p, labels, tidy.parts)  # R46: a star edged in a third color
     if edged is not None:
         tidy.parts = edged
+    square = star_on_square(p, labels, tidy.parts)  # R48: a star on four loops, a square over its base
+    if square is not None:
+        tidy.parts = square
     parts = tidy.parts
     badge = badge_in_pleats(p, parts)  # R31: a badge inside pleats of its own color
     if badge is not None:
