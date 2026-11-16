@@ -944,6 +944,41 @@ def _star_as_loops(parts: list) -> bool:
     return done
 
 
+# R50: diamonds half a step from edged loops of their count, with a ring around the center
+# (S30-15: lilac points between heart-print loops edged in pink), are a star behind the loops:
+# its body runs in under them to the ring, and the loops run in under the ring, as the designer
+# draws them. Read from the photo's tips, the library head does not replace it.
+def _diamonds_behind_loops(parts: list) -> bool:
+    ring = max((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]), default=None)
+    if ring is None:
+        return False
+    loops = [q for q in parts if q.role == "points" and q.params.get("kind") == "bow" and q.params.get("edge_width") is None]
+    edged = {(int(q.params["count"]), round(float(q.params["rotation_deg"]), 1)) for q in parts
+             if q.role == "points" and q.params.get("kind") == "bow" and q.params.get("edge_width") is not None}
+    done = False
+    for a in parts:
+        pa = a.params
+        if a.role != "points" or pa.get("kind") != "diamond":
+            continue
+        n = int(pa["count"])
+        step = 360.0 / n
+        mates = [b for b in loops if int(b.params["count"]) == n
+                 and (n, round(float(b.params["rotation_deg"]), 1)) in edged
+                 and abs(((float(pa["rotation_deg"]) - float(b.params["rotation_deg"])) % step) - step / 2) <= 8.0]
+        if not mates:
+            continue
+        ri = float(ring.params["r_outer"])
+        pa.update(kind="star", r_inner=round(ri, 3), tips=1)
+        a.z = min(b.z for b in mates) - 1
+        for q in parts:  # the loops and their edges run in under the ring
+            if q.role == "points" and q.params.get("kind") == "bow" and int(q.params["count"]) == n:
+                ro = float(q.params["r_outer"])
+                w = float(q.params["width_ratio"]) * (ro - float(q.params["r_inner"]))
+                q.params.update(r_inner=round(float(ring.params["r_inner"]), 3), width_ratio=round(w / (ro - float(ring.params["r_inner"])), 4))
+        done = True
+    return done
+
+
 def _taper_edged_bows(parts: list) -> bool:
     """R45: a loop set laid on a wider loop set of another color, one count and angle (S2-15B:
     blue loops on white), is the designer's edged loops: both narrow toward the center to
@@ -1000,6 +1035,25 @@ def close_seams(parts: list) -> bool:
         edges.append(float(q.params["r_outer"]))
         prev = q
     return changed
+
+
+# R49: a center far smaller than the ring of its own color right around it (S29-15: a 7-unit
+# center inside a wine ring at 40-52, the badge's print read apart) is that badge: the center
+# grows to the ring's outer edge and the ring goes.
+BADGE_SPECK = 0.25  # center radius / the ring's inner radius at most
+
+
+def _fill_badge(parts: list) -> bool:
+    c = next((q for q in parts if q.role == "center"), None)
+    if c is None:
+        return False
+    rc = float(c.params["r"])
+    rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_inner"]))
+    if not rings or rings[0].color_group != c.color_group or rc > BADGE_SPECK * float(rings[0].params["r_inner"]):
+        return False
+    c.params["r"] = rings[0].params["r_outer"]
+    parts[:] = [q for q in parts if q is not rings[0] and not (q.role == "unknown" and float(q.params.get("r", 0)) <= float(c.params["r"]))]
+    return True
 
 
 def _tuck_rings(parts: list) -> None:
@@ -1153,6 +1207,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     if square is not None:
         tidy.parts = square
     parts = tidy.parts
+    _fill_badge(parts)  # R49: a speck of center inside a ring of its color is the badge
     badge = badge_in_pleats(p, parts)  # R31: a badge inside pleats of its own color
     if badge is not None:
         parts = badge
@@ -1177,6 +1232,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
         out.parts = edged
     if _rose_over_bows(out.parts, out.groups):  # R44: bows and a star of one hue under a rose
         out.rose = True
+    _diamonds_behind_loops(out.parts)  # R50: points between edged loops are a star behind them
     _star_as_loops(out.parts)  # R47: a blunt star between loops of its count is loops too
     _taper_edged_bows(out.parts)  # R45: loops edged by a wider loop narrow toward the center
     _petals_between_loops(out.parts)  # R36: petals on top of loops (final stacking known here)

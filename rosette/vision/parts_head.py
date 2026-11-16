@@ -1175,6 +1175,10 @@ def _petals_between_loops(parts: list[Part]) -> None:
             continue
         n = int(p["count"])
         step = 360.0 / n
+        if any(b is not a and b.role == "points" and b.params.get("kind") == "star" and int(b.params["count"]) == n
+               and abs(((float(p["rotation_deg"]) - float(b.params["rotation_deg"])) + step / 2) % step - step / 2) <= 5.0
+               for b in parts):
+            continue  # a star laid on a star of its shape is an edged star (S29-15), not petals
         under = [b for b in loops if int(b.params["count"]) == n and a.z > b.z
                  and abs(((float(p["rotation_deg"]) - float(b.params["rotation_deg"])) % step) - step / 2)
                  <= PETAL_AXIS_DEG]

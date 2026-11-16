@@ -10,7 +10,12 @@ only give proportions for parts the photo cannot show, for example hidden star v
 - Owner-approved: lines 1-30 of `photo-order.txt` (A10-15 ... S27-15). Each approval is a commit.
 - Done by Claude on its own (the owner asked it to continue alone; owner to review later):
   - 31 S28-15 - R48: star on four loops, a square of the loops' color over its base, loops edged.
-- Next: line 32.
+  - 32 S29-15 - a star laid on a star of its shape is an edged star, not petals (R36 narrowed); a speck
+    of center inside a ring of its color is the badge (R49). Head now the designer's structure; colors
+    still swapped (glitter <-> wine: the designer breaks its own out-to-in rule here), score 0.334 -> 0.257.
+  - 33 S30-15 - diamonds between edged loops are a star behind them, the loops run in under the ring,
+    no library head (R50; also S35-19, unchanged 0.963). 0.972 -> 0.979.
+- Next: line 34.
 - Update this section after each photo.
 
 ## Loop for one photo
