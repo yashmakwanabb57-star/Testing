@@ -89,3 +89,53 @@ def test_r57_alternating_petals_of_two_colors_round_a_rose():
     d = (pets[1].params["rotation_deg"] - pets[0].params["rotation_deg"]) % 120
     assert abs(d - 60) < 5
     assert abs(((pets[0].params["rotation_deg"] + 30) % 60) - 30) < 6  # a red tip on +x
+
+
+def _s37_parts(kind="bow"):
+    geo = {"cx": 300.0, "cy": 172.0}
+    return [Part("head", "head", dict(geo, r=146.0), 0, 10, 0.9),
+            Part("points-1", "points", dict(geo, kind=kind, count=8, r_inner=94.5, r_outer=127.5, rotation_deg=1.7,
+                                            width_ratio=0.8), 1, 20, 0.9),
+            Part("center", "center", dict(geo, r=34.5), 0, 50, 0.9),
+            Part("ring-0", "ring", dict(geo, r_inner=34.5, r_outer=94.5), 0, 30, 0.9)]
+
+
+def test_r58_glitter_points_round_a_pleated_ring_are_a_star_under_a_satin_star():
+    # S37-15, the owner's check: gold glitter points between red satin points, on red pleats
+    from rosette.pipeline import _star_under_satin_star
+    from rosette.vision.layer_classify import KEEP_PARAM
+    for kind in ("bow", "star", "diamond"):
+        parts = _s37_parts(kind)
+        assert _star_under_satin_star(parts)
+        ids = {q.id: q for q in parts}
+        gold, red = ids["points-1"], ids["points-satin"]
+        ro = round(0.95 * 146.0, 3)  # the measured 127.5 is short of the tips
+        assert gold.params["kind"] == "star" and gold.params["r_outer"] == ro
+        assert red.params["kind"] == "star" and red.color_group == 0 and red.params["count"] == 8
+        assert abs(red.params["r_outer"] - 0.88 * ro) < 0.01 and abs(red.params["r_inner"] - 0.53 * ro) < 0.01
+        assert abs(((red.params["rotation_deg"] - 1.7) % 45) - 22.5) < 0.01
+        assert gold.z < red.z < ids["ring-0"].z
+        assert ids["ring-0"].params["r_outer"] == round(0.6 * 146.0, 3)  # the red points rise from its edge
+        assert red.params["r_inner"] < ids["ring-0"].params["r_outer"]
+        assert gold.params[KEEP_PARAM] == 1 and red.params[KEEP_PARAM] == 1
+
+
+def test_r58_needs_the_head_colored_ring_inside():
+    from rosette.pipeline import _star_under_satin_star
+    parts = [q for q in _s37_parts() if q.id != "ring-0"]
+    assert not _star_under_satin_star(parts)
+    parts = _s37_parts()
+    parts[1].color_group = 0  # points of the head's color: not this layout
+    assert not _star_under_satin_star(parts)
+
+
+def test_r58_a_thin_rim_of_the_glitter_color_round_the_center_is_the_rose():
+    # S37-15, the owner's check: the center is one rose of the gold's color (designer: Color 2, 0.3 of the head)
+    from rosette.pipeline import _star_under_satin_star
+    geo = {"cx": 300.0, "cy": 172.0}
+    parts = _s37_parts() + [Part("ring-1", "ring", dict(geo, r_inner=37.5, r_outer=44.5), 1, 31, 0.9)]
+    assert _star_under_satin_star(parts)
+    c = next(q for q in parts if q.role == "center")
+    assert c.color_group == 1 and c.params["r"] == 44.5
+    assert not any(q.id == "ring-1" for q in parts)
+    assert any(q.id == "ring-0" for q in parts)

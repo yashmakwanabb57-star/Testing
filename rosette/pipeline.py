@@ -1366,6 +1366,66 @@ def _petal_flower(p, labels: np.ndarray, parts: list) -> list | None:
     return out
 
 
+# R58: one points layer of a third color, eight or more, standing on the head just outside a ring
+# of the head's color (S37-15: gold glitter points between red satin points on red pleats, the
+# red points the pleats' color so never read; the review run read the gold as square loops). The
+# gold is a star; a star of the head's color lies on it half a step off, under the ring. Designer
+# S37-15 (the red star's sides cut the gold pieces): red tips at 0.88 and valleys at 0.53 of the
+# gold tips' radius. A thin rim of the gold's color hugging the center (S37-15: the badge's gold rim)
+# makes the center one rose of that color out to the rim (designer S37-15: a Color 2 rose, 0.3 of
+# the head; the owner's check).
+SATIN_TIP = 0.88
+SATIN_RIM = 0.1  # rim width / head radius at most
+# the pleated ring inside ends at this share of the head radius, the red points rising from its edge
+# (designer S37-15: scallops 0.56-0.66; the read ring, 0.65, takes in the red points' bases; the
+# owner's check)
+SATIN_RING = 0.6
+SATIN_RIM_GAP = 0.05  # the rim starts within this share of the head radius outside the center
+SATIN_VALLEY = 0.53
+SATIN_RING_GAP = 0.1  # the ring's outer edge within this share of the points' inner radius
+SATIN_MIN_COUNT = 8
+# the gold tips reach at least this share of the head radius (S37-15's photo 0.95, designer 1.0;
+# the glitter thins toward a sharp tip, so the read stops short, 0.87)
+SATIN_GOLD_TIP = 0.95
+
+
+def _star_under_satin_star(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    head = next((q for q in parts if q.role == "head"), None)
+    pts = [q for q in parts if q.role == "points"]
+    if head is None or len(pts) != 1:
+        return False
+    gold = pts[0]
+    n = int(gold.params["count"])
+    if n < SATIN_MIN_COUNT or gold.color_group == head.color_group or gold.params.get("kind") not in ("bow", "star", "diamond"):
+        return False
+    ri = float(gold.params["r_inner"])
+    ring = next((q for q in parts if q.role == "ring" and q.color_group == head.color_group
+                 and abs(float(q.params["r_outer"]) - ri) <= SATIN_RING_GAP * ri), None)
+    if ring is None:
+        return False
+    ring.params["r_outer"] = round(min(float(ring.params["r_outer"]), SATIN_RING * float(head.params["r"])), 3)
+    ro = max(float(gold.params["r_outer"]), SATIN_GOLD_TIP * float(head.params["r"]))
+    gold.params.update(kind="star", r_inner=round(SATIN_VALLEY * ro, 3), r_outer=round(ro, 3), tips=1, **{KEEP_PARAM: 1})
+    gold.params.pop("edge_width", None)
+    parts.append(Part("points-satin", "points", {
+        "cx": gold.params["cx"], "cy": gold.params["cy"], "kind": "star", "count": n,
+        "r_inner": round(SATIN_VALLEY * ro, 3), "r_outer": round(SATIN_TIP * ro, 3),
+        "rotation_deg": round((float(gold.params["rotation_deg"]) + 180.0 / n) % (360.0 / n), 3),
+        "width_ratio": float(gold.params.get("width_ratio", 0.5)), "tips": 1, KEEP_PARAM: 1},
+        head.color_group, gold.z + 1, 0.5))
+    c = next((q for q in parts if q.role == "center"), None)
+    if c is not None:
+        rc, rim_max = float(c.params["r"]), SATIN_RIM * float(head.params["r"])
+        rim = next((q for q in parts if q.role == "ring" and q.color_group == gold.color_group
+                    and abs(float(q.params["r_inner"]) - rc) <= SATIN_RIM_GAP * float(head.params["r"])
+                    and float(q.params["r_outer"]) - rc <= rim_max), None)
+        if rim is not None:
+            c.color_group, c.params["r"] = rim.color_group, rim.params["r_outer"]
+            parts.remove(rim)
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -1527,6 +1587,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     edged = edged_star_between_bows(p, labels, tidy.parts)  # R46: a star edged in a third color
     if edged is not None:
         tidy.parts = edged
+    _star_under_satin_star(tidy.parts)  # R58: glitter points between satin points of the head's color
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower
