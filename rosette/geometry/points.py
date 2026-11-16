@@ -36,6 +36,9 @@ PETAL_PROFILE = (0.75, 0.75, 0.86, 0.96, 0.98, 1.0, 0.83, 0.60, 0.41, 0.23, 0.0)
 # the axis from the rose's center): from the rose's edge, widest at a third of the length, then a
 # nearly straight taper to a sharp tip.
 FLOWER_PROFILE = (0.70, 0.82, 0.93, 0.99, 0.94, 0.85, 0.70, 0.55, 0.37, 0.19, 0.0)
+# A leaf petal (R64, S42-15's designer petals, median of its six, from the rose's center): full width
+# just past the rose's edge, then a straight taper to a sharp tip.
+LEAF_PETAL_PROFILE = (0.55, 0.72, 0.99, 1.0, 0.90, 0.80, 0.66, 0.50, 0.34, 0.17, 0.0)
 # A loop's outer end is a shallow convex curve: r_outer is its radius on the axis and
 # its corners lie END_SAG times a straight cut's sag (sqrt(r^2 + h^2) - r) further from
 # the head center (designer loops: median 0.6 over 21 loop layers; an arc around the
@@ -83,6 +86,8 @@ def _profile(kind: str, inner_ratio: float | None, lens: bool = False) -> tuple[
         return PETAL_PROFILE
     if kind == "flower":
         return FLOWER_PROFILE
+    if kind == "leaf_petal":
+        return LEAF_PETAL_PROFILE
     raise ValueError(f"unknown point kind {kind!r}")
 
 
@@ -138,7 +143,7 @@ def points_ring(cx: float, cy: float, kind: Literal["star", "diamond", "bow", "p
                 count: int, r_inner: float, r_outer: float,
                 rotation_deg: float, width_ratio: float, inner_ratio: float | None = None,
                 edge_width: float | None = None, leaf: int = 0, lens: bool = False,
-                flower: bool = False) -> list[Shape]:
+                flower: int = 0) -> list[Shape]:
     """Angles run clockwise on screen from +x; point k is centered on
     rotation_deg + k*360/count. Width = width_ratio * (r_outer - r_inner) is the widest
     lateral width; the width profile is the designer's for the kind (LOOP_PROFILE,
@@ -155,8 +160,8 @@ def points_ring(cx: float, cy: float, kind: Literal["star", "diamond", "bow", "p
             pts.append(polar(cx, cy, r_inner, rotation_deg + 360.0 * (k + 0.5) / count))
         return [Shape("polygon", {"points": points_attr(pts)}, None)]
     w = width_ratio * (r_outer - r_inner)
-    if kind == "petal" and flower:  # R56: the satin flower's petal profile (FLOWER_PROFILE)
-        kind = "flower"  # type: ignore[assignment]
+    if kind == "petal" and flower:  # R56: the satin flower's petal (FLOWER_PROFILE); R64: 2, the leaf petal
+        kind = "leaf_petal" if int(flower) == 2 else "flower"  # type: ignore[assignment]
     if edge_width:
         outlines_ = _edge_strips(kind, r_inner, r_outer, w, inner_ratio, edge_width)
     else:

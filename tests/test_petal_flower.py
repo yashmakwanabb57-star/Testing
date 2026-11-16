@@ -389,3 +389,47 @@ def test_r63_a_head_of_one_lightness_stays():
     yy = np.arange(600)[:, None]
     p.rgb[(yy <= 230 + hr) & p.mask] = (140, 133, 212)  # the whole head one lightness, the dark only in the tails
     assert _two_tone_loops(p, labels, parts) is None
+
+
+def _s42_parts(hr=142.8):
+    geo = {"cx": 300.0, "cy": 168.6}
+    return [Part("head", "head", dict(geo, r=hr), 0, 10, 0.9),
+            Part("points-1", "points", dict(geo, kind="bow", count=6, r_inner=86.5, r_outer=108.5, rotation_deg=34.4,
+                                            width_ratio=0.8), 1, 20, 0.9),
+            Part("center", "center", dict(geo, r=50.5), 1, 50, 0.9),
+            Part("ring-0", "ring", dict(geo, r_inner=50.5, r_outer=86.5), 0, 30, 0.9)]
+
+
+def test_r64_star_tips_round_a_ring_of_the_head_color_are_a_star_under_petals():
+    # S42-15, the owner's check: white star, light blue petals of the pleats' color on it, white rose
+    from rosette.pipeline import _star_under_petals
+    from rosette.vision.layer_classify import KEEP_PARAM
+    parts = _s42_parts()
+    assert _star_under_petals(parts)
+    ids = {q.id: q for q in parts}
+    star, pet, c = ids["points-1"], ids["points-petals"], ids["center"]
+    hr = 142.8
+    assert star.params["kind"] == "star" and star.color_group == 1 and star.params["rotation_deg"] == 30.0
+    assert abs(star.params["r_outer"] / hr - 0.85) < 0.01 and star.params["r_inner"] == round(0.577 * star.params["r_outer"], 3)
+    assert pet.params["kind"] == "petal" and pet.params["flower"] == 2 and pet.color_group == 0
+    assert pet.params["rotation_deg"] == 0.0 and abs(pet.params["r_outer"] / hr - 0.71) < 0.01
+    assert pet.params["r_inner"] < c.params["r"]  # the petals tuck under the rose
+    assert star.z < pet.z < c.z and "ring-0" not in ids
+    assert c.color_group == 1 and star.params[KEEP_PARAM] == 1 and pet.params[KEEP_PARAM] == 1
+
+
+def test_r64_needs_the_center_of_the_star_color():
+    from rosette.pipeline import _star_under_petals
+    parts = _s42_parts()
+    parts[2].color_group = 0
+    assert not _star_under_petals(parts)
+
+
+def test_r64_the_apps_reading_a_head_color_star_for_the_petals():
+    from rosette.pipeline import _star_under_petals
+    parts = [q for q in _s42_parts() if q.id != "ring-0"]
+    geo = {"cx": 300.0, "cy": 168.6}
+    parts.append(Part("front-2", "points", dict(geo, kind="star", count=6, r_inner=71.0, r_outer=103.0, rotation_deg=5.4), 0, 20, 0.9))
+    assert _star_under_petals(parts)
+    ids = {q.id: q for q in parts}
+    assert "front-2" not in ids and ids["points-petals"].params["width_ratio"] == round(0.635 / 0.7, 4)

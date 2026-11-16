@@ -1804,6 +1804,72 @@ def _two_tone_loops(p, labels: np.ndarray, parts: list) -> list | None:
     return out
 
 
+# R64: short points of a second color standing just outside a ring of the head's color, round a
+# center of that second color (S42-15: a white star's tips past light blue satin petals on light
+# blue pleats round a white rose; the tips read as short loops, the petal flower as a ring). The
+# points are a star (a hexagram for six), petals of the head's color lie on it half a step off,
+# the rose on top, no ring. Designer S42-15 (head radii): star tips 0.85, petal tips 0.71, rose
+# 0.35; the petals as R56's (FLOWER_PROFILE), tucked under the rose; upright as R62.
+PETAL_STAR_TIP = 0.85
+PETAL_TIP = 0.71
+PETAL_ROSE = 0.35
+PETAL_RING_GAP = 0.1  # the ring's outer edge within this share of the points' inner radius
+PETAL_SPAN = 0.635  # petal width / tip radius (designer S42-15)
+PETAL_START = 0.3  # petals start at this share of their tip radius, deep under the rose, so they are at
+# full width where they leave it and neighbours meet with no gap (the owner's check of S42-15)
+
+
+def _star_under_petals(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    head = next((q for q in parts if q.role == "head"), None)
+    pts = [q for q in parts if q.role == "points"]
+    c = next((q for q in parts if q.role == "center"), None)
+    if head is None or c is None or any(q.params.get(KEEP_PARAM) for q in pts):
+        return False  # layers an earlier rule built whole (R58 on S37-15, S8-15) stand
+    g = head.color_group
+    others = [q for q in pts if q.color_group != g]
+    if len(others) != 1:
+        return False
+    star = others[0]
+    w = star.color_group
+    if c.color_group != w or star.params.get("kind") not in ("bow", "star", "diamond"):
+        return False
+    n = int(star.params["count"])
+    step = 360.0 / n
+    ri = float(star.params["r_inner"])
+    ring = next((q for q in parts if q.role == "ring" and q.color_group == g
+                 and abs(float(q.params["r_outer"]) - ri) <= PETAL_RING_GAP * ri), None)
+    # the app's reading (the perception models on): the petal flower as a star of the head's color
+    # half a step off instead of a ring
+    flower = [q for q in pts if q.color_group == g and int(q.params["count"]) == n
+              and abs(((float(q.params["rotation_deg"]) - float(star.params["rotation_deg"])) % step) - step / 2) <= NESTED_AXIS_DEG]
+    if (ring is None) == (len(flower) != 1) or len(pts) != 1 + len(flower):
+        return False
+    hr = float(head.params["r"])
+    rot = float(star.params["rotation_deg"])
+    snap = round(rot / (step / 2)) * (step / 2)
+    if abs(rot - snap) <= NESTED_SNAP_DEG:
+        rot = snap % step
+    ro = max(float(star.params["r_outer"]), PETAL_STAR_TIP * hr)
+    star.params.update({"kind": "star", "r_outer": round(ro, 3), "r_inner": round(UNDER_VALLEY * ro, 3),
+                        "rotation_deg": round(rot, 3), "tips": 1, KEEP_PARAM: 1})
+    star.params.pop("edge_width", None)
+    rr = max(float(c.params["r"]), PETAL_ROSE * hr)
+    c.params["r"] = round(rr, 3)
+    pr = PETAL_TIP * hr
+    pi = PETAL_START * pr
+    for q in [ring] + flower:
+        if q is not None:
+            parts.remove(q)
+    parts.append(Part("points-petals", "points", {"cx": star.params["cx"], "cy": star.params["cy"], "kind": "petal",
+                                                  "count": n, "r_inner": round(pi, 3), "r_outer": round(pr, 3),
+                                                  "rotation_deg": round((rot + step / 2) % step, 3),
+                                                  "width_ratio": round(PETAL_SPAN / (1.0 - PETAL_START), 4),
+                                                  "flower": 2, "tips": 1, KEEP_PARAM: 1},
+                      g, star.z + 1, 0.5))
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -1977,6 +2043,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     tone = _two_tone_loops(p, labels, tidy.parts)  # R63: dark loops at the rim under light loops, two close colors
     if tone is not None:
         tidy.parts = tone
+    _star_under_petals(tidy.parts)  # R64: star tips round a ring of the head's color are a star under petals
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower

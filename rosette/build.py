@@ -272,7 +272,7 @@ def color_shapes(model: RosetteModel) -> list[tuple[Shape, Part]]:
                                   q["r_outer"], q["rotation_deg"], q["width_ratio"],
                                   None if ir is None else float(ir), None if ew is None else float(ew),
                                   leaf=int(q.get("leaf", 0)), lens=bool(int(q.get("lens", 0))),
-                                  flower=bool(int(q.get("flower", 0)))))
+                                  flower=int(q.get("flower", 0))))
         elif p.role == "center":
             finish(p, [disc(q["cx"], q["cy"], q["r"])])
         elif p.role == "tail_stripe":
