@@ -538,3 +538,36 @@ def test_r67_needs_the_ring_of_a_third_color():
     parts = _s45_parts()
     parts[3].color_group = 1
     assert not _star_round_rings(parts)
+
+
+def _s46_parts(hr=128.5):
+    geo = {"cx": 300.0, "cy": 150.8}
+    return [Part("head", "head", dict(geo, r=hr), 0, 10, 0.9),
+            Part("points-1", "points", dict(geo, kind="star", count=6, r_inner=54.5, r_outer=103.5, rotation_deg=34.3), 1, 21, 0.9),
+            Part("points-2", "points", dict(geo, kind="bow", count=6, r_inner=54.5, r_outer=103.5, rotation_deg=4.4,
+                                            width_ratio=0.6), 2, 20, 0.9),
+            Part("center", "center", dict(geo, r=35.5), 0, 50, 0.9)]
+
+
+def test_r68_loops_between_an_outer_and_an_inner_star_of_one_color():
+    # S46-15, the owner's check: gold star, green-edged glitter loops on it, a smaller gold star on them
+    from rosette.pipeline import _loops_between_stars
+    parts = _s46_parts()
+    assert _loops_between_stars(parts)
+    ids = {q.id: q for q in parts}
+    hr = 128.5
+    outer, loops, edge, inner, c = ids["points-1"], ids["points-2"], ids["edge-points-2"], ids["points-1-inner"], ids["center"]
+    assert outer.z < loops.z < edge.z < inner.z < c.z
+    assert outer.params["rotation_deg"] == 30.0 and loops.params["rotation_deg"] == 0.0 and inner.params["rotation_deg"] == 30.0
+    assert abs(outer.params["r_outer"] / hr - 0.90) < 0.01 and abs(inner.params["r_outer"] / hr - 0.70) < 0.01
+    assert abs(inner.params["r_inner"] / hr - 0.432) < 0.01 and edge.color_group == 0 and inner.color_group == 1
+    assert abs(loops.params["r_outer"] / hr - 0.845) < 0.01
+    assert abs(loops.params["width_ratio"] * (loops.params["r_outer"] - loops.params["r_inner"]) - 0.26 * hr) < 0.5
+    assert abs(c.params["r"] / hr - 0.27) < 0.01
+
+
+def test_r68_needs_the_loops_half_a_step_off():
+    from rosette.pipeline import _loops_between_stars
+    parts = _s46_parts()
+    parts[2].params["rotation_deg"] = 34.3
+    assert not _loops_between_stars(parts)

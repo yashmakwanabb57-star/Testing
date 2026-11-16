@@ -2040,6 +2040,62 @@ def _star_round_rings(parts: list) -> bool:
     return True
 
 
+# R68: a star and loops of another color half a step off, round a center of the head's color (S46-15:
+# gold satin star points, glitter loops edged in the green pleats' color, a smaller gold star on
+# the loops, a green rose; drawn as a petal flower over plain loops). Designer S46-15 (head radii):
+# the star's color at 0.90 (bottom) and 0.70 (on the loops, valleys 0.432; the outer star's valleys
+# in the same proportion), loops to 0.845, 0.26 wide, edged in the head's color, the rose 0.27;
+# upright as R62 (the owner's check).
+BETWEEN_OUTER = 0.90
+BETWEEN_INNER = (0.70, 0.432)
+BETWEEN_LOOPS = (0.845, 0.26)
+BETWEEN_EDGE = 0.035
+BETWEEN_ROSE = 0.27
+
+
+def _loops_between_stars(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    head = next((q for q in parts if q.role == "head"), None)
+    pts = [q for q in parts if q.role == "points"]
+    c = next((q for q in parts if q.role == "center"), None)
+    if head is None or c is None or len(pts) != 2 or any(q.params.get(KEEP_PARAM) for q in pts):
+        return False
+    star = next((q for q in pts if q.params.get("kind") == "star"), None)
+    bow = next((q for q in pts if q.params.get("kind") == "bow"), None)
+    g = head.color_group
+    if star is None or bow is None or c.color_group != g or len({g, star.color_group, bow.color_group}) != 3:
+        return False
+    n = int(star.params["count"])
+    if int(bow.params["count"]) != n or n < 5 or any(q.role == "ring" for q in parts):
+        return False  # four loops under a star are R48's (S28-15)
+    step = 360.0 / n
+    off = (float(star.params["rotation_deg"]) - float(bow.params["rotation_deg"])) % step
+    if abs(off - step / 2) > NESTED_AXIS_DEG:
+        return False
+    hr = float(head.params["r"])
+    rot = float(bow.params["rotation_deg"])
+    snap = round(rot / (step / 2)) * (step / 2)
+    if abs(rot - snap) <= NESTED_SNAP_DEG:
+        rot = snap % step
+    srot = (rot + step / 2) % step
+    ratio = BETWEEN_INNER[1] / BETWEEN_INNER[0]
+    z0 = min(q.z for q in pts)
+    star.params.update({"r_outer": round(BETWEEN_OUTER * hr, 3), "r_inner": round(ratio * BETWEEN_OUTER * hr, 3),
+                        "rotation_deg": round(srot, 3), "tips": 1, KEEP_PARAM: 1})
+    star.z = z0
+    rr = BETWEEN_ROSE * hr
+    ri, ro = FLOWER_START * rr, BETWEEN_LOOPS[0] * hr
+    bow.params.update({"r_inner": round(ri, 3), "r_outer": round(ro, 3), "rotation_deg": round(rot, 3),
+                       "width_ratio": round(BETWEEN_LOOPS[1] * hr / (ro - ri), 4), "tips": 1, KEEP_PARAM: 1})
+    bow.params.pop("edge_width", None)
+    bow.z = z0 + 1
+    parts.append(Part(f"edge-{bow.id}", "points", dict(bow.params, edge_width=round(BETWEEN_EDGE * hr, 3)), g, z0 + 2, 0.5))
+    parts.append(Part(f"{star.id}-inner", "points", dict(star.params, r_outer=round(BETWEEN_INNER[0] * hr, 3),
+                                                         r_inner=round(BETWEEN_INNER[1] * hr, 3)), star.color_group, z0 + 3, 0.5))
+    c.params["r"] = round(rr, 3)
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -2217,6 +2273,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     _loops_under_petals(tidy.parts)  # R65: loops round a ring of the head's color run in under petals
     _banded_cross_stars(tidy.parts)  # R66: banded four-point stars on the axes and the diagonals
     _star_round_rings(tidy.parts)  # R67: an eight-point star round a ring of a third color, a ruffle, a small star
+    _loops_between_stars(tidy.parts)  # R68: loops between an outer and an inner star of one color
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower
