@@ -1870,6 +1870,68 @@ def _star_under_petals(parts: list) -> bool:
     return True
 
 
+# R65: short loops standing just outside a ring of the head's color, round a center of a third color
+# (S43-15: glitter loops edged white under light blue satin petals on light blue pleats round a
+# white rose; the petal flower read as a ring, the loops as their tips). The loops run in under the
+# petals to the rose, edged in the rose's color; leaf petals of the head's color lie on them half a
+# step off (as R64); the rose on top, no ring; upright as R62. Designer S43-15 (head radii): loops
+# 0.48 wide, edges 0.057, petal tips 0.758, rose 0.345.
+LOOPS_PETAL_TIP = 0.758
+LOOPS_WIDTH = 0.48
+LOOPS_EDGE = 0.057
+LOOPS_ROSE = 0.345
+
+
+def _loops_under_petals(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    head = next((q for q in parts if q.role == "head"), None)
+    pts = [q for q in parts if q.role == "points"]
+    c = next((q for q in parts if q.role == "center"), None)
+    if head is None or c is None or any(q.params.get(KEEP_PARAM) for q in pts):
+        return False
+    g = head.color_group
+    bows = [q for q in pts if q.color_group != g]
+    if len(bows) != 1 or bows[0].params.get("kind") != "bow":
+        return False
+    bow = bows[0]
+    lg, w = bow.color_group, c.color_group
+    if len({g, lg, w}) != 3:
+        return False
+    n = int(bow.params["count"])
+    step = 360.0 / n
+    ri0 = float(bow.params["r_inner"])
+    ring = next((q for q in parts if q.role == "ring" and q.color_group == g
+                 and abs(float(q.params["r_outer"]) - ri0) <= PETAL_RING_GAP * ri0), None)
+    # the app's reading (as R64): the petal flower as a star of the head's color half a step off
+    flower = [q for q in pts if q.color_group == g and int(q.params["count"]) == n
+              and abs(((float(q.params["rotation_deg"]) - float(bow.params["rotation_deg"])) % step) - step / 2) <= NESTED_AXIS_DEG]
+    if (ring is None) == (len(flower) != 1) or len(pts) != 1 + len(flower):
+        return False
+    hr = float(head.params["r"])
+    rot = float(bow.params["rotation_deg"])
+    snap = round(rot / (step / 2)) * (step / 2)
+    if abs(rot - snap) <= NESTED_SNAP_DEG:
+        rot = snap % step
+    rr = max(float(c.params["r"]), LOOPS_ROSE * hr)
+    c.params["r"] = round(rr, 3)
+    ro = float(bow.params["r_outer"])
+    ri = FLOWER_START * rr
+    bow.params.update({"r_inner": round(ri, 3), "rotation_deg": round(rot, 3),
+                       "width_ratio": round(LOOPS_WIDTH * hr / (ro - ri), 4), "tips": 1, KEEP_PARAM: 1})
+    bow.params.pop("edge_width", None)
+    for q in [ring] + flower:
+        if q is not None:
+            parts.remove(q)
+    parts.append(Part(f"edge-{bow.id}", "points", dict(bow.params, edge_width=round(LOOPS_EDGE * hr, 3)), w, bow.z + 1, 0.5))
+    pr = LOOPS_PETAL_TIP * hr
+    parts.append(Part("points-petals", "points", {"cx": bow.params["cx"], "cy": bow.params["cy"], "kind": "petal",
+                                                  "count": n, "r_inner": round(PETAL_START * pr, 3), "r_outer": round(pr, 3),
+                                                  "rotation_deg": round((rot + step / 2) % step, 3),
+                                                  "width_ratio": round(PETAL_SPAN / (1.0 - PETAL_START), 4),
+                                                  "flower": 2, "tips": 1, KEEP_PARAM: 1}, g, bow.z + 2, 0.5))
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -2044,6 +2106,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     if tone is not None:
         tidy.parts = tone
     _star_under_petals(tidy.parts)  # R64: star tips round a ring of the head's color are a star under petals
+    _loops_under_petals(tidy.parts)  # R65: loops round a ring of the head's color run in under petals
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower

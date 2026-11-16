@@ -433,3 +433,44 @@ def test_r64_the_apps_reading_a_head_color_star_for_the_petals():
     assert _star_under_petals(parts)
     ids = {q.id: q for q in parts}
     assert "front-2" not in ids and ids["points-petals"].params["width_ratio"] == round(0.635 / 0.7, 4)
+
+
+def _s43_parts(hr=144.6):
+    geo = {"cx": 300.0, "cy": 169.3}
+    return [Part("head", "head", dict(geo, r=hr), 0, 10, 0.9),
+            Part("points-1", "points", dict(geo, kind="bow", count=6, r_inner=86.5, r_outer=126.5, rotation_deg=2.9,
+                                            width_ratio=0.8), 1, 20, 0.9),
+            Part("center", "center", dict(geo, r=50.5), 2, 50, 0.9),
+            Part("ring-0", "ring", dict(geo, r_inner=50.5, r_outer=86.5), 0, 30, 0.9)]
+
+
+def test_r65_loops_round_a_ring_of_the_head_color_run_in_under_petals_edged_in_the_rose_color():
+    # S43-15, the owner's check: glitter loops edged white under light blue petals, a white rose
+    from rosette.pipeline import _loops_under_petals
+    parts = _s43_parts()
+    assert _loops_under_petals(parts)
+    ids = {q.id: q for q in parts}
+    hr = 144.6
+    loops, edge, pet, c = ids["points-1"], ids["edge-points-1"], ids["points-petals"], ids["center"]
+    assert loops.z < edge.z < pet.z < c.z and "ring-0" not in ids
+    assert edge.color_group == 2 and abs(edge.params["edge_width"] - 0.057 * hr) < 0.01
+    assert loops.params["r_inner"] < c.params["r"] and loops.params["rotation_deg"] == 0.0
+    assert abs(loops.params["width_ratio"] * (loops.params["r_outer"] - loops.params["r_inner"]) - 0.48 * hr) < 0.5
+    assert pet.color_group == 0 and pet.params["flower"] == 2 and pet.params["rotation_deg"] == 30.0
+    assert abs(pet.params["r_outer"] / hr - 0.758) < 0.01 and abs(c.params["r"] / hr - 0.345) < 0.01
+
+
+def test_r65_needs_a_center_of_a_third_color():
+    from rosette.pipeline import _loops_under_petals
+    parts = _s43_parts()
+    parts[2].color_group = 1
+    assert not _loops_under_petals(parts)
+
+
+def test_r65_the_apps_reading_a_head_color_star_for_the_petals():
+    from rosette.pipeline import _loops_under_petals
+    parts = [q for q in _s43_parts() if q.id != "ring-0"]
+    parts.append(Part("front-2", "points", {"cx": 300.0, "cy": 169.3, "kind": "star", "count": 6, "r_inner": 60.0,
+                                            "r_outer": 100.0, "rotation_deg": 31.0}, 0, 21, 0.9))
+    assert _loops_under_petals(parts)
+    assert "front-2" not in {q.id for q in parts}
