@@ -80,6 +80,10 @@ only give proportions for parts the photo cannot show, for example hidden star v
     the diagonals), twice (one axis), eight times (glitter pairs) is the designer's folded points: each point one V
     fold moved along the axis (new `chevron` kind), glitter pairs under the diagonals, the axes on top, a badge;
     R40 skips parts built whole (R74; only S68-19). Color 0.966 -> 1.000.
+  - 70 S67-19 - owner-approved after a fix: a six-point star over three points half a step off, on a head round a
+    center of its color, is the designer's split star (three points of that color, three of the head's) under
+    the star, each edged; the owner's order: red, yellow, blue, then the inner lines red, yellow, blue (R75;
+    only S67-19). 0.964 -> 0.960.
   - Open (need new reading, not done):
     57 S5-15 (cross loops), 58 S52-19 (layered loops), 63 S57-17 (0.857),
     65 S59-17 (0.876), 75 S8-15 (star around the rose read as
@@ -99,7 +103,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
 4. Owner says "works next" -> commit, then the next photo. "not works fix" or a specific
    remark -> fix, re-render, show again.
 5. Fix as a narrow, numbered rule (R-number in a comment, constants named, designer
-   proportions cited). Latest rule: R74 (`rosette/vision/folded_points.py` `folded_points`).
+   proportions cited). Latest rule: R75 (`rosette/pipeline.py` `_star_on_triangles`).
 6. Before showing a fix: check which of the 76 photos the rule fires on
    (`.venv/Scripts/python.exe tools/review_fire.py <rule function>` or `--part <part id>`), and compare scores
    before/after (`git stash` baseline) for those photos. Narrow the rule until no other photo

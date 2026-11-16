@@ -2404,6 +2404,59 @@ def _loops_under_top_star(parts: list) -> bool:
     return True
 
 
+# R75: a six-point star of one color over three points of another, half a step off its tips, on a head round a
+# center of the head's color (S67-19: a glitter star over a light teal triangle and a navy triangle on navy
+# pleats; read as the star and three teal blobs). Designer S67-19 measured along rays (head radii), bottom to
+# top: a six-point star split in two, three points of the three points' color (one straight down where the
+# photo's is) and three of the head's color between them, tips 0.90 with an inner line at 0.71 (edged), sides
+# 24 degrees off the axis at the tip (valleys 0.41 of the tip, under the star: the points do not overlap, the
+# owner's check of the order); the star 0.74 (valleys 0.31) with an inner line at 0.57 (0.27); the center 0.27.
+TRIANGLE_TIPS = (0.90, 0.71)  # outer, inner line
+TRIANGLE_STAR = ((0.74, 0.31), (0.57, 0.27))  # (tip, valley): outer, inner line
+TRIANGLE_ROSE = 0.27
+TRIANGLE_VALLEY = 0.41  # valley / tip of each three-point half
+TRIANGLE_PHASE_TOL = 10.0  # degrees off half a step from the star's tips; a tip this close to straight down is down
+
+
+def _star_on_triangles(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    head = next((q for q in parts if q.role == "head"), None)
+    c = next((q for q in parts if q.role == "center"), None)
+    pts = [q for q in parts if q.role == "points"]
+    if head is None or c is None or len(pts) != 2 or any(q.role == "ring" for q in parts):
+        return False
+    if any(q.params.get(KEEP_PARAM) for q in pts):
+        return False
+    star = next((q for q in pts if q.params.get("kind") == "star" and int(q.params["count"]) == 6), None)
+    tri = next((q for q in pts if q is not star and int(q.params["count"]) == 3), None)
+    g = head.color_group
+    if star is None or tri is None or c.color_group != g or len({g, star.color_group, tri.color_group}) != 3:
+        return False
+    off = (float(tri.params["rotation_deg"]) - float(star.params["rotation_deg"])) % 60.0
+    if abs(off - 30.0) > TRIANGLE_PHASE_TOL:
+        return False
+    rot = float(tri.params["rotation_deg"]) % 120.0
+    if abs(rot - 90.0) <= TRIANGLE_PHASE_TOL:  # a tip straight down
+        rot = 90.0
+    hr = float(head.params["r"])
+    geo = {"cx": head.params["cx"], "cy": head.params["cy"], "kind": "star", "width_ratio": 0.5, "tips": 1, KEEP_PARAM: 1}
+    out = [q for q in parts if q.role != "points"]
+    # the owner's order (S67-19): the outer layers red (head color), yellow, blue, then the inner lines in that order
+    for k, (col, r0) in enumerate(((g, (rot + 60.0) % 120.0), (tri.color_group, rot))):
+        for j, tip in enumerate(TRIANGLE_TIPS):
+            out.append(Part(f"points-triangle-{k}-{j}", "points",
+                            dict(geo, count=3, r_outer=round(tip * hr, 3), r_inner=round(TRIANGLE_VALLEY * tip * hr, 3),
+                                 rotation_deg=round(r0, 3)), col, 20 + k + 3 * j, 0.5))
+    srot = round((rot + 30.0) % 60.0, 3)
+    for j, (tip, val) in enumerate(TRIANGLE_STAR):
+        out.append(Part(f"points-star-{j}", "points",
+                        dict(geo, count=6, r_outer=round(tip * hr, 3), r_inner=round(val * hr, 3), rotation_deg=srot),
+                        star.color_group, 22 + 3 * j, 0.5))
+    c.params["r"] = round(TRIANGLE_ROSE * hr, 3)
+    parts[:] = [q for q in out if q.role != "unknown"]
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -2587,6 +2640,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     _star_on_pleated_ring(tidy.parts)  # R71: a twelve-point star on a pleated ring, its tips at the rim
     _loops_in_chevron_stars(tidy.parts)  # R72: edged loops between chevron stars round a pleated ring
     _loops_under_top_star(tidy.parts)  # R73: edged loops between chevron stars and a top star, no head disc
+    _star_on_triangles(tidy.parts)  # R75: a six-point star over two edged triangles
     folded = folded_points(p, labels, tidy.parts)  # R74: a head of folded points in four colors
     if folded is not None:
         tidy.parts = folded
