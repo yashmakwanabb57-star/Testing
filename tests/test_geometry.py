@@ -18,11 +18,12 @@ def pts_of(shape):
 def test_pinked_circle_closed_and_tooth():
     s = pinked_circle(300, 167.372, 100)
     assert s.tag == "polygon" and s.category is None
+    from rosette.geometry.common import SCALLOP_DEPTH, SCALLOP_PERIOD, SCALLOP_POINTS
     pts = pts_of(s)
-    tips = pts[0::2]
-    d = math.dist(tips[0], tips[1])
-    assert abs(d - 5.383) / 5.383 < 0.05
-    assert all(abs(math.dist(p, (300, 167.372)) - 100) < 0.01 for p in tips)
+    r = [math.dist(p, (300, 167.372)) for p in pts]
+    assert max(r) <= 100 + 0.01 and abs(min(r) - (100 - SCALLOP_DEPTH)) < 0.01  # a smooth wave, as the designer draws it
+    crests = pts[0::SCALLOP_POINTS]
+    assert abs(math.dist(crests[0], crests[1]) - SCALLOP_PERIOD) / SCALLOP_PERIOD < 0.05
     svg = write_svg([Shape(s.tag, s.attrs, 1)])
     assert validate(svg, simulate_check=False) == []
 
@@ -128,10 +129,11 @@ def test_place_rose_scaled():
             raw = list(zip(v[0::2], v[1::2]))
         pts += [(a * x + e, d * y + f) for x, y in raw]
     xs, ys = [p[0] for p in pts], [p[1] for p in pts]
-    assert abs((max(xs) + min(xs)) / 2 - 300) < 0.5
-    assert abs((max(ys) + min(ys)) / 2 - 167.372) < 0.5
-    r = math.hypot(max(xs) - min(xs), max(ys) - min(ys)) / 2
-    assert abs(r - 40) / 40 < 0.05
+    assert abs((max(xs) + min(xs)) / 2 - 300) < 3
+    assert abs((max(ys) + min(ys)) / 2 - 167.372) < 3
+    from rosette.geometry.rose import ROSE_FILL
+    reach = max(math.hypot(x - 300, y - 167.372) for x, y in pts)  # the corners touch the circle
+    assert abs(reach - ROSE_FILL * 40) < 0.5
 
 
 def test_tails_stripes_bottom_fractions():

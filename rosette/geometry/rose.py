@@ -9,6 +9,8 @@ from lxml import etree
 from ..shapes import Shape, fmt
 
 ROSE_SVG = Path(__file__).resolve().parents[2] / "reference" / "rose.svg"
+ROSE_FILL = 0.98  # the drawing's enclosing circle / the circle's radius: its corners touch the circle
+ROSE_STROKE = 1.0  # the lines' drawn width (canvas units), as the outlines: thin and dark (the owner's check)
 _NUM = re.compile(r"-?(?:\d+\.?\d*|\.\d+)(?:e-?\d+)?")
 _ARGS = {"m": 2, "l": 2, "h": 1, "v": 1, "c": 6, "s": 4, "q": 4, "t": 2, "a": 7, "z": 0}
 
@@ -50,8 +52,9 @@ def _elements():
 
 
 def place_rose(cx: float, cy: float, r: float) -> list[Shape]:
-    """Rose elements with a matrix transform mapping the rose's bbox center to
-    (cx, cy) and its bbox half-diagonal to r. Original d/points are kept verbatim."""
+    """Rose elements with a matrix transform mapping the drawing's smallest enclosing circle onto
+    (cx, cy, ROSE_FILL * r): its outer corners touch the rose's circle, as the designer draws it
+    (A10-15B; the owner's check). Original d/points are kept verbatim."""
     els = _elements()
     pts: list[tuple[float, float]] = []
     for e in els:
@@ -60,10 +63,12 @@ def place_rose(cx: float, cy: float, r: float) -> list[Shape]:
         else:
             v = [float(x) for x in _NUM.findall(e.get("points", ""))]
             pts += list(zip(v[0::2], v[1::2]))
-    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
-    bx, by = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
-    half_diag = math.hypot(max(xs) - min(xs), max(ys) - min(ys)) / 2
-    s = r / half_diag
+    from shapely import minimum_bounding_circle, minimum_bounding_radius
+    from shapely.geometry import MultiPoint
+    mp = MultiPoint(pts)
+    c0 = minimum_bounding_circle(mp).centroid
+    bx, by = c0.x, c0.y
+    s = ROSE_FILL * r / minimum_bounding_radius(mp)
     tx, ty = cx - s * bx, cy - s * by
     transform = f"matrix({s:.6f} 0 0 {s:.6f} {fmt(tx)} {fmt(ty)})"
     out = []
@@ -71,5 +76,6 @@ def place_rose(cx: float, cy: float, r: float) -> list[Shape]:
         tag = etree.QName(e).localname
         attrs = {"d": e.get("d")} if tag == "path" else {"points": e.get("points")}
         attrs["transform"] = transform
+        attrs["stroke-width"] = f"{ROSE_STROKE / s:.4f}"  # the transform scales it back to ROSE_STROKE
         out.append(Shape(tag, attrs, None, kind="rose"))
     return out

@@ -684,3 +684,33 @@ def test_r71_needs_two_twelve_point_layers():
     parts = _s49_parts()
     parts[1].params["count"] = 8
     assert not _star_on_pleated_ring(parts)
+
+
+def _a10b_parts(hr=154.4):
+    geo = {"cx": 300.0, "cy": 176.5}
+    return [Part("head", "head", dict(geo, r=hr), 0, 10, 0.9),
+            Part("unknown-1", "unknown", {"cx": 356.6, "cy": 123.2, "r": 50.0}, 2, 20, 0.3),
+            Part("center", "center", dict(geo, r=43.5), 1, 50, 0.9),
+            Part("ring-0", "ring", dict(geo, r_inner=43.5, r_outer=97.5), 1, 30, 0.9),
+            Part("ring-1", "ring", dict(geo, r_inner=43.5, r_outer=80.5), 0, 31, 0.9)]
+
+
+def test_r72_pleated_rings_of_three_colors_round_a_rose():
+    # A10-15B, the owner's check: pink pleats, a glitter ring, a white ring, a pink ring, a white rose
+    from rosette.pipeline import _three_color_rings
+    parts = _a10b_parts()
+    assert _three_color_rings(parts)
+    rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: -q.params["r_outer"])
+    hr = 154.4
+    assert [q.color_group for q in rings] == [2, 1, 0]
+    assert [round(q.params["r_outer"] / hr, 2) for q in rings] == [0.87, 0.7, 0.56]
+    assert all(q.params["pinked"] == 1 for q in rings) and rings[0].z < rings[1].z < rings[2].z
+    c = next(q for q in parts if q.role == "center")
+    assert c.color_group == 1 and abs(c.params["r"] / hr - 0.36) < 0.01
+    assert not any(q.role == "unknown" for q in parts)
+
+
+def test_r72_needs_a_third_color():
+    from rosette.pipeline import _three_color_rings
+    parts = [q for q in _a10b_parts() if q.role != "unknown"]
+    assert not _three_color_rings(parts)

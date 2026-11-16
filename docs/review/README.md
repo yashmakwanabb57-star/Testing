@@ -74,6 +74,9 @@ only give proportions for parts the photo cannot show, for example hidden star v
     57 S5-15 (cross loops), 58 S52-19 (layered loops), 63 S57-17 (0.857),
     65 S59-17 (0.876), 71 S68-19 (head drawn as a plain disc), 75 S8-15 (star around the rose read as
     loops, 0.640).
+- Owner rework of approved photos: A10-15B (line 2) - pleated rings of three colors round a rose (R72; only
+  A10-15B). All pleated edges are now a smooth wave (geometry SCALLOP_*, as the designer draws them; the 34
+  scored photos move by 0.01 at most), and the rose fills its circle with thin lines (geometry rose.py).
 - Next (owner, at the office): verify Claude's work from line 56 (S51-19) one photo at a time with the
   normal loop below (show photo | ours | designer, wait for "works next" or a fix request). Then the open
   list above, worst first (S8-15, s44-15, S48-17, S68-19, S4-15).
@@ -89,7 +92,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
 4. Owner says "works next" -> commit, then the next photo. "not works fix" or a specific
    remark -> fix, re-render, show again.
 5. Fix as a narrow, numbered rule (R-number in a comment, constants named, designer
-   proportions cited). Latest rule: R71 (`rosette/pipeline.py` `_star_on_pleated_ring`).
+   proportions cited). Latest rule: R72 (`rosette/pipeline.py` `_three_color_rings`).
 6. Before showing a fix: check which of the 76 photos the rule fires on
    (`.venv/Scripts/python.exe tools/review_fire.py <rule function>` or `--part <part id>`), and compare scores
    before/after (`git stash` baseline) for those photos. Narrow the rule until no other photo

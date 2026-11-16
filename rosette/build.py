@@ -217,7 +217,7 @@ def build(model: RosetteModel, pieces: bool = True) -> list[Shape]:
     center = _rose_center(model)
     if model.rose and center is not None:
         cx, cy, r, z = center
-        rose = place_rose(cx, cy, 0.8 * r)
+        rose = place_rose(cx, cy, r)  # the drawing's corners touch the center's circle (designer A10-15B; the owner's check)
         result += rose
         circel = disc(cx, cy, r)
         circel.kind, circel.role, circel.z = "circel", "center", z

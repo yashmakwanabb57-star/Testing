@@ -6,6 +6,24 @@ import math
 from ..shapes import fmt
 
 TOOTH = 5.383
+# A pleated edge is a smooth wave, as the designer draws it (A10-15B close up: rounded crests and dips,
+# about 18 units apart and 4 deep on the head; the owner's check): crests SCALLOP_PERIOD apart, SCALLOP_DEPTH
+# from crest to dip (canvas units), a cosine between.
+SCALLOP_PERIOD = 3.4 * TOOTH
+SCALLOP_DEPTH = 0.75 * TOOTH
+SCALLOP_POINTS = 12  # points per wave
+
+
+def scallop_edge(cx: float, cy: float, r: float, period: float = SCALLOP_PERIOD,
+                 depth: float = SCALLOP_DEPTH) -> list:
+    """Points of a wavy circle: crests reaching r, dips at r - depth, a smooth cosine between."""
+    n = max(3, round(2 * math.pi * r / period))
+    pts = []
+    for i in range(n):
+        for j in range(SCALLOP_POINTS):
+            u = j / SCALLOP_POINTS
+            pts.append(polar(cx, cy, r - depth / 2 + depth / 2 * math.cos(2 * math.pi * u), 360.0 * (i + u) / n - 90))
+    return pts
 
 Pt = tuple[float, float]
 

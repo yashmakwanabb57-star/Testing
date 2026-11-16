@@ -2290,6 +2290,42 @@ def _star_on_pleated_ring(parts: list) -> bool:
     return True
 
 
+# R72: no points, a head disc with rings of its color and the center's color round a center of a second
+# color, and a blob of a third color (A10-15B: pink pleats, a glitter pink ring, white pleats, a pink ring
+# and a white rose; the glitter ring read as a stray blob, the rings misread). Designer A10-15B (head radii),
+# all pinked, bottom to top: the third color's ring to 0.87, the center color's to 0.70, the head color's
+# to 0.56, each from the rose out; the rose 0.36 (the owner's check).
+THREE_RINGS = (0.87, 0.70, 0.56)
+THREE_ROSE = 0.36
+
+
+def _three_color_rings(parts: list) -> bool:
+    head = next((q for q in parts if q.role == "head"), None)
+    c = next((q for q in parts if q.role == "center"), None)
+    if head is None or c is None or any(q.role in ("points", "template") for q in parts):
+        return False
+    g, w = head.color_group, c.color_group
+    rings = [q for q in parts if q.role == "ring"]
+    if g == w or not rings or any(q.color_group not in (g, w) for q in rings):
+        return False
+    if not any(q.color_group == w for q in rings):
+        return False  # a ring of the center's color between the head color's (not A3-15's rings of one color)
+    third = {q.color_group for q in parts if q.role == "unknown"} - {g, w}
+    if len(third) != 1:
+        return False
+    x = third.pop()
+    hr = float(head.params["r"])
+    geo = {"cx": head.params["cx"], "cy": head.params["cy"]}
+    rr = THREE_ROSE * hr
+    parts[:] = [q for q in parts if q.role not in ("ring", "unknown")]
+    for k, (col, t) in enumerate(zip((x, w, g), THREE_RINGS)):
+        parts.append(Part(f"ring-{k}", "ring", dict(geo, r_inner=round(rr, 3), r_outer=round(t * hr, 3), pinked=1),
+                          col, 30 + k, 0.5))
+    c.params.update(cx=head.params["cx"], cy=head.params["cy"], r=round(rr, 3))
+    head.params["pinked"] = 1
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -2471,6 +2507,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     _pointed_loops_as_petals(tidy.parts, p, labels)  # R69: loops narrowing to points round a rose are leaf petals
     _split_star_flower(tidy.parts)  # R70: two banded stars 30 degrees apart under squares and a star
     _star_on_pleated_ring(tidy.parts)  # R71: a twelve-point star on a pleated ring, its tips at the rim
+    _three_color_rings(tidy.parts)  # R72: pleated rings of three colors round a rose
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower
