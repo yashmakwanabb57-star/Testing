@@ -650,3 +650,37 @@ def test_r70_needs_the_thirty_degree_pair():
     parts = _s48_parts()
     parts[1].params["rotation_deg"] = 45.0
     assert not _split_star_flower(parts)
+
+
+def _s49_parts(hr=124.6):
+    geo = {"cx": 300.0, "cy": 150.2}
+    return [Part("head", "head", dict(geo, r=hr), 0, 10, 0.9),
+            Part("points-1", "points", dict(geo, kind="diamond", count=12, r_inner=46.5, r_outer=94.5, rotation_deg=14.4,
+                                            width_ratio=0.5), 2, 20, 0.9),
+            Part("points-2", "points", dict(geo, kind="star", count=12, r_inner=57.5, r_outer=84.5, rotation_deg=29.0), 1, 21, 0.9),
+            Part("center", "center", dict(geo, r=20.5), 0, 50, 0.9),
+            Part("ring-0", "ring", dict(geo, r_inner=35.5, r_outer=46.5), 0, 30, 0.9)]
+
+
+def test_r71_a_twelve_point_star_on_a_pleated_ring_with_its_tips_at_the_rim():
+    # S49-17, the owner's check: white points at the rim, a dark green ring, a white star on it, a light green ruffle
+    from rosette.pipeline import _star_on_pleated_ring
+    parts = _s49_parts()
+    assert _star_on_pleated_ring(parts)
+    ids = {q.id: q for q in parts}
+    hr = 124.6
+    big, ring, inner, ruffle, c = ids["points-2"], ids["ring-band"], ids["points-2-inner"], ids["ring-0"], ids["center"]
+    assert big.z < ring.z < inner.z < ruffle.z < c.z
+    assert big.color_group == 1 and inner.color_group == 1 and ring.color_group == 2 and ruffle.color_group == 0
+    assert abs(big.params["r_outer"] / hr - 0.88) < 0.01 and abs(inner.params["r_outer"] / hr - 0.65) < 0.01
+    assert abs(inner.params["r_inner"] / hr - 0.36) < 0.01 and big.params["rotation_deg"] == inner.params["rotation_deg"]
+    assert abs(ring.params["r_inner"] / hr - 0.38) < 0.01 and abs(ring.params["r_outer"] / hr - 0.78) < 0.01
+    assert abs(ruffle.params["r_inner"] / hr - 0.25) < 0.01 and abs(ruffle.params["r_outer"] / hr - 0.38) < 0.01
+    assert "points-1" not in ids and "leaf" not in big.params and inner.params["leaf"] == 2  # leaves inside only
+
+
+def test_r71_needs_two_twelve_point_layers():
+    from rosette.pipeline import _star_on_pleated_ring
+    parts = _s49_parts()
+    parts[1].params["count"] = 8
+    assert not _star_on_pleated_ring(parts)

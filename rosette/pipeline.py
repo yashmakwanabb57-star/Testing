@@ -2239,6 +2239,57 @@ def _split_star_flower(parts: list) -> bool:
     return True
 
 
+# R71: two twelve-point layers of two colors other than the head's (one a star) and a ring of the head's
+# color inside them round a center of that color (S49-17: white points at the rim of light green pleats,
+# a dark green pleated ring, a white twelve-point star on it, a light green ruffle round the badge; read as
+# loose diamonds and a small star). Designer S49-17 (head radii), bottom to top: the star's color at 0.88
+# (only its tips show past the ring), the other color's pleated ring 0.38-0.78 (between the leaves), the star's color again on
+# the ring (tips 0.65, valleys 0.40 under the ruffle, the same axes), the head color's ruffle 0.25-0.38, the rose 0.25
+# (the owner's check); the inner star has full leaf arms (geometry ROUND_COVER, as R36), the outer plain points.
+RIM_STAR = (0.88, 0.70)
+RIM_RING = (0.38, 0.78)  # from the ruffle out: the big star's solid middle stays hidden, the ring shows between the leaves
+RIM_INNER = (0.65, 0.36)  # valleys under the ruffle: the arms' round base (a full circle near the valleys) stays hidden
+RIM_RUFFLE = (0.25, 0.38)
+RIM_COUNT = 12
+
+
+def _star_on_pleated_ring(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    head = next((q for q in parts if q.role == "head"), None)
+    c = next((q for q in parts if q.role == "center"), None)
+    pts = [q for q in parts if q.role == "points"]
+    if head is None or c is None or len(pts) != 2 or any(q.params.get(KEEP_PARAM) for q in pts):
+        return False
+    g = head.color_group
+    if any(int(q.params["count"]) != RIM_COUNT or q.color_group == g for q in pts) or c.color_group != g:
+        return False
+    star = next((q for q in pts if q.params.get("kind") == "star"), None)
+    other = next((q for q in pts if q is not star), None)
+    if star is None or other is None or star.color_group == other.color_group:
+        return False
+    rings = [q for q in parts if q.role == "ring"]
+    if len(rings) != 1 or rings[0].color_group != g:
+        return False
+    ruffle = rings[0]
+    hr = float(head.params["r"])
+    geo = {"cx": head.params["cx"], "cy": head.params["cy"]}
+    z0 = min(q.z for q in pts)
+    star.params.update({"kind": "star", "r_outer": round(RIM_STAR[0] * hr, 3), "r_inner": round(RIM_STAR[1] * hr, 3),
+                        "tips": 1, KEEP_PARAM: 1})
+    star.z = z0
+    parts.remove(other)
+    parts.append(Part("ring-band", "ring", dict(geo, r_inner=round(RIM_RING[0] * hr, 3), r_outer=round(RIM_RING[1] * hr, 3),
+                                                pinked=1), other.color_group, z0 + 1, 0.5))
+    parts.append(Part(f"{star.id}-inner", "points", dict(star.params, r_outer=round(RIM_INNER[0] * hr, 3),
+                                                         r_inner=round(RIM_INNER[1] * hr, 3), leaf=2),  # full leaf arms
+                      star.color_group, z0 + 2, 0.5))
+    ruffle.params.update({"r_inner": round(RIM_RUFFLE[0] * hr, 3), "r_outer": round(RIM_RUFFLE[1] * hr, 3), "pinked": 1})
+    ruffle.z = max(ruffle.z, z0 + 3)
+    c.params["r"] = round(RIM_RUFFLE[0] * hr, 3)
+    parts[:] = [q for q in parts if q.role != "unknown"]
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -2419,6 +2470,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     _loops_between_stars(tidy.parts)  # R68: loops between an outer and an inner star of one color
     _pointed_loops_as_petals(tidy.parts, p, labels)  # R69: loops narrowing to points round a rose are leaf petals
     _split_star_flower(tidy.parts)  # R70: two banded stars 30 degrees apart under squares and a star
+    _star_on_pleated_ring(tidy.parts)  # R71: a twelve-point star on a pleated ring, its tips at the rim
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower

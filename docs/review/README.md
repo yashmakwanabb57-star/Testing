@@ -7,7 +7,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
 
 ## Progress
 
-- Owner-approved: lines 1-54 of `photo-order.txt` (A10-15 ... S48-17). Each approval is a commit.
+- Owner-approved: lines 1-55 of `photo-order.txt` (A10-15 ... S49-17). Each approval is a commit.
 - Done by Claude on its own (the owner asked it to continue alone; owner to review later):
   - 31 S28-15 - owner-approved after a fix: loops run in to the center, order loops, star, square (R48).
   - 32 S29-15 - owner-approved after a fix: a pinked ring of the inner star's color round the badge
@@ -45,9 +45,12 @@ only give proportions for parts the photo cannot show, for example hidden star v
     petals of the head's color (geometry LEAF_PETAL_PROFILE), the rose the star's color (R64; only S42-15). 0.984 -> 1.000.
   - 49 S43-15 - owner-approved after a fix: loops round a ring of the head's color run in under leaf petals of the
     head's color, edged in the rose's color (R65, R64's cousin; only S43-15). 1.000 (structure now as the designer).
-  - 55 S49-17 (0.897),
+  - 
     56 S51-19 (0.905), 59-74 except 63/65/71 (0.96-1.00), 76 S9-19 (0.971) - structure close to the
     designer, no change.
+  - 55 S49-17 - owner-approved after a fix: two twelve-point layers round a ring of the head's color are plain
+    points at the rim, a pleated ring from the ruffle out, a leaf star on it (ROUND_COVER), the ruffle, the rose
+    (R71; only S49-17). 0.897 -> 1.000.
   - 54 S48-17 - owner-approved after a fix: three four-point layers 30 degrees apart are the designer's stack:
     stepped squares, split arms with scaled bands (geometry SPLIT_ARM, traced), an eight-point star, the rose
     (R70; only S48-17). 0.672 -> 0.848.
@@ -71,7 +74,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
     57 S5-15 (cross loops), 58 S52-19 (layered loops), 63 S57-17 (0.857),
     65 S59-17 (0.876), 71 S68-19 (head drawn as a plain disc), 75 S8-15 (star around the rose read as
     loops, 0.640).
-- Next (owner, at the office): verify Claude's work from line 55 (S49-17) one photo at a time with the
+- Next (owner, at the office): verify Claude's work from line 56 (S51-19) one photo at a time with the
   normal loop below (show photo | ours | designer, wait for "works next" or a fix request). Then the open
   list above, worst first (S8-15, s44-15, S48-17, S68-19, S4-15).
 - Update this section after each photo.
@@ -86,7 +89,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
 4. Owner says "works next" -> commit, then the next photo. "not works fix" or a specific
    remark -> fix, re-render, show again.
 5. Fix as a narrow, numbered rule (R-number in a comment, constants named, designer
-   proportions cited). Latest rule: R70 (`rosette/pipeline.py` `_split_star_flower`).
+   proportions cited). Latest rule: R71 (`rosette/pipeline.py` `_star_on_pleated_ring`).
 6. Before showing a fix: check which of the 76 photos the rule fires on
    (`.venv/Scripts/python.exe tools/review_fire.py <rule function>` or `--part <part id>`), and compare scores
    before/after (`git stash` baseline) for those photos. Narrow the rule until no other photo
