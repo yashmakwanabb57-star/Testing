@@ -243,9 +243,11 @@ def edged_star_between_bows(p, labels: np.ndarray, parts: list) -> list | None:
 
 # R48: four loops on a head disc with a star of a third color half a step away (S28-15: glitter
 # loops on the diagonals of blue pleats, light blue points on the axes). The designer lays the
-# star on top of the loops, and a 4-point star of the loops' color on the loops' axes over the
-# star's base (a square with drawn-in sides around the center), the loops edged in the head's
-# color. Radii are the designer's (S28-15, head radii).
+# star on top of the loops, and a 4-point star of the loops' color on the loops' axes (a square
+# with drawn-in sides around the center), the loops edged in the head's color. Owner's check of
+# S28-15: bottom to top the head, the edged loops, the star, the square; the loops run in to the
+# center under the star's points and the square, as the glitter does in the photo.
+# Radii are the designer's (S28-15, head radii) except the loops' inner end.
 SQUARE_LOOPS = (0.45, 0.9, 0.42, 0.2)  # loops: inner, outer, width, edge share
 SQUARE_STAR_TIP = 0.85  # the star's points
 SQUARE_TIP = 0.69  # the square's corners (on the loops' axes)
@@ -268,13 +270,13 @@ def star_on_square(p, labels: np.ndarray, parts: list) -> list | None:
     if abs(off - 45.0) > 10.0:
         return None
     hu, rc = float(head.params["r"]), float(c.params["r"])
-    ri, ro = SQUARE_LOOPS[0] * hu, SQUARE_LOOPS[1] * hu
+    ri, ro = rc, SQUARE_LOOPS[1] * hu  # in to the center, under the star
     bow.params.update(r_inner=round(ri, 3), r_outer=round(ro, 3),
                       width_ratio=round(SQUARE_LOOPS[2] * hu / (ro - ri), 4))
     bow.z = 20
     star.params.update(r_inner=round(rc, 3), r_outer=round(SQUARE_STAR_TIP * hu, 3),
                        rotation_deg=round((float(bow.params["rotation_deg"]) + 45.0) % 90.0, 3), tips=1)
-    star.z = 22
+    star.z = 22  # over the loops and their edges, under the square (23)
     out = list(parts)
     out.append(Part(f"edge-{bow.id}", "points", dict(bow.params, edge_width=round(SQUARE_LOOPS[3] * SQUARE_LOOPS[2] * hu, 3)),
                     head.color_group, 21, 0.5))

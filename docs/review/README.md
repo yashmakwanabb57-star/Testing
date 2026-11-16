@@ -7,9 +7,9 @@ only give proportions for parts the photo cannot show, for example hidden star v
 
 ## Progress
 
-- Owner-approved: lines 1-30 of `photo-order.txt` (A10-15 ... S27-15). Each approval is a commit.
+- Owner-approved: lines 1-31 of `photo-order.txt` (A10-15 ... S28-15). Each approval is a commit.
 - Done by Claude on its own (the owner asked it to continue alone; owner to review later):
-  - 31 S28-15 - R48: star on four loops, a square of the loops' color over its base, loops edged.
+  - 31 S28-15 - owner-approved after a fix: loops run in to the center, order loops, star, square (R48).
   - 32 S29-15 - a star laid on a star of its shape is an edged star, not petals (R36 narrowed); a speck
     of center inside a ring of its color is the badge (R49). Head now the designer's structure; colors
     still swapped (glitter <-> wine: the designer breaks its own out-to-in rule here), score 0.334 -> 0.257.
@@ -38,7 +38,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
     54 S48-17 (stacked stars, 0.672), 57 S5-15 (cross loops), 58 S52-19 (layered loops), 63 S57-17 (0.857),
     65 S59-17 (0.876), 71 S68-19 (head drawn as a plain disc), 75 S8-15 (star around the rose read as
     loops, 0.640), and 43 S38-15 above.
-- Next (owner, at the office): verify Claude's work from line 31 (S28-15) one photo at a time with the
+- Next (owner, at the office): verify Claude's work from line 32 (S29-15) one photo at a time with the
   normal loop below (show photo | ours | designer, wait for "works next" or a fix request). Then the open
   list above, worst first (S8-15, s44-15, S48-17, S68-19, S4-15).
 - Update this section after each photo.
