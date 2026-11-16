@@ -1607,6 +1607,76 @@ def _under_star_tips(parts: list, p, labels: np.ndarray) -> bool:
     return True
 
 
+# R61: glitter points between satin points of a third color, no head disc read (S40-15: black
+# glitter points between light orange satin points on orange pleats; the pleats read as an outer
+# ring, the satin points mostly lost into the pleats' group, the white badge into the black). The
+# outer ring of the pleats' color is the head disc; the glitter points are a star lying on the satin
+# star (the owner's check of S40-15), which is half a step off, its color the group whose hue is nearest the hue between the glitter
+# points; the pleated ring inside lies on both; the badge takes the satin color. Designer S40-15:
+# satin tips / glitter tips 0.93 / 0.78, center 0.34 of the head, six-point stars as hexagrams.
+THIRD_SATIN_TIP = 0.93 / 0.78
+THIRD_GLITTER_TIP = 0.78  # glitter tips at least this share of the head (the read stops short at a thin tip, 0.70)
+THIRD_CENTER = 0.34
+THIRD_HUE_GAP = 6.0  # the satin hue at least this far from the pleats' (degrees)
+THIRD_RIM = 0.9  # the outer ring reaches at least this share of the head circle
+
+
+def _satin_star_third_color(p, labels: np.ndarray, parts: list) -> list | None:
+    from .vision.layer_classify import KEEP_PARAM
+    if any(q.role in ("head", "template") for q in parts) or getattr(p, "rgb", None) is None:
+        return None
+    pts = [q for q in parts if q.role == "points"]
+    rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
+    c = next((q for q in parts if q.role == "center"), None)
+    if len(pts) != 1 or len(rings) != 2 or c is None:
+        return None
+    glit, (inner, outer) = pts[0], rings
+    fr = Frame.of(p)
+    H = float(outer.params["r_outer"])
+    if inner.color_group != outer.color_group or glit.color_group == outer.color_group             or H < THIRD_RIM * float(p.head[2]) / fr.scale:
+        return None
+    n = int(glit.params["count"])
+    step = 360.0 / n
+    hue = _hue(p.rgb)
+    g0 = outer.color_group
+    h0 = float(np.median(hue[(labels == g0) & p.mask]))
+    cx, cy = p.axis_x + (float(glit.params["cx"]) - 300.0) * fr.scale, fr.py(float(glit.params["cy"]))
+    hh, ww = labels.shape
+    rr = np.arange(float(inner.params["r_outer"]), 0.9 * H, 1.0) * fr.scale
+    vals = []
+    for k in range(n):
+        a = np.radians(float(glit.params["rotation_deg"]) + step * (k + 0.5))
+        ys = np.clip(np.rint(cy + rr * np.sin(a)).astype(int), 0, hh - 1)
+        xs = np.clip(np.rint(cx + rr * np.cos(a)).astype(int), 0, ww - 1)
+        vals.append(hue[ys, xs][p.mask[ys, xs]])
+    v = np.concatenate(vals) if vals else np.array([])
+    if v.size == 0:
+        return None
+    hs = float(np.median(v))
+    if abs(hs - h0) < THIRD_HUE_GAP:
+        return None
+    cands = [(abs(float(np.median(hue[(labels == k) & p.mask])) - hs), k)
+             for k in {int(x) for x in np.unique(labels[p.mask])} if k >= 0 and k not in (g0, glit.color_group)]
+    if not cands:
+        return None
+    sg = min(cands)[1]
+    geo = {"cx": glit.params["cx"], "cy": glit.params["cy"]}
+    ro = max(float(glit.params["r_outer"]), THIRD_GLITTER_TIP * H)
+    glit.params.update(kind="star", r_inner=round(UNDER_VALLEY * ro, 3), r_outer=round(ro, 3), tips=1, **{KEEP_PARAM: 1})
+    rs = THIRD_SATIN_TIP * ro
+    out = [q for q in parts if q.role not in ("unknown",) and q is not outer]
+    out.append(Part("head", "head", dict(geo, r=round(H, 3)), g0, 10, 0.6))
+    out.append(Part("points-satin", "points", dict(geo, kind="star", count=n, r_inner=round(UNDER_VALLEY * rs, 3),
+                                                   r_outer=round(rs, 3),
+                                                   rotation_deg=round((float(glit.params["rotation_deg"]) + step / 2) % step, 3),
+                                                   width_ratio=0.5, tips=1, **{KEEP_PARAM: 1}), sg, glit.z, 0.5))
+    glit.z += 1  # the glitter star on the satin star
+    inner.z = max(inner.z, glit.z + 1)
+    c.color_group, c.params["r"] = sg, round(max(float(c.params["r"]), THIRD_CENTER * H), 3)
+    inner.params["r_inner"] = c.params["r"]
+    return out
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -1773,6 +1843,9 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     if satin is not None:
         tidy.parts = satin
     _under_star_tips(tidy.parts, p, labels)  # R60: a star under a shorter star, its tips from its color runs
+    third = _satin_star_third_color(p, labels, tidy.parts)  # R61: glitter points between satin points of a third color
+    if third is not None:
+        tidy.parts = third
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower

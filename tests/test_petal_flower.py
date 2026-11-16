@@ -254,3 +254,55 @@ def test_r60_a_star_under_a_shorter_star_takes_its_tips_from_its_color_runs():
     assert abs(yi.params["r_outer"] - 0.80 * under.params["r_outer"]) < 0.01
     assert abs(bi.params["r_outer"] - 0.77 * top.params["r_outer"]) < 0.01
     assert yi.params["rotation_deg"] == under.params["rotation_deg"] and bi.params["rotation_deg"] == top.params["rotation_deg"]
+
+
+def _s40_photo():
+    """Orange pleats (group 0, hue ~21) with six black glitter points (1) at 0, 60, ... and six light
+    orange satin points (hue ~36) between them that the groups mostly lost to the pleats (0)."""
+    h = w = 600
+    yy, xx = np.mgrid[:h, :w]
+    cx, cy, hr = 300.0, 230.0, 150.0
+    r = np.hypot(xx - cx, yy - cy)
+    th = np.degrees(np.arctan2(yy - cy, xx - cx))
+    mask = r <= hr
+    labels = np.full((h, w), -1, dtype=int)
+    rgb = np.zeros((h, w, 3))
+    labels[mask] = 0; rgb[mask] = _hue_rgb(21, 222)
+    glit = mask & (r > 0.45 * hr) & (r < 0.45 * hr + 0.3 * hr * np.abs(np.cos(3 * np.radians(th))) ** 6)
+    labels[glit] = 1; rgb[glit] = (14, 12, 11)
+    sat = mask & (r > 0.58 * hr) & (r < 0.58 * hr + 0.35 * hr * np.abs(np.cos(3 * np.radians(th - 30))) ** 6)
+    rgb[sat] = _hue_rgb(36, 235)
+    labels[sat & (th < -60) & (th > -120)] = 2  # one satin point found as its own group
+    labels[(r < 0.29 * hr)] = 1  # the badge read into the black group
+    p = SimpleNamespace(axis_x=cx, scale=1.0, mask=mask, head=(cx, cy, hr), rgb=rgb.astype(np.uint8))
+    from rosette.vision.parts_common import Frame
+    geo = {"cx": 300.0, "cy": round(float(Frame.of(p).y(cy)), 3)}
+    parts = [Part("points-1", "points", dict(geo, kind="petal", count=6, r_inner=0.29 * hr, r_outer=0.7 * hr,
+                                             rotation_deg=0.0, width_ratio=0.6), 1, 22, 0.9),
+             Part("center", "center", dict(geo, r=0.29 * hr), 1, 50, 0.5),
+             Part("ring-0", "ring", dict(geo, r_inner=0.7 * hr, r_outer=hr), 0, 30, 0.5),
+             Part("ring-1", "ring", dict(geo, r_inner=0.29 * hr, r_outer=0.58 * hr), 0, 31, 0.5),
+             Part("unknown-0", "unknown", dict(geo, r=30.0), 0, 20, 0.3)]
+    return p, labels, parts, hr
+
+
+def test_r61_glitter_points_between_satin_points_of_a_third_color():
+    from rosette.pipeline import _satin_star_third_color
+    p, labels, parts, hr = _s40_photo()
+    out = _satin_star_third_color(p, labels, parts)
+    assert out is not None
+    ids = {q.id: q for q in out}
+    head, glit, sat, ring, c = ids["head"], ids["points-1"], ids["points-satin"], ids["ring-1"], ids["center"]
+    assert head.color_group == 0 and head.params["r"] == hr
+    assert glit.params["kind"] == "star" and sat.params["kind"] == "star" and sat.color_group == 2
+    assert sat.z < glit.z < ring.z < c.z  # the glitter star on the satin star
+    assert abs(sat.params["r_outer"] / glit.params["r_outer"] - 0.93 / 0.78) < 0.01
+    assert abs(((sat.params["rotation_deg"] - glit.params["rotation_deg"]) % 60) - 30) < 0.01
+    assert c.color_group == 2 and "ring-0" not in ids and "unknown-0" not in ids
+
+
+def test_r61_needs_a_satin_hue_between_the_points():
+    from rosette.pipeline import _satin_star_third_color
+    p, labels, parts, hr = _s40_photo()
+    p.rgb[...] = np.where(p.rgb.sum(-1, keepdims=True) > 100, np.array(_hue_rgb(21, 222), dtype=np.uint8), p.rgb)
+    assert _satin_star_third_color(p, labels, parts) is None
