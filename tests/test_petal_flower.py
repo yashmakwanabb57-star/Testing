@@ -571,3 +571,51 @@ def test_r68_needs_the_loops_half_a_step_off():
     parts = _s46_parts()
     parts[2].params["rotation_deg"] = 34.3
     assert not _loops_between_stars(parts)
+
+
+def _s47_photo(pointed=True):
+    """Blue pleats (0), six pink petals (1) round a white rose (2); the petals pointed or square-ended."""
+    h = w = 600
+    yy, xx = np.mgrid[:h, :w]
+    cx, cy, hr = 300.0, 230.0, 160.0
+    r = np.hypot(xx - cx, yy - cy)
+    th = np.degrees(np.arctan2(yy - cy, xx - cx))
+    mask = r <= hr
+    labels = np.full((h, w), -1, dtype=int); labels[mask] = 0
+    d = np.abs(((th + 30) % 60) - 30)  # degrees off the nearest petal axis
+    if pointed:
+        half = np.where(r < 0.6 * 120, 30.0, 30.0 * np.clip((120 - r) / (0.4 * 120), 0, 1))
+    else:
+        half = np.full_like(r, 22.0)
+    pet = mask & (r <= 120) & (d <= half)
+    labels[pet] = 1
+    labels[r <= 60] = 2
+    p = SimpleNamespace(axis_x=cx, scale=1.0, mask=mask, head=(cx, cy, hr))
+    from rosette.vision.parts_common import Frame
+    geo = {"cx": 300.0, "cy": round(float(Frame.of(p).y(cy)), 3)}
+    parts = [Part("head", "head", dict(geo, r=hr), 0, 10, 0.9),
+             Part("points-1", "points", dict(geo, kind="bow", count=6, r_inner=36.0, r_outer=112.5, rotation_deg=1.8,
+                                             width_ratio=0.6), 1, 20, 0.9),
+             Part("center", "center", dict(geo, r=60.5), 2, 50, 0.9)]
+    return p, labels, parts, hr
+
+
+def test_r69_pointed_loops_round_a_rose_are_leaf_petals():
+    # S47-15, the owner's check: pink satin petals with pointed tips, not square loops
+    from rosette.pipeline import _pointed_loops_as_petals
+    p, labels, parts, hr = _s47_photo(True)
+    assert _pointed_loops_as_petals(parts, p, labels)
+    pets = sorted((q for q in parts if q.role == "points"), key=lambda q: q.z)
+    pet = pets[0]
+    assert len(pets) == 2 and all(q.params["count"] == 3 for q in pets)
+    assert [q.params["flower"] for q in pets] == [4, 4]  # one petal shape, the front three on the back three
+    assert pet.params["kind"] == "petal" and pet.params["rotation_deg"] == 0.0 and pets[1].params["rotation_deg"] == 60.0
+    assert abs(pet.params["r_outer"] / hr - 0.81) < 0.01
+    assert pet.params["r_inner"] < next(q for q in parts if q.role == "center").params["r"]
+
+
+def test_r69_square_loops_stay():
+    from rosette.pipeline import _pointed_loops_as_petals
+    p, labels, parts, hr = _s47_photo(False)
+    assert not _pointed_loops_as_petals(parts, p, labels)
+    assert parts[1].params["kind"] == "bow"

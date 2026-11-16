@@ -39,6 +39,16 @@ FLOWER_PROFILE = (0.70, 0.82, 0.93, 0.99, 0.94, 0.85, 0.70, 0.55, 0.37, 0.19, 0.
 # A leaf petal (R64, S42-15's designer petals, median of its six, from the rose's center): full width
 # just past the rose's edge, then a straight taper to a sharp tip.
 LEAF_PETAL_PROFILE = (0.55, 0.72, 0.99, 1.0, 0.90, 0.80, 0.66, 0.50, 0.34, 0.17, 0.0)
+# A satin petal (R69, S47-15's designer petals, the front three, from the flower's center to the tip):
+# a kite whose sides run from the center to its widest at 0.6 on a slight outward curve (the owner's
+# check), then curve to a sharp tip.
+SATIN_PETAL_PROFILE = (0.02, 0.218, 0.393, 0.555, 0.708, 0.856, 1.0, 0.81, 0.57, 0.29, 0.0)  # (t/0.6)^0.85 to the peak: slightly convex
+# A satin flower's petal (designer S47-15's petals, widths over its tip radius every 0.05 of the length
+# from the center, / 0.69): the bottom a smooth line widening from the center with a slight curve into
+# its widest at 0.55 (no bump at the rose's edge), then nearly straight sides to a sharp tip (the owner's
+# check). The back petals are the same, half covered by the front ones.
+SATIN_FRONT_PROFILE = (0.02, 0.12, 0.22, 0.32, 0.42, 0.52, 0.62, 0.72, 0.82, 0.91, 0.97, 1.0, 0.97,
+                       0.9, 0.8, 0.68, 0.56, 0.42, 0.28, 0.14, 0.0)
 # A loop's outer end is a shallow convex curve: r_outer is its radius on the axis and
 # its corners lie END_SAG times a straight cut's sag (sqrt(r^2 + h^2) - r) further from
 # the head center (designer loops: median 0.6 over 21 loop layers; an arc around the
@@ -88,6 +98,10 @@ def _profile(kind: str, inner_ratio: float | None, lens: bool = False) -> tuple[
         return FLOWER_PROFILE
     if kind == "leaf_petal":
         return LEAF_PETAL_PROFILE
+    if kind == "satin_petal":
+        return SATIN_PETAL_PROFILE
+    if kind == "satin_front":
+        return SATIN_FRONT_PROFILE
     raise ValueError(f"unknown point kind {kind!r}")
 
 
@@ -98,6 +112,8 @@ def _side(kind: str, r_in: float, r_out: float, h: float, inner_ratio: float | N
     its convex outer end (`_end_radial`, END_SAG)."""
     prof = _profile(kind, inner_ratio, lens)
     ts = _T if not lens else tuple(i / 30 for i in range(31))
+    if not lens and len(prof) != len(ts):  # a finer measured profile (SATIN_FRONT_PROFILE: 21 points)
+        ts = tuple(i / (len(prof) - 1) for i in range(len(prof)))
     if lens:  # a triangle on the center: widest at its base, tapering straight to its tip
         prof = tuple((1 - t) ** LENS_TAPER for t in ts)
     pts = [(r_in + (r_out - r_in) * t, max(0.0, h * p + offset)) for t, p in zip(ts, prof)]
@@ -161,7 +177,7 @@ def points_ring(cx: float, cy: float, kind: Literal["star", "diamond", "bow", "p
         return [Shape("polygon", {"points": points_attr(pts)}, None)]
     w = width_ratio * (r_outer - r_inner)
     if kind == "petal" and flower:  # R56: the satin flower's petal (FLOWER_PROFILE); R64: 2, the leaf petal
-        kind = "leaf_petal" if int(flower) == 2 else "flower"  # type: ignore[assignment]
+        kind = {2: "leaf_petal", 3: "satin_petal", 4: "satin_front"}.get(int(flower), "flower")  # type: ignore[assignment]
     if edge_width:
         outlines_ = _edge_strips(kind, r_inner, r_outer, w, inner_ratio, edge_width)
     else:

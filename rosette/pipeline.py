@@ -2096,6 +2096,73 @@ def _loops_between_stars(parts: list) -> bool:
     return True
 
 
+# R69: one loop layer round a rose of a third color, no rings, and the loops' color narrowing to points
+# at their ends in the photo (S47-15: pink satin petals round a white rose on blue pleats, read as
+# square loops). They are leaf petals (geometry LEAF_PETAL_PROFILE, as R64). Pointed: the color's
+# share of a circle at 0.95 of the loops' reach is under POINTED_SHARE of its share at 0.6 (square
+# loops keep it). Designer S47-15 (head radii): petal tips 0.81, kites from the center, widest 0.68 of that radius
+# (geometry SATIN_PETAL_PROFILE), three in front and three behind, alternating (the owner's check).
+POINTED_AT = (0.6, 0.95)
+POINTED_SHARE = 0.6
+POINTED_TIP = 0.81
+POINTED_SPAN = 0.69
+POINTED_START = 0.02  # the kite starts at the flower's center (SATIN_PETAL_PROFILE)
+POINTED_ROSE = 0.325  # rose radius / head radius (designer S47-15)
+ROSE_STAR_REACH = 1.0  # a small star inside the loops' inner end (x1.5) is the rose
+
+
+def _pointed_loops_as_petals(parts: list, p, labels: np.ndarray) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    from .vision.parts_common import polar_sample
+    head = next((q for q in parts if q.role == "head"), None)
+    bows = [q for q in parts if q.role == "points" and q.params.get("kind") == "bow"]
+    c = next((q for q in parts if q.role == "center"), None)
+    if head is None or len(bows) != 1 or any(q.role == "ring" for q in parts):
+        return False
+    bow = bows[0]
+    if bow.params.get(KEEP_PARAM) or not 5 <= int(bow.params["count"]) <= 8:
+        return False
+    rest = [q for q in parts if q.role == "points" and q is not bow]
+    small = None
+    if c is None:  # the rose read as a small blunt star inside the loops (S47-15; R53 makes it the rose later)
+        if len(rest) != 1 or float(rest[0].params["r_outer"]) > ROSE_STAR_REACH * float(bow.params["r_inner"]) * 1.5:
+            return False
+        small = rest[0]
+        c = Part("center", "center", {"cx": small.params["cx"], "cy": small.params["cy"], "r": small.params["r_outer"]},
+                 small.color_group, 50, 0.5)
+    elif rest:
+        return False
+    if len({head.color_group, bow.color_group, c.color_group}) != 3:
+        return False
+    fr = Frame.of(p)
+    cx, cy = p.axis_x + (float(bow.params["cx"]) - 300.0) * fr.scale, fr.py(float(bow.params["cy"]))
+    ro = float(bow.params["r_outer"])
+    m = (labels == bow.color_group).astype(np.int32)
+    near, far = (float(polar_sample(m, cx, cy, np.array([s * ro * fr.scale]), 720, fill=0)[0].mean()) for s in POINTED_AT)
+    if near <= 0 or far >= POINTED_SHARE * near:
+        return False
+    n = int(bow.params["count"])
+    step = 360.0 / n
+    rot = float(bow.params["rotation_deg"])
+    snap = round(rot / (step / 2)) * (step / 2)
+    if abs(rot - snap) <= NESTED_SNAP_DEG:
+        rot = snap % step
+    pr = POINTED_TIP * float(head.params["r"])
+    bow.params.update({"kind": "petal", "r_outer": round(pr, 3), "r_inner": round(POINTED_START * pr, 3),
+                       "rotation_deg": round(rot, 3), "width_ratio": round(POINTED_SPAN / (1.0 - POINTED_START), 4),
+                       "flower": 4, "tips": 1, KEEP_PARAM: 1})
+    bow.params.pop("edge_width", None)
+    if n % 2 == 0:  # alternate petals in front (the designer's three front petals)
+        bow.params.update(count=n // 2, rotation_deg=round(rot % (2 * step), 3))
+        parts.append(Part(f"{bow.id}-front", "points", dict(bow.params, rotation_deg=round((rot + step) % (2 * step), 3), flower=4),
+                          bow.color_group, bow.z + 1, 0.5))
+    c.params["r"] = round(POINTED_ROSE * float(head.params["r"]), 3)
+    if small is not None:
+        parts.remove(small)
+        parts.append(c)
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -2274,6 +2341,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     _banded_cross_stars(tidy.parts)  # R66: banded four-point stars on the axes and the diagonals
     _star_round_rings(tidy.parts)  # R67: an eight-point star round a ring of a third color, a ruffle, a small star
     _loops_between_stars(tidy.parts)  # R68: loops between an outer and an inner star of one color
+    _pointed_loops_as_petals(tidy.parts, p, labels)  # R69: loops narrowing to points round a rose are leaf petals
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower
