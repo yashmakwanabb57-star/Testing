@@ -113,6 +113,8 @@ only give proportions for parts the photo cannot show, for example hidden star v
   sides bowing out (R83, geometry LEAF_LENS_TAPER; only S11-15). S11a-15 (line 20) approved as is.
   S17-15 (line 7) - R43's stacked stars are kept from the app's layer classifier (its top star had become
   six-pointed in the app; only S17-15).
+  S27-15 (line 30) - two four-loop layers of two colors round a ruffle are built whole and upright, the
+  ruffle color's loops on top (the owner's check), widths from the designer (R84; only S27-15).
 - Next (owner, at the office): verify Claude's work from line 56 (S51-19) one photo at a time with the
   normal loop below (show photo | ours | designer, wait for "works next" or a fix request). Then the open
   list above, worst first (S8-15, s44-15, S48-17, S68-19, S4-15).
@@ -128,7 +130,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
 4. Owner says "works next" -> commit, then the next photo. "not works fix" or a specific
    remark -> fix, re-render, show again.
 5. Fix as a narrow, numbered rule (R-number in a comment, constants named, designer
-   proportions cited). Latest rule: R83 (`rosette/pipeline.py` `_leaves_on_twelve_star`).
+   proportions cited). Latest rule: R84 (`rosette/pipeline.py` `_two_color_loops_round_ruffle`).
 6. Before showing a fix: check which of the 76 photos the rule fires on
    (`.venv/Scripts/python.exe tools/review_fire.py <rule function>` or `--part <part id>`), and compare scores
    before/after (`git stash` baseline) for those photos. Narrow the rule until no other photo

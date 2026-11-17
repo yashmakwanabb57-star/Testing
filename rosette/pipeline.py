@@ -2769,6 +2769,52 @@ def _leaves_on_twelve_star(parts: list) -> bool:
     return True
 
 
+# R84: two four-loop layers of two colors 45 degrees apart round a pleated ring of the first color and a
+# center of the second, no head disc (S27-15: lilac and white loops round a lilac ruffle and a white rose).
+# The rules read it well; the app's library head traced it badly (the ruffle lost, the loops cut), so the
+# layers are built whole (tips: the library head is skipped) and stood upright (the owner's check).
+RUFFLE_LOOPS = (0.67, 0.60)  # loop widths / reach: under (the ruffle's color), top
+
+
+def _two_color_loops_round_ruffle(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    if any(q.role in ("head", "template") for q in parts):
+        return False
+    pts = [q for q in parts if q.role == "points"]
+    c = next((q for q in parts if q.role == "center"), None)
+    rings = [q for q in parts if q.role == "ring"]
+    if c is None or len(pts) != 2 or len(rings) != 1 or any(q.params.get(KEEP_PARAM) for q in pts):
+        return False
+    if any(q.params.get("kind") not in ("bow", "star") or int(q.params["count"]) != 4 for q in pts):
+        return False
+    if not any(q.params.get("kind") == "bow" for q in pts):
+        return False
+    a, b = pts
+    if a.color_group == b.color_group or {a.color_group, b.color_group} != {rings[0].color_group, c.color_group}:
+        return False
+    off = (float(a.params["rotation_deg"]) - float(b.params["rotation_deg"])) % 90.0
+    if abs(off - 45.0) > NESTED_AXIS_DEG:
+        return False
+    bow = next(q for q in pts if q.params.get("kind") == "bow")
+    rc = float(c.params["r"])
+    for q in pts:  # both loops (the first read as a blunt star at this step), from the rose out, as the photo's
+        rot = float(q.params["rotation_deg"])
+        snap = round(rot / 45.0) * 45.0
+        q.params.update({"kind": "bow", "r_inner": round(rc, 3), "r_outer": bow.params["r_outer"],
+                         "width_ratio": bow.params.get("width_ratio", 0.8),
+                         "rotation_deg": round((snap if abs(rot - snap) <= NESTED_SNAP_DEG else rot) % 90.0, 3),
+                         "tips": 1, KEEP_PARAM: 1})
+    # designer S27-15 (shares of the loops' reach): the ruffle color's loops 0.67 wide, the other color's 0.60
+    low = next(q for q in pts if q.color_group == rings[0].color_group)
+    top = next(q for q in pts if q is not low)
+    reach = float(bow.params["r_outer"])
+    for q, w in ((low, RUFFLE_LOOPS[0]), (top, RUFFLE_LOOPS[1])):
+        q.params["width_ratio"] = round(w * reach / (reach - rc), 4)
+    low.z, top.z = 21, 20  # the ruffle color's loops on top (the owner's check)
+    rings[0].params["pinked"] = 1
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -2961,6 +3007,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     _three_color_rings(tidy.parts)  # R78: pleated rings of three colors round a rose
     _ring_round_badge(tidy.parts)  # R79: a blob of a second color at the badge is a pleated ring round it
     _leaves_on_twelve_star(tidy.parts)  # R83: kites between star points of their color, leaves on a twelve-point star
+    _two_color_loops_round_ruffle(tidy.parts)  # R84: two-color loops round a ruffle, built whole
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower

@@ -827,3 +827,29 @@ def test_r83_needs_one_color():
     parts = _s11_parts()
     parts[2].color_group = 2
     assert not _leaves_on_twelve_star(parts)
+
+
+def _s27_parts():
+    geo = {"cx": 300.0, "cy": 165.0}
+    return [Part("points-0", "points", dict(geo, kind="star", count=4, r_inner=78.9, r_outer=139.5, rotation_deg=49.4), 0, 21, 0.9),
+            Part("points-1", "points", dict(geo, kind="bow", count=4, r_inner=53.5, r_outer=139.5, rotation_deg=5.9, width_ratio=0.8), 1, 20, 0.9),
+            Part("center", "center", dict(geo, r=53.5), 1, 50, 0.9),
+            Part("ring-0", "ring", dict(geo, r_inner=53.5, r_outer=92.5), 0, 30, 0.9)]
+
+
+def test_r84_eight_loops_in_two_colors_round_a_ruffle_are_built_whole():
+    # S27-15, the owner's check: the app's library head lost the ruffle; the photo's head is kept whole and upright
+    from rosette.pipeline import _two_color_loops_round_ruffle
+    parts = _s27_parts()
+    assert _two_color_loops_round_ruffle(parts)
+    ids = {q.id: q for q in parts}
+    assert ids["points-1"].params["rotation_deg"] == 0.0 and ids["points-0"].params["rotation_deg"] == 45.0
+    assert all(ids[k].params["tips"] == 1 for k in ("points-0", "points-1"))
+    assert ids["ring-0"].params["pinked"] == 1 and ids["points-0"].params["kind"] == "bow"
+    assert ids["points-1"].z < ids["points-0"].z  # the ruffle's color on top
+
+
+def test_r84_needs_the_ruffle():
+    from rosette.pipeline import _two_color_loops_round_ruffle
+    parts = [q for q in _s27_parts() if q.role != "ring"]
+    assert not _two_color_loops_round_ruffle(parts)
