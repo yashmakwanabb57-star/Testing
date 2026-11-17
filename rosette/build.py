@@ -142,14 +142,45 @@ def template_pieces(part: Part) -> list[tuple[Shape, int]]:
     return out
 
 
-def template_center(part: Part) -> tuple[float, float, float] | None:
-    """(cx, cy, r) for the rose of a template head: its center pieces' reach, or None."""
-    q = part.params
+# R80: a library head that is only a pleated disc and one badge (A1-15's) is drawn as our own: a disc
+# with a pleated edge all round and the badge on its middle, both at the pieces' own radii (sqrt(area /
+# pi)); the traced outline was pleated only along the top and the badge sat low (S65-18, the owner's
+# check).
+def plain_disc(part: Part) -> tuple[float, float, int, int] | None:
+    """(disc radius, badge radius, disc category, badge category) in canvas units for a template part
+    made of one head piece and one center piece, or None."""
     pieces = _template(part).pieces
-    reach = [float((ring_ ** 2).sum(axis=1).max() ** 0.5) for pc in pieces
-             if pc.role == "center" for ring_ in pc.rings[:1]]
-    if reach:
-        return float(q["cx"]), float(q["cy"]), max(reach) * float(q["r"])
+    if len(pieces) != 2 or sorted(pc.role for pc in pieces) != ["center", "head"]:
+        return None
+    head = next(pc for pc in pieces if pc.role == "head")
+    badge = next(pc for pc in pieces if pc.role == "center")
+    r = float(part.params["r"])
+    rh = (Polygon(head.rings[0]).area / math.pi) ** 0.5 * r
+    rc = (Polygon(badge.rings[0]).area / math.pi) ** 0.5 * r
+    return rh, rc, head.category, badge.category
+
+
+def template_center(part: Part) -> tuple[float, float, float] | None:
+    """(cx, cy, r) for the rose of a template head: its largest center piece's own middle and
+    radius (sqrt(area / pi)), or None. A badge off the head's middle (A1-15's, low) keeps its rose on
+    it (S65-18, the owner's check); before, the head's middle and the piece's farthest reach."""
+    from shapely.geometry import Polygon
+    q = part.params
+    plain = plain_disc(part)
+    if plain is not None:  # R80: the badge on the disc's middle
+        return float(q["cx"]), float(q["cy"]), plain[1]
+    pieces = _template(part).pieces
+    discs = []
+    for pc in pieces:
+        if pc.role == "center":
+            for ring_ in pc.rings[:1]:
+                poly = Polygon(ring_)
+                if poly.is_valid and poly.area > 0:
+                    discs.append((poly.area, poly.centroid.x, poly.centroid.y))
+    if discs:
+        area, dx, dy = max(discs)
+        r = float(q["r"])
+        return float(q["cx"]) + dx * r, float(q["cy"]) + dy * r, (area / math.pi) ** 0.5 * r
     disc_ = _center_disc(pieces)
     if disc_ is None:
         return None
@@ -263,7 +294,15 @@ def color_shapes(model: RosetteModel) -> list[tuple[Shape, Part]]:
         q = p.params
         if p.role != "tail_stripe" and not (p.role == "unknown" and p.z >= 60):
             head_parts.append(id(p))
-        if p.role == "template":
+        if p.role == "template" and plain_disc(p) is not None:  # R80
+            rh, rc, kh, kc = plain_disc(p)
+            grp = template_groups(p)
+            for s, gid, role, z in ((pinked_circle(q["cx"], q["cy"], rh), grp[kh], "head", TEMPLATE_Z),
+                                    (disc(q["cx"], q["cy"], rc), grp[kc], "center", TEMPLATE_Z + 1)):
+                g = group(p, gid)
+                s.category, s.pattern, s.kind, s.role, s.z = g.category, g.pattern, "color", role, z
+                colors.append((s, p))
+        elif p.role == "template":
             for s, gid in template_pieces(p):
                 g = group(p, gid)
                 s.category, s.pattern, s.kind = g.category, g.pattern, "color"
