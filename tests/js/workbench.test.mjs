@@ -3,8 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  HEAD_CHECK, LOOP_BASE, SOURCE_NOT_READY, checklistItems, confirmBody, paramShown, convertBlocker, headFitText, downloadBlockers, errorText, flagItems, parseValue, resetForFile, sourceNotice,
-  perceptionText, readerText,
+  HEAD_CHECK, LOOP_BASE, SOURCE_NOT_READY, checklistItems, paramShown, convertBlocker, headFitText, downloadBlockers, openConfirmations, errorText, flagItems, parseValue, resetForFile, sourceNotice,
 } from '../../app/static/logic.js';
 import { applyConfig } from '../../app/static/simulator.js';
 
@@ -40,47 +39,18 @@ test('ready state has no blockers', () => {
   assert.deepEqual(downloadBlockers(ready()), []);
 });
 
-test('the head checklist item is always present and blocks download until ticked', () => {
+test('the head checklist item is always present; download does not wait for its tick', () => {
   const items = checklistItems(ready());
   assert.deepEqual(items.map((c) => c.key), [HEAD_CHECK.key]);
   assert.equal(items[0].text, 'Compare the head with the photo');
   assert.deepEqual(checklistItems(ready({ model: null })), []);
-  const b = downloadBlockers(ready({ confirmed: new Set(['group:1']) }));
-  assert.equal(b.length, 1);
-  assert.match(b[0], /Compare the head with the photo/);
+  const s = ready({ confirmed: new Set(['group:1']) });
+  assert.deepEqual(downloadBlockers(s), []);
+  const open = openConfirmations(s);
+  assert.equal(open.length, 1);
+  assert.match(open[0], /Compare the head with the photo/);
+  assert.deepEqual(openConfirmations(ready({ confirmed: new Set(['group:1', 'check:head']) })), []);
   assert.equal(flagItems(model(), [], false).some((f) => f.key === HEAD_CHECK.key), false); // not a flag
-});
-
-test('the pieces status is one plain line', () => {
-  const on = perceptionText({ status: 'on', pieces: 28, model: 'facebook/sam2.1-hiera-small', device: 'cpu',
-    seconds: 76.3, cached: false, message: 'pieces computed' });
-  assert.equal(on, 'Pieces: 28 found by sam2.1-hiera-small on cpu (76.3 s).');
-  assert.match(perceptionText({ status: 'on', pieces: 3, model: 'm', device: 'cpu', seconds: 1, cached: true }), /\(cached\)/);
-  assert.match(perceptionText({ status: 'off' }), /^Pieces: off - /);
-  const missing = perceptionText({ status: 'missing', message: 'Fetch them once with: tools/fetch_models.py --model small' });
-  assert.match(missing, /fetch_models\.py/);
-  assert.match(perceptionText({ status: 'failed', message: 'boom' }), /failed.*boom/);
-  for (const t of [on, missing]) assert.ok(!/[\u2013\u2014]/.test(t));
-  assert.equal(perceptionText(null), '');
-});
-
-test('the reader status is one plain line', () => {
-  const on = readerText({ status: 'on', decisions: 3, winner: 2, margin: 0.0342, seconds: 95.4, cached: false,
-    images: 1, note: '', message: 'judge: rules head -> count S1 16 (margin 0.034)', tie: [], removed: [] });
-  assert.equal(on, 'Reader: on, 3 decisions, winner 2 (margin 0.034), 95 s');
-  assert.equal(readerText({ status: 'on', decisions: 1, winner: 0, margin: 0.02, seconds: 3, cached: true, note: '' }),
-    'Reader: on, 1 decision, winner 0 (margin 0.020), cached');
-  assert.equal(readerText({ status: 'on', decisions: 0, winner: 0, margin: null, seconds: 61.2, cached: false, note: '' }),
-    'Reader: on, no open decisions, 61 s');
-  assert.equal(readerText({ status: 'on', decisions: 2, winner: 0, margin: 0, seconds: 1, cached: true,
-    note: 'judge skipped: more than 4 colours' }), 'Reader: on, 2 decisions, winner 0 (margin 0.000), cached - judge skipped: more than 4 colours');
-  assert.equal(readerText({ status: 'off', message: 'x' }), 'Reader: off');
-  const missing = readerText({ status: 'missing', message: 'llama-server.exe not found. ML-4 reader: install llama.cpp release b12342' });
-  assert.equal(missing, 'Reader: missing - llama-server.exe not found. ML-4 reader: install llama.cpp release b12342');
-  assert.equal(readerText({ status: 'skipped', message: 'no pieces' }), 'Reader: skipped - no pieces');
-  assert.equal(readerText({ status: 'failed', message: 'RuntimeError: boom' }), 'Reader: failed - RuntimeError: boom');
-  for (const t of [on, missing]) assert.ok(!/[–—]/.test(t));
-  assert.equal(readerText(null), '');
 });
 
 test('head fit is shown as information, plain hyphens', () => {
@@ -93,10 +63,10 @@ test('head fit is shown as information, plain hyphens', () => {
   assert.match(checklistItems(ready({ headFit: { agreement: 0.5, silhouette: 0.7 } }))[0].info, /50%/);
 });
 
-test('an unconfirmed flag blocks download', () => {
-  const b = downloadBlockers(ready({ confirmed: new Set(['check:head']) }));
-  assert.equal(b.length, 1);
-  assert.match(b[0], /1 of 1 flagged/);
+test('an unconfirmed flag is listed but does not block download', () => {
+  const s = ready({ confirmed: new Set(['check:head']) });
+  assert.deepEqual(downloadBlockers(s), []);
+  assert.match(openConfirmations(s)[0], /1 of 1 flagged/);
 });
 
 test('a dirty or in-flight render blocks download', () => {
@@ -297,10 +267,11 @@ test('low-confidence tail stripes give one flag for their tails card', () => {
   const flags = flagItems(m, [], false);
   assert.deepEqual(flags.map((f) => f.key), ['tails:0']);
   assert.match(flags[0].text, /Tails/);
-  // confirming the tails card clears the blocker
+  // an unconfirmed flag is listed but does not block the download; confirming clears it
   const s = ready({ model: m, confirmed: new Set() });
-  assert.match(downloadBlockers(s)[0], /1 of 1 flagged/);
-  assert.deepEqual(downloadBlockers(ready({ model: m, confirmed: new Set(['tails:0', 'check:head']) })), []);
+  assert.deepEqual(downloadBlockers(s), []);
+  assert.match(openConfirmations(s)[0], /1 of 1 flagged/);
+  assert.deepEqual(openConfirmations(ready({ model: m, confirmed: new Set(['tails:0', 'check:head']) })), []);
 });
 
 test('confident tail stripes are not flagged', () => {
@@ -313,9 +284,9 @@ test('confident tail stripes are not flagged', () => {
 // ------------------------------------------------------------ SVG source gate
 
 test('the SVG source carries a not-ready banner while download is blocked', () => {
-  assert.equal(SOURCE_NOT_READY, 'Not ready for the shop - fix or confirm the items listed first.');
+  assert.equal(SOURCE_NOT_READY, 'Not ready for the shop - fix the items listed first.');
   assert.equal(sourceNotice(ready()), null);
-  assert.equal(sourceNotice(ready({ confirmed: new Set() })), SOURCE_NOT_READY);
+  assert.equal(sourceNotice(ready({ confirmed: new Set() })), null); // unconfirmed items do not block
   assert.equal(sourceNotice(ready({ issues: [{ code: 'group_order', message: 'm', element: null }] })), SOURCE_NOT_READY);
   assert.equal(sourceNotice(ready({ render: { dirty: true, inFlight: false, error: null } })), SOURCE_NOT_READY);
   // nothing to show yet: no banner over an empty source
@@ -329,7 +300,6 @@ function fullState(overrides = {}) {
     ...ready(), pendingFile: { name: 'new.png' }, filename: 'old.svg', analyzeSeq: 3, photoFrame: { left: 1 },
     render: { seq: 5, timer: null, dirty: false, inFlight: false, error: 'x' },
     sim: { tried: new Set(['pattern', 'rose']) },
-    guided: { mode: 'guided', step: 4, reached: 5 },
     ...overrides,
   };
 }
@@ -358,7 +328,6 @@ test('choosing a new file clears the old model so it cannot be downloaded under 
   assert.equal(s.analyzeSeq, 4); // an analysis still running for the old file is dropped
   assert.equal(s.render.seq, 6); // and so is a render
   assert.deepEqual([s.render.dirty, s.render.inFlight, s.render.error], [false, false, null]);
-  assert.deepEqual([s.guided.step, s.guided.reached, s.guided.mode], [1, 1, 'guided']);
   assert.deepEqual(downloadBlockers(s), ['Convert the photo to SVG first.']);
   assert.equal(sourceNotice(s), null);
   assert.equal(convertBlocker(s), null);
@@ -378,15 +347,3 @@ test('a bow without inner_ratio shows the base width the geometry draws', () => 
   assert.equal(paramShown(bow, 'width_ratio'), 0.5);
 });
 
-// ------------------------------------------------------------ learn from downloads (ML-1)
-
-test('with the learn setting off a download posts nothing', () => {
-  assert.equal(confirmBody(false, model(), 's46-15.svg'), null);
-  assert.equal(confirmBody(true, null, 's46-15.svg'), null);
-});
-
-test('with the learn setting on the download posts the model and its name', () => {
-  const body = JSON.parse(confirmBody(true, model(), 's46-15.svg'));
-  assert.equal(body.filename, 's46-15.svg');
-  assert.deepEqual(body.model, model());
-});

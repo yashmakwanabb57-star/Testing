@@ -42,6 +42,16 @@ app = FastAPI(title="Rosette SVG generator")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+@app.middleware("http")
+async def no_stale_ui(request, call_next):
+    """The page and its scripts are revalidated on every load, so a browser never keeps an old UI
+    after an update (it had kept the removed Guided mode)."""
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 class RenderRequest(BaseModel):
     model: Any
     # The head picked on the head card: "rules" or a library candidate's template_id

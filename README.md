@@ -26,7 +26,7 @@ The head reader also uses the cloth pieces SAM 2.1 finds in the photo (docs/pipe
 .venv\Scripts\python.exe tools/fetch_models.py --model small
 ```
 
-Without the weights the tool runs as before (the rules alone) and the line under the photo says the model is missing, with this command.
+Without the weights the tool runs as before (the rules alone); `/api/analyze` reports the model missing, with this command, in its `perception` field.
 
 Three settings, environment variables read at each analysis (set them before starting the server):
 
@@ -68,18 +68,17 @@ then open http://127.0.0.1:8765. The server only listens on the local machine.
 
 ## The two UI modes
 
-Choose or drop a photo (it is shown as a preview), press **Convert to SVG**, then work in either mode (switch at the top; both share the same state):
+Choose or drop a photo (it is shown as a preview), press **Convert to SVG**, then work in the workbench:
 
 - **Workbench** - everything on one screen: the photo, the detected model (parts, color groups, Color 1-4 assignment, rose on/off), a live preview of the SVG in the shop's solid and pattern configurations, and edit controls for every part and color. Best for fixing a result.
-- **Guided** - the same controls one step at a time, asking about each color and each part. Best for a quick check.
 
 Heads the per-kind rules cannot build well are drawn from a **library of the reference heads** (H7): the closest reference head is placed on the photo's head circle when its outline fits the photo better than the detected head and its colors agree with the photo under the tail colors (or the detected head fails grossly and the library outline wins clearly; the library head is then flagged); otherwise the rule-based head is drawn. Each template is placed at its best pose on the photo (center offset, scale, turn). The head card shows the automatic head, its match and its colors; there is no head picker. A new image is converted automatically: scored with each photo's own design left out of the library (the honest estimate for a new design), the 34-photo scoreboard reaches PASS 23/34 with head IoU 0.844 (known design, full library: PASS 23/34, head 0.847).
 
-A result is **flagged** when the tool is unsure (a low-confidence color, any part read with low confidence - head, ring, points, center or tail stripes - a part drawn as a placeholder disc, a warning, or a validation issue). Confirm every flagged item before downloading the SVG.
+A result is **flagged** when the tool is unsure (a low-confidence color, any part read with low confidence - head, ring, points, center or tail stripes - a part drawn as a placeholder disc, a warning, or a validation issue). Download does not wait for them: the download box lists what is not yet confirmed.
 
 ## Output
 
-Download the SVG from the UI (the download is enabled once the flags are confirmed) and keep it in `output/` (the tool does not write there by itself). With **Learn from my downloads** on (the default, under the Download button), the head layers of each downloaded SVG are also kept on this computer in `rosette/data/confirmed_layers.csv` as training examples for the layer classifier; retrain it with `.venv\Scripts\python.exe tools/train_layers.py` (the reference dataset is rebuilt with `tools/build_layer_dataset.py`). Nothing is sent anywhere. Samples: `output/s35-19.svg`, `output/s46-15.svg`. Every file is checked by `rosette.validate.validate` against the contract before it is offered.
+Download the SVG from the UI (Download SVG, in the header or under the parts) and keep it in `output/` (the tool does not write there by itself). Downloads are not kept as training rows any more (the Learn from my downloads option was removed); the layer classifier is retrained from the reference dataset with `.venv\Scripts\python.exe tools/train_layers.py` (rebuilt with `tools/build_layer_dataset.py`) and from rows already in `rosette/data/confirmed_layers.csv`. Samples: `output/s35-19.svg`, `output/s46-15.svg`. Every file is checked by `rosette.validate.validate` against the contract before it is offered.
 
 ## Tests
 

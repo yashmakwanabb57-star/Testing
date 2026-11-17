@@ -1,4 +1,4 @@
-// Pure workbench logic: no DOM, no network. Shared by app.js (and a guided mode) and
+// Pure workbench logic: no DOM, no network. Shared by app.js and
 // loaded directly by the Node tests in tests/js.
 
 export const FLAG_BELOW = 0.6; // rosette/assign.py FLAG_BELOW
@@ -145,36 +145,6 @@ export function headFitText(fit) {
   return `Head match ${pct(fit.agreement)}, outline ${pct(fit.silhouette)} - measured on the photo when converted; information, not a flag.`;
 }
 
-// The SAM 2 pieces' status at conversion (api/analyze perception, ML-2): one plain line under
-// the photo. Plain hyphens.
-export function perceptionText(p) {
-  if (!p) return '';
-  if (p.status === 'on') {
-    const model = String(p.model || 'SAM 2').replace(/^.*\//, '');
-    const how = p.cached ? 'cached' : `${Number(p.seconds).toFixed(1)} s`;
-    return `Pieces: ${p.pieces} found by ${model} on ${p.device} (${how}).`;
-  }
-  if (p.status === 'off') return 'Pieces: off - the rules alone read the head.';
-  if (p.status === 'missing') return `Pieces: model missing - the rules alone read the head. ${p.message}`;
-  return `Pieces: failed - the rules alone read the head. ${p.message || ''}`.trim();
-}
-
-// The ML-4 piece reader's status at conversion (api/analyze reader): one plain line under the
-// pieces line. Plain hyphens.
-export function readerText(r) {
-  if (!r) return '';
-  if (r.status === 'on') {
-    const n = Number(r.decisions) || 0;
-    const how = r.cached ? 'cached' : `${Math.round(Number(r.seconds) || 0)} s`;
-    const what = n === 0 ? 'no open decisions'
-      : `${n} decision${n === 1 ? '' : 's'}, winner ${r.winner} (margin ${Number(r.margin || 0).toFixed(3)})`;
-    const line = `Reader: on, ${what}, ${how}`;
-    return r.note ? `${line} - ${r.note}` : line;
-  }
-  if (r.status === 'off') return 'Reader: off';
-  return `Reader: ${r.status} - ${r.message || ''}`.trim();
-}
-
 export function checklistItems(s) {
   if (!s.model) return [];
   return [{ ...HEAD_CHECK, info: headFitText(s.headFit) }];
@@ -196,12 +166,10 @@ export function resetForFile(s) {
   s.analyzeSeq++;
   s.render.seq++;
   Object.assign(s.render, { dirty: false, inFlight: false, error: null });
-  Object.assign(s, { filename: null, model: null, svg: null, issues: [], flagged: false, analyzing: false, photoFrame: null, headFit: null,
-    perception: null, reader: null });
+  Object.assign(s, { filename: null, model: null, svg: null, issues: [], flagged: false, analyzing: false, photoFrame: null, headFit: null });
   s.confirmed.clear();
   s.invalid.clear();
   s.sim.tried.clear();
-  Object.assign(s.guided, { step: 1, reached: 1 });
 }
 
 // Reasons Download is disabled for a workbench state; empty means ready.
@@ -213,16 +181,24 @@ export function downloadBlockers(s) {
   if (s.render.dirty || s.render.inFlight) out.push('Updating the SVG...');
   else if (s.render.error) out.push('The last update failed. Change a value to retry.');
   if (s.issues.length) out.push(`${s.issues.length} check(s) failed.`);
+  return out;
+}
+
+// Flagged items and checklist ticks not yet given. They no longer block Download (the owner's
+// call): the user may download without confirming; the download box lists them.
+export function openConfirmations(s) {
+  if (!s.model || !s.svg) return [];
+  const out = [];
   const flags = flagItems(s.model, s.issues, s.flagged);
   const open = flags.filter((f) => !s.confirmed.has(f.key)).length;
-  if (open) out.push(`${open} of ${flags.length} flagged item(s) still to confirm.`);
+  if (open) out.push(`${open} of ${flags.length} flagged item(s) not confirmed.`);
   for (const c of checklistItems(s)) {
-    if (!s.confirmed.has(c.key)) out.push(`${c.text} and tick it in the checklist.`);
+    if (!s.confirmed.has(c.key)) out.push(`${c.text} (not ticked).`);
   }
   return out;
 }
 
-export const SOURCE_NOT_READY = 'Not ready for the shop - fix or confirm the items listed first.';
+export const SOURCE_NOT_READY = 'Not ready for the shop - fix the items listed first.';
 
 // Banner over the "SVG source" view: the source stays readable for debugging, but while
 // Download is blocked it must not pass for a shop-ready file. null: no banner.
@@ -264,106 +240,5 @@ export function parseValue(type, raw) {
   return { ok: true, value: v };
 }
 
-// ---------------------------------------------------------------- guided mode
-
-export const GUIDED_STEPS = [
-  { n: 1, label: 'Upload', title: 'Upload a photo' },
-  { n: 2, label: 'Parts', title: 'Check the parts' },
-  { n: 3, label: 'Colors', title: 'Check colors' },
-  { n: 4, label: 'Test', title: 'Test on site colors' },
-  { n: 5, label: 'Download', title: 'Download' },
-];
-
 export const tailCheckKey = (n) => `tails:${n}`;
 
-// One "Looks right" check per part card, the way the workbench lays them out: each
-// non-tail part, and one per tail group. Part keys are the same as the flag keys, so
-// confirming a flagged part here confirms it everywhere.
-export function partChecks(model) {
-  if (!model) return [];
-  const out = [];
-  const tails = tailGroups(model);
-  const tailFirst = new Map(tails.map((ps, n) => [ps[0], n]));
-  for (const p of model.parts) {
-    if (p.role !== 'tail_stripe') out.push({ key: `part:${p.id}`, label: p.id });
-    else if (tailFirst.has(p)) out.push({ key: tailCheckKey(tailFirst.get(p)), label: 'Tails' });
-  }
-  return out;
-}
-
-const ROLE_NOUNS = { head: 'head', ring: 'ring', points: 'point', center: 'center', tail_stripe: 'stripe', unknown: 'shape', template: 'head shape' };
-
-// One question per color group, flagged groups first, otherwise in model order.
-// usedOn lists the part kinds using the color ("stripe"); noun is set when there is one.
-// A plain s is the plural: these words all take one.
-export function colorQuestions(model, issues = [], serverFlagged = false) {
-  if (!model) return [];
-  const flagged = new Set(flagItems(model, issues, serverFlagged).map((f) => f.key));
-  const qs = model.groups.map((g, order) => {
-    const users = model.parts.filter((p) => usesGroup(p, g.id));
-    const nouns = [...new Set(users.map((p) => ROLE_NOUNS[p.role] || 'shape'))];
-    const key = `group:${g.id}`;
-    return { key, group: g, noun: nouns.length === 1 ? nouns[0] : null, usedOn: nouns, uses: users.length, flagged: flagged.has(key), order };
-  });
-  return qs.sort((a, b) => (b.flagged - a.flagged) || (a.order - b.order));
-}
-
-// Why Next is blocked on a guided step, in plain words; null means the user may go on.
-export function advanceBlocker(step, s) {
-  if (step >= GUIDED_STEPS.length) return 'This is the last step.';
-  if (s.analyzing) return 'Wait for the conversion to finish.';
-  if (!s.model || !s.svg) return s.pendingFile ? NEEDS_CONVERT : 'Upload a photo first.';
-  if (step === 2) {
-    if (s.invalid.size) return 'Fix the invalid values (red fields) first.';
-    const checks = partChecks(s.model);
-    const open = checks.filter((c) => !s.confirmed.has(c.key)).length;
-    if (open) return `Mark every part "Looks right" first (${open} of ${checks.length} left).`;
-    if (!s.confirmed.has(HEAD_CHECK.key)) return `${HEAD_CHECK.text} and tick it first.`;
-  }
-  if (step === 3) {
-    // Every color question needs an answer (Yes), flagged or not: a wrong color in a wrong
-    // layer is the worst failure. A pick through Change... clears the answer, so it gets a
-    // fresh Yes. Warnings (and the server-flagged fallback) must be confirmed as well;
-    // part and tails flags are confirmed in step 2.
-    const qs = colorQuestions(s.model, s.issues, s.flagged);
-    const open = qs.filter((q) => !s.confirmed.has(q.key)).length;
-    if (open) return `Answer every color question first (${open} of ${qs.length} left).`;
-    const warnings = flagItems(s.model, s.issues, s.flagged)
-      .filter((f) => !/^(part|tails|group):/.test(f.key) && !s.confirmed.has(f.key)).length;
-    if (warnings) return `Confirm ${warnings} warning(s) first.`;
-  }
-  if (step === 4) {
-    const tried = (s.sim && s.sim.tried) || new Set();
-    const missing = [];
-    if (!tried.has('pattern')) missing.push('Color 2 Solid / Pattern');
-    if (!tried.has('rose')) missing.push('Rose On / Off');
-    if (missing.length) return `Try ${missing.join(' and ')} at least once first.`;
-  }
-  return null;
-}
-
-export const canAdvance = (step, s) => advanceBlocker(step, s) === null;
-
-// The guided step to show: the given step, or an earlier one whose gate no longer passes
-// (e.g. a part's "Looks right" was removed in the workbench while guided sat on step 5).
-export function clampStep(step, s) {
-  for (let k = 1; k < step; k++) if (!canAdvance(k, s)) return k;
-  return step;
-}
-
-// Breadcrumb jumps: back is always allowed; forward only to a step already reached, and
-// only if every step in between could be passed with Next right now.
-export function canJump(from, to, s, reached) {
-  if (to < 1 || to > GUIDED_STEPS.length) return false;
-  if (to <= from) return true;
-  if (to > reached) return false;
-  for (let k = from; k < to; k++) if (!canAdvance(k, s)) return false;
-  return true;
-}
-
-// ML-1: the body of the /api/confirm post made after a download, or null when the
-// "Learn from my downloads" setting is off (nothing is posted) or there is no model.
-export function confirmBody(learnOn, model, filename) {
-  if (!learnOn || !model) return null;
-  return JSON.stringify({ model, filename: filename || '' });
-}

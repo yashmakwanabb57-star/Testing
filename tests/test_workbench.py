@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 STATIC = Path(__file__).resolve().parent.parent / "app" / "static"
-ASSETS = ["index.html", "app.js", "logic.js", "guided.js", "simulator.js", "styles.css"]
+ASSETS = ["index.html", "app.js", "logic.js", "simulator.js", "styles.css"]
 client = TestClient(app)
 
 
@@ -16,14 +16,20 @@ def test_workbench_html():
     assert r.status_code == 200
     html = r.text
     for needle in ('id="file-input"', 'id="preview"', 'id="parts"', 'id="groups"',
-                   'id="checks"', 'id="download"', 'src="/static/app.js"', 'href="/static/styles.css"',
-                   'src="/static/logo.webp" alt="BR Roset"', 'src="/static/guided.js"',
-                   'id="mode-workbench"', 'id="mode-guided"', 'id="guided"', 'id="g-next"', 'id="g-crumbs"'):
+                   'id="checks"', 'id="download"', 'id="download-top"', 'src="/static/app.js"', 'href="/static/styles.css"',
+                   'src="/static/logo.webp" alt="BR Roset"'):
         assert needle in html, needle
     assert re.search(r'<button[^>]*id="download"[^>]*disabled', html)
-    # Workbench is the default view; the guided view starts hidden.
-    assert re.search(r'<main[^>]*id="guided"[^>]*hidden', html)
-    assert re.search(r'id="mode-workbench"[^>]*aria-pressed="true"', html)
+    assert re.search(r'<button[^>]*id="download-top"[^>]*disabled', html)  # the header's Download, off until ready
+    # the workbench is the only view: Guided mode is gone (the owner's call)
+    for gone in ('guided.js', 'id="guided"', 'id="mode-guided"'):
+        assert gone not in html, gone
+
+
+
+def test_page_and_scripts_are_not_cached_stale():
+    for path in ("/", "/static/app.js", "/static/logic.js"):
+        assert client.get(path).headers.get("cache-control") == "no-cache", path
 
 
 def test_static_assets_served():

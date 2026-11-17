@@ -2,7 +2,7 @@
 // Run: node --test tests/js/template.test.mjs (tests/test_js.py runs it when node is on PATH)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { colorQuestions, flagItems, automaticHeadText, renderBody, partGroups, templateText, usesGroup } from '../../app/static/logic.js';
+import { flagItems, automaticHeadText, renderBody, partGroups, templateText, usesGroup } from '../../app/static/logic.js';
 
 function model(score = 0.8) {
   return {
@@ -33,8 +33,6 @@ test('a template part uses every mapped group', () => {
   const p = model().parts[1];
   assert.deepEqual(partGroups(p).sort(), [0, 1]);
   assert.ok(usesGroup(p, 0) && usesGroup(p, 1) && !usesGroup(p, 2));
-  const q = colorQuestions(model()).find((x) => x.group.id === 1);
-  assert.equal(q.noun, 'head shape');
 });
 
 test('a weak template match is flagged, a good one is not', () => {

@@ -1,24 +1,16 @@
 // Workbench UI. Plain ES module, no framework, no network access beyond the local API.
 // Sections: constants, state, api, derived (pure), actions (mutate state), views (DOM),
-// init (event wiring). A guided mode can reuse state, api, derived and actions and add
-// its own views.
+// init (event wiring).
 import { applyConfig, glitterPattern, COLOR_INDICES } from './simulator.js';
 import {
   MAX_COUNT, POINT_KINDS, errorText, hex, flagItems,
-  downloadBlockers as blockersFor, groupColor, tailGroups, parseValue, tailCheckKey, sourceNotice,
+  downloadBlockers as blockersFor, openConfirmations, groupColor, tailGroups, parseValue, tailCheckKey, sourceNotice,
   convertBlocker, resetForFile, checklistItems, paramShown, automaticHeadText, renderBody, templateText, usesGroup,
-  confirmBody, perceptionText, readerText,
 } from './logic.js';
 
 export { errorText, flagItems, parseValue, tailGroups, hex };
 export const downloadBlockers = () => blockersFor(state);
 
-// Called after every change that can affect the blockers or the simulator (guided mode
-// listens here to keep its Next button and checklists current).
-export const listeners = [];
-function notify() {
-  for (const f of listeners) f();
-}
 
 // ---------------------------------------------------------------- constants
 
@@ -79,8 +71,6 @@ export const state = {
   issues: [],
   flagged: false, // server is_flagged of the last render
   headFit: null, // head fit measured at conversion (information, not a flag)
-  perception: null, // the SAM 2 pieces' status at conversion (ML-2; one line under the photo)
-  reader: null, // the ML-4 piece reader's status at conversion (one line under the pieces line)
   headDefault: null, // the head the conversion chose ('rules' or a template_id)
   confirmed: new Set(), // flag keys the user confirmed
   invalid: new Set(), // input field keys holding an invalid value
@@ -98,29 +88,7 @@ export const state = {
     source: false,
   },
   photoFrame: null, // overlay placement of the photo in the 600x850 frame
-  guided: { mode: 'workbench', step: 1, reached: 1 }, // guided mode view state
 };
-
-// ---------------------------------------------------------------- learning setting
-
-// "Learn from my downloads" (ML-1): on unless the user turned it off; kept per browser.
-const LEARN_KEY = 'rosette.learn';
-
-export function learnEnabled() {
-  try {
-    return localStorage.getItem(LEARN_KEY) !== 'off';
-  } catch {
-    return true;
-  }
-}
-
-function setLearn(on) {
-  try {
-    localStorage.setItem(LEARN_KEY, on ? 'on' : 'off');
-  } catch {
-    // storage blocked: the setting lasts for this page only
-  }
-}
 
 // ---------------------------------------------------------------- api
 
@@ -147,13 +115,6 @@ export const api = {
     const form = new FormData();
     form.append('file', file, file.name);
     return request('/api/analyze', { method: 'POST', body: form });
-  },
-  confirm(body) {
-    return request('/api/confirm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    });
   },
   render(model, head) {
     return request('/api/render', {
@@ -195,8 +156,7 @@ export const actions = {
       if (token !== state.analyzeSeq) return;
       Object.assign(state, {
         model: res.model, svg: res.svg, issues: res.issues || [], flagged: !!res.flagged,
-        filename: res.filename, headFit: res.head_fit || null, perception: res.perception || null,
-        reader: res.reader || null,
+        filename: res.filename, headFit: res.head_fit || null,
         headDefault: (res.model.parts.find((p) => p.role === 'template') || { params: { template_id: 'rules' } })
           .params.template_id,
       });
@@ -367,7 +327,6 @@ export const actions = {
     Object.assign(state.sim, patch);
     views.simControls();
     views.preview();
-    notify();
   },
 
   scheduleRender() {
@@ -420,14 +379,10 @@ export const actions = {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    // ML-1: the confirmed head layers become local training rows (setting on by default)
-    const learn = document.getElementById('learn-toggle');
-    const body = confirmBody(Boolean(learn && learn.checked), state.model, state.filename);
-    if (body) api.confirm(body).catch(() => {});
   },
 };
 
-// Guided-mode "Looks right" keys of the tail groups. A tail edit can regroup or reorder
+// Confirmation keys of the tail groups. A tail edit can regroup or reorder
 // the stripes, so it clears all of them.
 function tailConfirmations() {
   return [...state.confirmed].filter((k) => k.startsWith('tails:'));
@@ -480,8 +435,7 @@ function confirmBox(key) {
       type: 'checkbox', 'data-confirm': key, checked: state.confirmed.has(key),
       onchange: (ev) => actions.confirm(key, ev.target.checked),
     }),
-    el('span', { class: 'lbl-wb', text: ' Confirmed' }),
-    el('span', { class: 'lbl-guided', text: ' Looks right' }));
+    el('span', { class: 'lbl-wb', text: ' Confirmed' }));
 }
 
 // onInput(raw, target) applies a value. With onCommit set, typing only validates
@@ -660,12 +614,6 @@ export const views = {
       img.hidden = true;
       $('drop-hint').hidden = false;
     }
-    const line = perceptionText(state.perception);
-    $('perception').textContent = line;
-    $('perception').hidden = !line;
-    const read = readerText(state.reader);
-    $('reader').textContent = read;
-    $('reader').hidden = !read;
   },
 
   simControls() {
@@ -815,7 +763,7 @@ export const views = {
       const flagged = items.has(key);
       card.classList.toggle('flagged', flagged);
       card.classList.toggle('confirmed', flagged && state.confirmed.has(key));
-      card.classList.toggle('checked', state.confirmed.has(key)); // guided "Looks right"
+      card.classList.toggle('checked', state.confirmed.has(key));
       const box = card.querySelector(`input[data-confirm]`);
       if (box) box.checked = state.confirmed.has(key);
       const text = card.querySelector('.flag-text');
@@ -854,9 +802,12 @@ export const views = {
   download() {
     const blockers = downloadBlockers();
     $('download').disabled = blockers.length > 0;
+    $('download-top').disabled = blockers.length > 0; // the header's copy (the owner's call): same blockers
+    $('download-top').title = blockers.length ? blockers.join(' ') : `Download ${state.filename}`;
     views.source();
-    $('download-reason').textContent = blockers.length ? blockers.join(' ') : `Ready: ${state.filename}`;
-    notify();
+    const open = openConfirmations(state);
+    $('download-reason').textContent = blockers.length ? blockers.join(' ')
+      : open.length ? `Ready: ${state.filename}. Not checked yet: ${open.join(' ')}` : `Ready: ${state.filename}`;
   },
 };
 
@@ -964,8 +915,7 @@ function init() {
   $('source-toggle').addEventListener('change', (ev) => actions.setSim({ source: ev.target.checked }));
   $('model-rose').addEventListener('change', (ev) => actions.setModelRose(ev.target.checked));
   $('download').addEventListener('click', () => actions.download());
-  $('learn-toggle').checked = learnEnabled();
-  $('learn-toggle').addEventListener('change', (ev) => setLearn(ev.target.checked));
+  $('download-top').addEventListener('click', () => actions.download());
   $('convert').addEventListener('click', () => actions.convert());
   views.all();
 }
