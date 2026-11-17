@@ -115,6 +115,13 @@ only give proportions for parts the photo cannot show, for example hidden star v
   six-pointed in the app; only S17-15).
   S27-15 (line 30) - two four-loop layers of two colors round a ruffle are built whole and upright, the
   ruffle color's loops on top (the owner's check), widths from the designer (R84; only S27-15).
+  S5-15 (line 57) - a disc of the center's color under one four-loop layer, a ruffle of a third color, is black
+  axis loops under gold-edged glitter loops (R85; only S5-15).
+  Tails everywhere: the pinked ends take the designer's teeth, 11.8 wide and 5.9 deep (geometry TAIL_TOOTH).
+  A1-15 - a plain one-color tail is two ribbons, the line between them from 0.28 of the top to the middle of the
+  bottom (R86; A1-15, A13-15).
+  A9-15 - a head read smooth round pleated rings is pleated too (R87; A9-15, A10-15, A16-17, whose designer rims
+  are wavy; head shape scores dip 0.003-0.02 on the wave's edge).
 - Next (owner, at the office): verify Claude's work from line 56 (S51-19) one photo at a time with the
   normal loop below (show photo | ours | designer, wait for "works next" or a fix request). Then the open
   list above, worst first (S8-15, s44-15, S48-17, S68-19, S4-15).
@@ -130,7 +137,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
 4. Owner says "works next" -> commit, then the next photo. "not works fix" or a specific
    remark -> fix, re-render, show again.
 5. Fix as a narrow, numbered rule (R-number in a comment, constants named, designer
-   proportions cited). Latest rule: R84 (`rosette/pipeline.py` `_two_color_loops_round_ruffle`).
+   proportions cited). Latest rule: R87 (`rosette/pipeline.py` `_pleated_head_rim`).
 6. Before showing a fix: check which of the 76 photos the rule fires on
    (`.venv/Scripts/python.exe tools/review_fire.py <rule function>` or `--part <part id>`), and compare scores
    before/after (`git stash` baseline) for those photos. Narrow the rule until no other photo

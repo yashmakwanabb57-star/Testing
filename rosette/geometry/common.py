@@ -12,6 +12,10 @@ TOOTH = 5.383
 SCALLOP_PERIOD = 3.4 * TOOTH
 SCALLOP_DEPTH = 0.75 * TOOTH
 SCALLOP_POINTS = 12  # points per wave
+# The tails' pinked ends as the designer draws them (S27-15, S11-15, A10-15B: teeth 11.6-12.2 wide, 5.8-6.1
+# deep; the owner's check): twice as wide as deep.
+TAIL_TOOTH = 11.8
+TAIL_TOOTH_DEPTH = 5.9
 
 
 def scallop_edge(cx: float, cy: float, r: float, period: float = SCALLOP_PERIOD,
@@ -38,9 +42,10 @@ def points_attr(pts: list[Pt]) -> str:
     return " ".join(f"{fmt(x)},{fmt(y)}" for x, y in pts)
 
 
-def pinked_edge(p0: Pt, p1: Pt, tooth: float, inward: Pt) -> list[Pt]:
-    """Zigzag from p0 to p1 (both included): tips on the line, valleys `tooth`
-    deep toward the `inward` vector. Tooth width is adjusted to fit evenly."""
+def pinked_edge(p0: Pt, p1: Pt, tooth: float, inward: Pt, depth: float | None = None) -> list[Pt]:
+    """Zigzag from p0 to p1 (both included): teeth about `tooth` wide (adjusted to fit evenly), valleys
+    `depth` (default `tooth`) deep toward the `inward` vector."""
+    depth = tooth if depth is None else depth
     dx, dy = p1[0] - p0[0], p1[1] - p0[1]
     length = math.hypot(dx, dy)
     n = max(1, round(length / tooth))
@@ -48,8 +53,8 @@ def pinked_edge(p0: Pt, p1: Pt, tooth: float, inward: Pt) -> list[Pt]:
     for i in range(n):
         t_mid = (i + 0.5) / n
         t_end = (i + 1) / n
-        pts.append((p0[0] + dx * t_mid + inward[0] * tooth,
-                    p0[1] + dy * t_mid + inward[1] * tooth))
+        pts.append((p0[0] + dx * t_mid + inward[0] * depth,
+                    p0[1] + dy * t_mid + inward[1] * depth))
         pts.append((p0[0] + dx * t_end, p0[1] + dy * t_end))
     return pts
 

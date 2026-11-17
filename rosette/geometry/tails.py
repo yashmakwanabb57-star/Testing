@@ -3,17 +3,17 @@ from __future__ import annotations
 import math
 
 from ..shapes import Shape
-from .common import TOOTH, Pt, pinked_edge, points_attr
+from .common import TAIL_TOOTH, TAIL_TOOTH_DEPTH, Pt, pinked_edge, points_attr
 
 CX = 300.0
 
 
 def tails(top_y: float, bottom_y: float, count: int, top_width: float, bottom_width: float,
-          spread_deg: float, stripes: list[float], tooth: float = TOOTH,
+          spread_deg: float, stripes: list[float], tooth: float = TAIL_TOOTH,
           stripes_bottom: list[float] | None = None) -> list[list[Shape]]:
     """Tail axes fan out from (300, top_y); tail 0 is leftmost. Tails are not rotated: all bottoms lie on y=bottom_y. Each stripe is a
-    closed polygon whose bottom edge is pinked (tips on the trapezoid bottom, valleys
-    `tooth` above it); neighbouring stripes share their straight side edges.
+    closed polygon whose bottom edge is pinked (tips on the trapezoid bottom, teeth `tooth` wide,
+    valleys half that above it); neighbouring stripes share their straight side edges.
     `stripes` are the stripe shares across the top edge, `stripes_bottom` (same
     count; default `stripes`) across the bottom edge: a ribbon of constant width on
     a widening tail takes a smaller share at the bottom."""
@@ -43,7 +43,7 @@ def tails(top_y: float, bottom_y: float, count: int, top_width: float, bottom_wi
             tl, tr = lerp(cum[i], ax_top, top_width, top_y), lerp(cum[i + 1], ax_top, top_width, top_y)
             bl = lerp(cum_b[i], ax_bot, bottom_width, bottom_y)
             br = lerp(cum_b[i + 1], ax_bot, bottom_width, bottom_y)
-            pts = [tl, tr] + pinked_edge(br, bl, tooth, (0.0, -1.0))
+            pts = [tl, tr] + pinked_edge(br, bl, tooth, (0.0, -1.0), TAIL_TOOTH_DEPTH * tooth / TAIL_TOOTH)
             row.append(Shape("polygon", {"points": points_attr(pts)}, None))
         out.append(row)
     return out

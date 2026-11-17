@@ -2815,6 +2815,80 @@ def _two_color_loops_round_ruffle(parts: list) -> bool:
     return True
 
 
+# R85: a disc of the center's color under one four-loop layer, with a ruffle of a third color, is a second
+# loop layer on the axes (S5-15: black loops read as a disc, glitter loops on the diagonals edged in the gold
+# of the ruffle, a badge). Designer S5-15 (shares of the reach): axis loops 0.64 wide, diagonal loops 0.50
+# with an edge 0.07 a side, under them and over the axis loops; the scraps of the edge color are dropped.
+EDGED_LOOPS = (0.64, 0.50, 0.07)  # axis width, diagonal width, edge per side
+
+
+def _edged_loops_on_loops(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    head = next((q for q in parts if q.role == "head"), None)
+    c = next((q for q in parts if q.role == "center"), None)
+    pts = [q for q in parts if q.role == "points"]
+    rings = [q for q in parts if q.role == "ring"]
+    if head is None or c is None or len(pts) != 1 or len(rings) != 1 or any(q.role == "template" for q in parts):
+        return False
+    bow, ring = pts[0], rings[0]
+    if bow.params.get("kind") != "bow" or int(bow.params["count"]) != 4 or bow.params.get(KEEP_PARAM):
+        return False
+    if head.color_group != c.color_group or len({head.color_group, bow.color_group, ring.color_group}) != 3:
+        return False
+    rot = float(bow.params["rotation_deg"])
+    snap = round(rot / 45.0) * 45.0
+    rot = (snap if abs(rot - snap) <= NESTED_SNAP_DEG else rot) % 90.0
+    reach, rc = float(head.params["r"]), float(c.params["r"])
+    geo = {"cx": head.params["cx"], "cy": head.params["cy"], "kind": "bow", "count": 4,
+           "r_inner": round(rc, 3), "r_outer": round(reach, 3), "tips": 1, KEEP_PARAM: 1}
+    wr = lambda w: round(w * reach / (reach - rc), 4)
+    aw, dw, ew = EDGED_LOOPS
+    axis = Part("points-axis", "points", dict(geo, rotation_deg=round((rot + 45.0) % 90.0, 3), width_ratio=wr(aw)),
+                head.color_group, 19, head.confidence)
+    edge = Part(f"{bow.id}-edge", "points", dict(geo, rotation_deg=round(rot, 3), width_ratio=wr(dw + 2 * ew)),
+                ring.color_group, 20, ring.confidence)
+    bow.params.update(dict(geo, rotation_deg=round(rot, 3), width_ratio=wr(dw)))
+    bow.z = 21
+    ring.params["pinked"] = 1
+    parts[:] = [q for q in parts if q is not head and not (q.role == "unknown" and q.color_group == ring.color_group)]
+    parts.extend([axis, edge])
+    return True
+
+
+# R86: a single tail of one color, one stripe, is two ribbons, as the designer draws it (A1-15: two pink
+# ribbons, the front one's inner edge a line from 0.28 of the top across to the middle of the bottom; the
+# owner's check). Drawn as two stripes of the tail's color, so the outline between them is that line.
+TWO_RIBBONS = ((0.28, 0.72), (0.5, 0.5))  # shares across the top, across the bottom
+
+
+def _two_ribbon_tail(parts: list) -> bool:
+    st = [q for q in parts if q.role == "tail_stripe"]
+    if len(st) != 1:
+        return False
+    t = st[0]
+    p = t.params
+    if int(p.get("tails_count", 0)) != 1 or len([x for x in str(p.get("stripes", "")).split(",") if x.strip()]) != 1:
+        return False
+    top, bot = (",".join(f"{v:.4f}" for v in shares) for shares in TWO_RIBBONS)
+    p.update({"stripes": top, "stripes_bottom": bot, "stripe_index": 0})
+    back = Part(f"tail-{int(p.get('tail_index', 0))}-1", "tail_stripe", dict(p, stripe_index=1),
+                t.color_group, t.z, t.confidence)
+    parts.insert(parts.index(t) + 1, back)
+    return True
+
+
+# R87: a head read smooth round pleated (pinked) rings is pleated too (A9-15: three pleated bands, the outer
+# one's pleats too fine for the rim test; the designer draws it wavy; the owner's check).
+def _pleated_head_rim(parts: list) -> bool:
+    head = next((q for q in parts if q.role == "head"), None)
+    if head is None or int(head.params.get("pinked", 1)):
+        return False
+    if not any(q.role == "ring" and int(q.params.get("pinked", 0)) for q in parts):
+        return False
+    head.params["pinked"] = 1
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -3008,6 +3082,9 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     _ring_round_badge(tidy.parts)  # R79: a blob of a second color at the badge is a pleated ring round it
     _leaves_on_twelve_star(tidy.parts)  # R83: kites between star points of their color, leaves on a twelve-point star
     _two_color_loops_round_ruffle(tidy.parts)  # R84: two-color loops round a ruffle, built whole
+    _edged_loops_on_loops(tidy.parts)  # R85: a disc of the center color under edged loops is a loop layer
+    _two_ribbon_tail(tidy.parts)  # R86: a plain one-color tail is two ribbons
+    _pleated_head_rim(tidy.parts)  # R87: a smooth head round pleated rings is pleated
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower

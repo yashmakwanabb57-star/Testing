@@ -853,3 +853,75 @@ def test_r84_needs_the_ruffle():
     from rosette.pipeline import _two_color_loops_round_ruffle
     parts = [q for q in _s27_parts() if q.role != "ring"]
     assert not _two_color_loops_round_ruffle(parts)
+
+
+def _s5_parts():
+    geo = {"cx": 300.0, "cy": 159.0}
+    return [Part("head", "head", dict(geo, r=139.4), 0, 10, 0.9),
+            Part("points-1", "points", dict(geo, kind="bow", count=4, r_inner=90.5, r_outer=133.5, rotation_deg=46.6, width_ratio=1.9), 1, 20, 0.9),
+            Part("unknown-2", "unknown", dict(cx=302.8, cy=100.9, r=34.7), 2, 20, 0.5),
+            Part("center", "center", dict(geo, r=56.5), 0, 50, 0.9),
+            Part("ring-0", "ring", dict(geo, r_inner=57.5, r_outer=90.5), 2, 30, 0.9)]
+
+
+def test_r85_disc_of_the_center_color_under_edged_loops_is_a_second_loop_layer():
+    # S5-15: black loops on the axes (read as a disc), gold-edged glitter loops on the diagonals, a gold ruffle
+    from rosette.pipeline import _edged_loops_on_loops
+    parts = _s5_parts()
+    assert _edged_loops_on_loops(parts)
+    ids = {q.id: q for q in parts}
+    assert "head" not in ids and "unknown-2" not in ids
+    axis, edge, top = ids["points-axis"], ids["points-1-edge"], ids["points-1"]
+    assert axis.color_group == 0 and edge.color_group == 2 and top.color_group == 1
+    assert axis.params["rotation_deg"] == 0.0 and top.params["rotation_deg"] == 45.0 == edge.params["rotation_deg"]
+    assert axis.z < edge.z < top.z and ids["ring-0"].params["pinked"] == 1
+    assert edge.params["width_ratio"] > top.params["width_ratio"]
+
+
+def test_r85_needs_the_disc_in_the_center_color():
+    from rosette.pipeline import _edged_loops_on_loops
+    parts = _s5_parts()
+    parts[0].color_group = 2
+    assert not _edged_loops_on_loops(parts)
+
+
+def _plain_tail(**kw):
+    p = {"tail_index": 0, "stripe_index": 0, "tails_count": 1, "top_y": 287.9, "bottom_y": 825.0, "top_width": 194.7,
+         "bottom_width": 335.4, "spread_deg": 0.0, "stripes": "1.0000", "stripes_bottom": "1.0000"}
+    p.update(kw)
+    return Part("tail-0-0", "tail_stripe", p, 0, 9, 0.9)
+
+
+def test_r86_a_plain_one_color_tail_is_two_ribbons():
+    # A1-15, the owner's check: the designer's tail is two ribbons, the front one's edge a line from 0.28 of
+    # the top to the middle of the bottom
+    from rosette.pipeline import _two_ribbon_tail
+    parts = [Part("head", "head", {"cx": 300.0, "cy": 180.0, "r": 157.0}, 0, 10, 0.9), _plain_tail()]
+    assert _two_ribbon_tail(parts)
+    st = sorted((q for q in parts if q.role == "tail_stripe"), key=lambda q: q.params["stripe_index"])
+    assert [q.id for q in st] == ["tail-0-0", "tail-0-1"] and {q.color_group for q in st} == {0}
+    assert all(q.params["stripes"] == "0.2800,0.7200" and q.params["stripes_bottom"] == "0.5000,0.5000" for q in st)
+
+
+def test_r86_leaves_striped_or_several_tails():
+    from rosette.pipeline import _two_ribbon_tail
+    assert not _two_ribbon_tail([_plain_tail(stripes="0.5000,0.5000", stripes_bottom="0.5000,0.5000")])
+    assert not _two_ribbon_tail([_plain_tail(tails_count=2)])
+
+
+def test_r87_a_smooth_head_round_pleated_rings_is_pleated_too():
+    # A9-15, the owner's check: three pleated bands, the outer one read smooth (its pleats are fine)
+    from rosette.pipeline import _pleated_head_rim
+    geo = {"cx": 300.0, "cy": 167.0}
+    parts = [Part("head", "head", dict(geo, r=142.9, pinked=0), 0, 10, 0.9),
+             Part("ring-0", "ring", dict(geo, r_inner=54.5, r_outer=113.5, pinked=1), 1, 30, 0.9),
+             Part("center", "center", dict(geo, r=54.5), 1, 50, 0.9)]
+    assert _pleated_head_rim(parts) and parts[0].params["pinked"] == 1
+
+
+def test_r87_leaves_a_smooth_head_without_pleated_rings():
+    from rosette.pipeline import _pleated_head_rim
+    geo = {"cx": 300.0, "cy": 167.0}
+    parts = [Part("head", "head", dict(geo, r=142.9, pinked=0), 0, 10, 0.9),
+             Part("ring-0", "ring", dict(geo, r_inner=54.5, r_outer=113.5, pinked=0), 1, 30, 0.9)]
+    assert not _pleated_head_rim(parts) and parts[0].params["pinked"] == 0

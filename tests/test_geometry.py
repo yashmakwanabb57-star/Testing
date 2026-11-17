@@ -82,7 +82,14 @@ def test_tails_bottoms_on_one_line():
     for row in make_tails():
         for s in row:
             for x, y in pts_of(s)[2:]:
-                assert min(abs(y - 820), abs(y - (820 - 5.383))) < 0.01
+                assert min(abs(y - 820), abs(y - (820 - 5.9))) < 0.01  # the designer's teeth: 11.8 wide, 5.9 deep
+
+
+def test_tails_teeth_twice_as_wide_as_deep():
+    row = make_tails()[0]
+    xs = sorted(x for x, y in pts_of(row[0])[2:] if abs(y - 820) < 0.01)
+    gaps = [b - a for a, b in zip(xs, xs[1:])]
+    assert gaps and all(9.0 < g < 15.0 for g in gaps)  # fitted evenly to each stripe
 
 
 def test_tails_stripes_cover_width():
