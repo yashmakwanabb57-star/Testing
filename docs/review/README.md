@@ -103,7 +103,12 @@ only give proportions for parts the photo cannot show, for example hidden star v
   0.922 -> 1.000.
   S2-15 (line 27) - four edged loops between diamond points of the head's color, built whole so the app keeps
   it (its library head traced squashed): measured diamond points (geometry DIAMOND_COVER), wide edged loops
-  meeting them in a corner (R81; only S2-15). Head 0.807 -> 0.889.
+  meeting them in a corner (R81; S2-15 and S2-15B). The owner chose straight-sided points for both (head
+  0.869). S2-15B (line 28): its white loop edges read as a loop layer, built whole so the app no longer
+  draws its library head with the bottom point cut off (color 0.958 -> 0.937, head 0.876 -> 0.789).
+  S53-19: a ring wholly inside a ring of its color is dropped, no extra border (R82; only S53-19).
+  S65-18: a library head that is only a disc and a badge is drawn as our own pleated disc, the badge
+  centered (R80, rosette/build.py plain_disc).
 - Next (owner, at the office): verify Claude's work from line 56 (S51-19) one photo at a time with the
   normal loop below (show photo | ours | designer, wait for "works next" or a fix request). Then the open
   list above, worst first (S8-15, s44-15, S48-17, S68-19, S4-15).
@@ -119,7 +124,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
 4. Owner says "works next" -> commit, then the next photo. "not works fix" or a specific
    remark -> fix, re-render, show again.
 5. Fix as a narrow, numbered rule (R-number in a comment, constants named, designer
-   proportions cited). Latest rule: R81 (`rosette/pipeline.py` `_loops_between_leaf_points`).
+   proportions cited). Latest rule: R82 (`rosette/pipeline.py` `_drop_nested_rings`).
 6. Before showing a fix: check which of the 76 photos the rule fires on
    (`.venv/Scripts/python.exe tools/review_fire.py <rule function>` or `--part <part id>`), and compare scores
    before/after (`git stash` baseline) for those photos. Narrow the rule until no other photo
