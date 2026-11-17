@@ -227,3 +227,25 @@ def test_edge_term_penalises_render_boundaries_without_photo_edges():
                            2, 60, 0.9))
     plain = J.score(_model(6), p, labels, [])[1]["edge"]
     assert J.score(busy, p, labels, [])[1]["edge"] < plain - 0.05
+
+
+def test_combine_renormalises_over_the_terms_present_and_takes_other_weights():
+    t = {"color": 0.8, "edge": 0.4, "piece": 0.6}
+    assert J.combine(t) == pytest.approx(J.W_COLOR * 0.8 + J.W_EDGE * 0.4 + J.W_PIECE * 0.6)
+    assert J.combine({"color": 0.8, "edge": 0.4}, (0.5, 0.5, 0.0)) == pytest.approx(0.6)
+    assert J.combine({"color": 0.8, "edge": 0.4}, (0.6, 0.0, 0.4)) == pytest.approx(0.8)  # piece missing
+    assert J.combine({"piece": 0.7}, (1.0, 0.0, 0.0)) == 0.0  # the present terms weigh nothing
+
+
+def test_choose_decides_as_the_judge_with_its_own_margin():
+    calls = []
+
+    def changes(i):
+        calls.append(i)
+        return ["p"] * (3 - i)
+    assert J.choose([0.5], changes) == (0, 0.0, [])
+    assert J.choose([0.6, 0.5, 0.55], changes)[0] == 0 and calls == []
+    assert J.choose([0.5, 0.515], changes, margin=0.02) == (0, pytest.approx(0.015), [])  # under the margin
+    assert J.choose([0.5, 0.515], changes, margin=0.01) == (1, pytest.approx(0.015), [])
+    w, m, tied = J.choose([0.5, 0.795, 0.80], changes)  # a tie: the fewest changes
+    assert (w, tied) == (2, [1, 2]) and m == pytest.approx(0.30)

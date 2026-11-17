@@ -239,9 +239,41 @@ def score(model: RosetteModel, p, labels: np.ndarray, pieces, cache: dict | None
     if pa is not None:
         terms["piece"] = pa
 
-    weights = {"color": W_COLOR, "edge": W_EDGE, "piece": W_PIECE}
-    total = sum(weights[k] for k in terms)
-    return float(sum(weights[k] * v for k, v in terms.items()) / total), terms
+    return combine(terms), terms
+
+
+def combine(terms: dict, weights: tuple[float, float, float] | None = None) -> float:
+    """The weighted score of one candidate's terms: weights (color, edge, piece), default
+    (W_COLOR, W_EDGE, W_PIECE), renormalised over the terms present; 0.0 when the present
+    terms weigh nothing (tools/judge_mine.py reuses this over its grid)."""
+    wc, we, wp = (W_COLOR, W_EDGE, W_PIECE) if weights is None else weights
+    w = {"color": wc, "edge": we, "piece": wp}
+    total = sum(w[k] for k in terms)
+    if total <= 0:
+        return 0.0
+    return float(sum(w[k] * v for k, v in terms.items()) / total)
+
+
+def choose(scores: list[float], changes, margin: float | None = None) -> tuple[int, float, list[int]]:
+    """(winner, margin, tied) from the candidates' scores, as `judge` decides (see there).
+    changes(i) -> the changed part ids of candidate i (called only when an alternative leads);
+    margin: the judge margin, default JUDGE_MARGIN. tied: the tied alternatives when a tie
+    decided, else []."""
+    jm = JUDGE_MARGIN if margin is None else margin
+    n = len(scores)
+    if n == 1:
+        return 0, 0.0, []
+    best = max(range(n), key=lambda i: (scores[i], -i))
+    if best == 0:
+        return 0, float(scores[0] - max(scores[1:])), []
+    lead = float(scores[best] - scores[0])
+    if lead < jm:
+        return 0, lead, []
+    tied = [i for i in range(1, n) if scores[best] - scores[i] < jm and scores[i] - scores[0] > jm]
+    if len(tied) > 1:
+        winner = min(tied, key=lambda i: (len(changes(i)), i))
+        return winner, float(scores[winner] - scores[0]), tied
+    return best, lead, []
 
 
 def _part_key(q) -> tuple:
@@ -283,22 +315,20 @@ def judge(candidates: list[RosetteModel], p, labels: np.ndarray, pieces,
         terms.append(t)
     if n == 1:
         return Verdict(winner=0, scores=scores, terms=terms, margin=0.0, labels=names)
-    best = max(range(n), key=lambda i: (scores[i], -i))
-    if best == 0:
-        margin = float(scores[0] - max(scores[1:]))
+    memo: dict[int, list[str]] = {}
+
+    def changes(i: int) -> list[str]:
+        if i not in memo:
+            memo[i] = changed_parts(candidates[0], candidates[i])
+        return memo[i]
+    winner, margin, tied = choose(scores, changes)
+    if winner == 0:
         return Verdict(winner=0, scores=scores, terms=terms, margin=margin, labels=names)
-    margin = float(scores[best] - scores[0])
-    if margin < JUDGE_MARGIN:
-        return Verdict(winner=0, scores=scores, terms=terms, margin=margin, labels=names)
-    changes = {i: changed_parts(candidates[0], candidates[i]) for i in range(1, n)}
-    tied = [i for i in range(1, n)
-            if scores[best] - scores[i] < JUDGE_MARGIN and scores[i] - scores[0] > JUDGE_MARGIN]
-    winner = min(tied, key=lambda i: (len(changes[i]), i)) if len(tied) > 1 else best
     ids = {q.id for q in candidates[winner].parts}
-    return Verdict(winner=winner, scores=scores, terms=terms, margin=float(scores[winner] - scores[0]),
-                   labels=names, changed=changes[winner],
+    return Verdict(winner=winner, scores=scores, terms=terms, margin=margin,
+                   labels=names, changed=changes(winner),
                    removed=[q.id for q in candidates[0].parts if q.id not in ids],
-                   tie=tied if len(tied) > 1 else [])
+                   tie=tied)
 
 
 def flag(model: RosetteModel, verdict: Verdict) -> RosetteModel:
