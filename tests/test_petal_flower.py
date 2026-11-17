@@ -517,20 +517,21 @@ def _s45_parts(hr=129.3):
             Part("ring-0", "ring", dict(geo, r_inner=63.5, r_outer=75.5), 2, 30, 0.9)]
 
 
-def test_r67_an_eight_point_star_round_a_glitter_ring_a_ruffle_and_a_small_star():
-    # S45-15, the owner's check: light blue star, glitter pleated ring, light blue ruffle, small glitter star, blue rose
+def test_r67_an_eight_point_star_round_a_glitter_ring_and_a_ruffle():
+    # S45-15, the owner's check: light blue star, glitter pleated ring, light blue ruffle (a plain circle round
+    # the rose, no small star), blue rose
     from rosette.pipeline import _star_round_rings
     parts = _s45_parts()
     assert _star_round_rings(parts)
     ids = {q.id: q for q in parts}
     hr = 129.3
-    big, rx, ry, small, c = ids["points-1"], ids["ring-0"], ids["ring-inner"], ids["points-small"], ids["center"]
+    big, rx, ry, c = ids["points-1"], ids["ring-0"], ids["ring-inner"], ids["center"]
+    assert "points-small" not in ids
     assert big.params["kind"] == "star" and big.color_group == 1 and abs(big.params["r_outer"] / hr - 0.83) < 0.01
     assert big.params["rotation_deg"] == 0.0 and abs(big.params["r_inner"] / hr - 0.607) < 0.01
     assert rx.color_group == 2 and abs(rx.params["r_inner"] / hr - 0.44) < 0.01 and abs(rx.params["r_outer"] / hr - 0.6) < 0.01
     assert ry.color_group == 1 and abs(ry.params["r_inner"] / hr - 0.27) < 0.01
-    assert small.color_group == 2 and small.params["count"] == 8 and abs(small.params["r_outer"] / hr - 0.424) < 0.01
-    assert big.z < rx.z < ry.z < small.z < c.z and c.color_group == 0 and abs(c.params["r"] / hr - 0.269) < 0.01
+    assert big.z < rx.z < ry.z < c.z and c.color_group == 0 and abs(c.params["r"] / hr - 0.269) < 0.01
 
 
 def test_r67_needs_the_ring_of_a_third_color():
@@ -925,3 +926,52 @@ def test_r87_leaves_a_smooth_head_without_pleated_rings():
     parts = [Part("head", "head", dict(geo, r=142.9, pinked=0), 0, 10, 0.9),
              Part("ring-0", "ring", dict(geo, r_inner=54.5, r_outer=113.5, pinked=0), 1, 30, 0.9)]
     assert not _pleated_head_rim(parts) and parts[0].params["pinked"] == 0
+
+
+def _satin_parts():
+    geo = {"cx": 300.0, "cy": 162.0}
+    return [Part("head", "head", dict(geo, r=141.0, pinked=1), 0, 10, 0.9),
+            Part("points-1", "points", dict(geo, kind="bow", count=8, r_inner=81.5, r_outer=116.5, rotation_deg=3.5,
+                                            width_ratio=1.3), 1, 20, 0.9),
+            Part("center", "center", dict(geo, r=48.5), 1, 50, 0.9),
+            Part("ring-0", "ring", dict(geo, r_inner=56.5, r_outer=81.5, pinked=1), 0, 30, 0.9)]
+
+
+def test_r58_points_of_the_head_hue_get_no_satin_star():
+    # S8-15, the owner's check (extra red stars): dark red glitter points in red pleats show no satin star
+    from rosette.model import ColorGroup
+    from rosette.pipeline import _star_under_satin_star
+    red = [ColorGroup(0, (192, 47, 57), False, 0.1, 0.6, None, 0.9), ColorGroup(1, (87, 15, 16), True, 0.9, 0.4, None, 0.9)]
+    parts = _satin_parts()
+    assert _star_under_satin_star(parts, red)
+    assert not any(q.id == "points-satin" for q in parts)
+    assert next(q for q in parts if q.id == "points-1").params["kind"] == "star"  # the glitter star still built
+    gold = [red[0], ColorGroup(1, (143, 126, 69), True, 0.9, 0.4, None, 0.9)]  # S37-15: gold points
+    parts = _satin_parts()
+    assert _star_under_satin_star(parts, gold) and any(q.id == "points-satin" for q in parts)
+
+
+def test_r89_a_one_color_rosettes_tail_runs_over_the_head_to_the_rose():
+    # A13-15, the owner's check: the red ribbon runs over the red ruffle up to the rose
+    from rosette.pipeline import _one_color_tail_to_rose
+    geo = {"cx": 300.0, "cy": 185.0}
+    parts = [Part("head", "head", dict(geo, r=162.5), 0, 10, 0.9), Part("center", "center", dict(geo, r=64.0), 0, 50, 0.9),
+             _plain_tail()]
+    assert _one_color_tail_to_rose(parts)
+    assert next(q for q in parts if q.role == "tail_stripe").params["from_r"] == round(64.0 / 162.5, 3)
+    badge = [Part("head", "head", dict(geo, r=162.5), 0, 10, 0.9), Part("center", "center", dict(geo, r=64.0), 1, 50, 0.9),
+             _plain_tail()]  # A1-15: a badge of another color
+    assert not _one_color_tail_to_rose(badge)
+
+
+def test_r90_a_lone_small_center_of_another_color_grows_a_little():
+    # A13-15B, the owner's check: the light blue rose read at 0.30 of the head is drawn at 0.36
+    from rosette.pipeline import ROSE_GROW, _grow_small_rose
+    geo = {"cx": 300.0, "cy": 187.6}
+    parts = [Part("head", "head", dict(geo, r=163.6), 0, 10, 0.9), Part("center", "center", dict(geo, r=48.5), 1, 50, 0.9),
+             Part("unknown-1", "unknown", {"cx": 305.1, "cy": 201.6, "r": 30.2}, 1, 20, 0.5)]
+    assert _grow_small_rose(parts)
+    assert parts[1].params["r"] == round(ROSE_GROW[1] * 163.6, 3)
+    ringed = [Part("head", "head", dict(geo, r=163.6), 0, 10, 0.9), Part("center", "center", dict(geo, r=48.5), 1, 50, 0.9),
+              Part("ring-0", "ring", dict(geo, r_inner=48.5, r_outer=90.0), 2, 30, 0.9)]
+    assert not _grow_small_rose(ringed)

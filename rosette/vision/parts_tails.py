@@ -291,6 +291,60 @@ def _fan(widths: list[float], top_y: float, bottom_y: float, w_at, head_top: flo
     return apex, geo, axes
 
 
+# R88: how far a one-tail group runs up over the head. From just inside the rim inward (EMERGE_STEP head radii
+# at a time), each stripe's middle (EMERGE_HALF of its width, on the tail's straight sides carried up) must hold
+# the stripe's label on EMERGE_SHARE of its pixels; one miss is allowed. The run counts only where the head
+# around it, at the same radius EMERGE_SIDE_DEG either side of straight down, is another color on at least
+# EMERGE_TOLD of the rows (a tail on a head of its own color tells nothing: A1-15). A run ending at or
+# inside EMERGE_MAX is the tail's tuck radius (from_r): A10-15 0.56 (designer 0.55), A9-15 0.62 (0.58),
+# A3-15 0.62 (0.60), S32-15 0.64 (0.61), S36-15 0.52 (0.42), S65-18 0.34 (its ribbon up to the badge).
+EMERGE_STEP, EMERGE_FROM, EMERGE_TO = 0.02, 0.96, 0.2
+EMERGE_HALF, EMERGE_SHARE, EMERGE_SIDE_DEG, EMERGE_TOLD, EMERGE_MAX = 0.25, 0.6, 40.0, 0.5, 0.8
+
+
+def tail_from(p: Prepared, labels: np.ndarray, fr: Frame, stripes: list[Part]) -> float | None:
+    """R88: the radius (head radii) down to which a one-tail group shows over the head, or None."""
+    st = sorted(stripes, key=lambda q: q.params["stripe_index"])
+    if not st or int(st[0].params["tails_count"]) != 1:
+        return None
+    q = st[0].params
+    top, bot, tw, bw = q["top_y"], q["bottom_y"], q["top_width"], q["bottom_width"]
+    f = np.array([float(v) for v in str(q["stripes"]).split(",")])
+    cum = np.concatenate([[0.0], np.cumsum(f)])
+    hx, hy, hr = p.head
+    h, w = labels.shape
+    last, misses, n_ok, n_told = None, 0, 0, 0
+    for rho in np.arange(EMERGE_FROM, EMERGE_TO - 1e-9, -EMERGE_STEP):
+        ypx = int(round(hy + rho * hr))
+        if not 1 <= ypx < h - 1:
+            break
+        y = fr.y(ypx)
+        wy = tw + (bw - tw) * (y - top) / (bot - top)
+        ok, told = True, False
+        for i, s in enumerate(st):
+            xc = CANVAS_AXIS_X + (cum[i] + f[i] / 2 - 0.5) * wy
+            half = max(1.0, EMERGE_HALF * f[i] * wy)
+            x0 = int(max(0, fr.axis_x + (xc - half - CANVAS_AXIS_X) * fr.scale))
+            x1 = int(min(w, max(x0 + 1, fr.axis_x + (xc + half - CANVAS_AXIS_X) * fr.scale)))
+            lab, share = majority(labels[ypx - 1:ypx + 2, x0:x1].reshape(-1))
+            if lab != s.color_group or share < EMERGE_SHARE:
+                ok = False
+            for a in (90.0 - EMERGE_SIDE_DEG, 90.0 + EMERGE_SIDE_DEG):
+                ex = int(round(hx + rho * hr * math.cos(math.radians(a))))
+                ey = int(round(hy + rho * hr * math.sin(math.radians(a))))
+                if 0 <= ex < w and 0 <= ey < h and labels[ey, ex] != s.color_group:
+                    told = True
+        if ok:
+            last, misses, n_ok, n_told = float(rho), 0, n_ok + 1, n_told + int(told)
+        else:
+            misses += 1
+            if misses > 1:
+                break
+    if last is None or n_told < EMERGE_TOLD * n_ok or last > EMERGE_MAX:
+        return None
+    return round(last, 3)
+
+
 def detect_tails(p: Prepared, labels: np.ndarray, fr: Frame,
                  color_groups: list[ColorGroup] | None = None) -> tuple[list[Part], ColorGroup | None]:
     """(tail stripes, new glitter group or None). With the color groups given (read
@@ -429,6 +483,12 @@ def detect_tails(p: Prepared, labels: np.ndarray, fr: Frame,
             parts.append(Part(f"tail-{k}-{i}", "tail_stripe",
                               {"tail_index": k, "stripe_index": i, **params_common},
                               g, z, r3(confs[k])))
+    if n == 1 and fan_geo is None:  # R88: a tail running up over the head's outer bands
+        rf = tail_from(p, labels, fr, [q for q in parts if q.role == "tail_stripe"])
+        if rf is not None:
+            for q in parts:
+                if q.role == "tail_stripe":
+                    q.params["from_r"] = rf
     new = None
     if glitter is not None and any(q.color_group == glitter[2] for q in parts):
         px = np.concatenate([p.rgb[y, a:b] for y, a, b in found])

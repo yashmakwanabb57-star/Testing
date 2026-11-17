@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import atexit
 import copy
+import math
 import threading
 import time
 from collections.abc import Callable
@@ -1392,13 +1393,25 @@ SATIN_MIN_COUNT = 8
 SATIN_GOLD_TIP = 0.95
 
 
-def _star_under_satin_star(parts: list) -> bool:
+SATIN_PLAIN = (0.90, 0.63)  # a glitter star with no satin star: tips, the ring's outer edge (head radii)
+SATIN_HUE_MIN = 20.0  # the points' hue at least this far from the head's (degrees, Lab hue angle)
+
+
+def _star_under_satin_star(parts: list, groups: list | None = None) -> bool:
     from .vision.layer_classify import KEEP_PARAM
     head = next((q for q in parts if q.role == "head"), None)
     pts = [q for q in parts if q.role == "points"]
     if head is None or len(pts) != 1:
         return False
     gold = pts[0]
+    # the satin star stands out only in front of points of another hue (S37-15: gold under red); points of
+    # the head's own hue (S8-15: dark red glitter in red pleats) show no star over them, and the designer
+    # draws none (the owner's check of S8-15: extra red stars): the glitter star alone, built whole
+    rgb = {g.id: g.rgb for g in groups or []}
+    satin = True
+    if head.color_group in rgb and gold.color_group in rgb:
+        dh = abs(_hue_l(rgb[head.color_group])[0] - _hue_l(rgb[gold.color_group])[0]) % 360.0
+        satin = min(dh, 360.0 - dh) >= SATIN_HUE_MIN
     n = int(gold.params["count"])
     if n < SATIN_MIN_COUNT or gold.color_group == head.color_group or gold.params.get("kind") not in ("bow", "star", "diamond"):
         return False
@@ -1409,14 +1422,20 @@ def _star_under_satin_star(parts: list) -> bool:
         return False
     ring.params["r_outer"] = round(min(float(ring.params["r_outer"]), SATIN_RING * float(head.params["r"])), 3)
     ro = max(float(gold.params["r_outer"]), SATIN_GOLD_TIP * float(head.params["r"]))
+    if not satin:  # the glitter star alone, smaller (designer S8-15: from the ring at 0.63 to tips at 0.93;
+        # the owner's check asked for a little smaller): tips SATIN_PLAIN[0], the ring out to SATIN_PLAIN[1]
+        hr = float(head.params["r"])
+        ro = SATIN_PLAIN[0] * hr
+        ring.params["r_outer"] = round(SATIN_PLAIN[1] * hr, 3)
     gold.params.update(kind="star", r_inner=round(SATIN_VALLEY * ro, 3), r_outer=round(ro, 3), tips=1, **{KEEP_PARAM: 1})
     gold.params.pop("edge_width", None)
-    parts.append(Part("points-satin", "points", {
-        "cx": gold.params["cx"], "cy": gold.params["cy"], "kind": "star", "count": n,
-        "r_inner": round(SATIN_VALLEY * ro, 3), "r_outer": round(SATIN_TIP * ro, 3),
-        "rotation_deg": round((float(gold.params["rotation_deg"]) + 180.0 / n) % (360.0 / n), 3),
-        "width_ratio": float(gold.params.get("width_ratio", 0.5)), "tips": 1, KEEP_PARAM: 1},
-        head.color_group, gold.z + 1, 0.5))
+    if satin:
+        parts.append(Part("points-satin", "points", {
+            "cx": gold.params["cx"], "cy": gold.params["cy"], "kind": "star", "count": n,
+            "r_inner": round(SATIN_VALLEY * ro, 3), "r_outer": round(SATIN_TIP * ro, 3),
+            "rotation_deg": round((float(gold.params["rotation_deg"]) + 180.0 / n) % (360.0 / n), 3),
+            "width_ratio": float(gold.params.get("width_ratio", 0.5)), "tips": 1, KEEP_PARAM: 1},
+            head.color_group, gold.z + 1, 0.5))
     c = next((q for q in parts if q.role == "center"), None)
     if c is not None:
         rc, rim_max = float(c.params["r"]), SATIN_RIM * float(head.params["r"])
@@ -1752,7 +1771,8 @@ TONE_PEAK = 2.5
 TONE_DARK_SHARE = 0.15  # the band's dark share at least
 TONE_ROSE = 0.39
 TONE_DARK = (1.01, 0.74)
-TONE_LIGHT = (0.95, 0.66)
+TONE_LIGHT = (0.95, 0.68)  # 0.68 wide (designer 0.66): the loops still overlap at the light ring's edge, so the dark
+# shows between them from a point, not a cut-off triangle at the ring (S4-15 in the app, the owner's check)
 TONE_LIGHT_RING = 0.66  # the light ring's outer radius, head radii (designer S4-15: valleys 0.66)
 TONE_UNDER = 0.8  # the light ring and loops start at this share of the rose radius (under it)
 
@@ -2000,7 +2020,8 @@ def _banded_cross_stars(parts: list) -> bool:
 # ruffle and small glitter points round a blue rose; the star read as square loops). Designer S45-15
 # (head radii): the star tips 0.83, valleys 0.607 under the ring; the third color's pleated ring
 # 0.44-0.60; the second color's ruffle 0.27-0.44; a small eight-point star of the third color, tips
-# 0.424, valleys 0.25; the rose 0.269; upright as R62.
+# 0.424, valleys 0.25 (not drawn: only the ruffle's circle round the rose, the owner's check); the rose
+# 0.269; upright as R62.
 RINGS_STAR = (0.83, 0.607)
 RINGS_OUTER = (0.44, 0.60)
 RINGS_INNER = (0.27, 0.44)
@@ -2036,9 +2057,7 @@ def _star_round_rings(parts: list) -> bool:
     ring.z = 30
     parts.append(Part("ring-inner", "ring", dict(geo, r_inner=round(RINGS_INNER[0] * hr, 3), r_outer=round(RINGS_INNER[1] * hr, 3),
                                                  pinked=1), y, 31, 0.5))
-    parts.append(Part("points-small", "points", dict(geo, kind="star", count=8, r_outer=round(RINGS_SMALL[0] * hr, 3),
-                                                     r_inner=round(RINGS_SMALL[1] * hr, 3), rotation_deg=round(rot, 3),
-                                                     width_ratio=0.5, tips=1, **{KEEP_PARAM: 1}), x, 40, 0.5))
+    # no small star round the rose: the ruffle is a plain circle there (the owner's check of S45-15)
     c.params["r"] = round(RINGS_ROSE * hr, 3)
     return True
 
@@ -2891,6 +2910,50 @@ def _pleated_head_rim(parts: list) -> bool:
     return True
 
 
+# R89: a rosette of one color, a head disc and a center (the rose) with no rings or points, and a one-tail
+# group of the same color: the tail runs up over the head to the rose (A13-15: a red ribbon over the red
+# ruffle; the photo reading of R88 cannot tell a tail on a head of its own color; the owner's check). Drawn
+# by R88 with the tuck radius the rose's.
+def _one_color_tail_to_rose(parts: list) -> bool:
+    head = next((q for q in parts if q.role == "head"), None)
+    c = next((q for q in parts if q.role == "center"), None)
+    st = [q for q in parts if q.role == "tail_stripe"]
+    if head is None or c is None or not st or any(q.role in ("ring", "points", "template") for q in parts):
+        return False
+    if len({head.color_group, c.color_group, *(q.color_group for q in st)}) != 1:
+        return False
+    if any(int(q.params.get("tails_count", 0)) != 1 for q in st):
+        return False
+    rf = round(float(c.params["r"]) / float(head.params["r"]), 3)
+    for q in st:
+        q.params["from_r"] = rf
+    return True
+
+
+# R90: a head disc with only a center of another color on it (and specks the reader could not place, inside
+# the center): a center under ROSE_GROW[0] of the head grows to ROSE_GROW[1] (A13-15B: a light blue rose on
+# blue pleats read at 0.30, the designer's 0.44; the owner's check asked for a little bigger).
+ROSE_GROW = (0.33, 0.36)
+
+
+def _grow_small_rose(parts: list) -> bool:
+    head = next((q for q in parts if q.role == "head"), None)
+    c = next((q for q in parts if q.role == "center"), None)
+    if head is None or c is None or c.color_group == head.color_group:
+        return False
+    if any(q.role not in ("head", "center", "unknown", "tail_stripe") for q in parts):
+        return False
+    hr, rc = float(head.params["r"]), float(c.params["r"])
+    if rc >= ROSE_GROW[0] * hr:
+        return False
+    for q in parts:
+        if q.role == "unknown" and math.hypot(float(q.params["cx"]) - float(c.params["cx"]),
+                                              float(q.params["cy"]) - float(c.params["cy"])) + float(q.params["r"]) > rc:
+            return False  # a speck outside the center: something else on the head
+    c.params["r"] = round(ROSE_GROW[1] * hr, 3)
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -3052,7 +3115,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     edged = edged_star_between_bows(p, labels, tidy.parts)  # R46: a star edged in a third color
     if edged is not None:
         tidy.parts = edged
-    _star_under_satin_star(tidy.parts)  # R58: glitter points between satin points of the head's color
+    _star_under_satin_star(tidy.parts, groups)  # R58: glitter points between satin points of the head's color
     satin = _satin_star_on_pleats(p, labels, tidy.parts)  # R59: a darker satin star on pleats of one group
     if satin is not None:
         tidy.parts = satin
@@ -3103,6 +3166,8 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     if one is not None:
         parts = one
         tidy.info.append(ONE_COLOR_INFO)
+        _one_color_tail_to_rose(parts)  # R89: a one-color rosette's tail runs over the head to the rose
+    _grow_small_rose(parts)  # R90: a lone small center of another color grows a little
     tidy.warnings.extend(pleat_warnings(parts, p, labels))  # ML-1: rings near the pleat bar
     used = {q.color_group for q in parts}
     model = RosetteModel(parts=parts, groups=[g for g in groups if g.id in used],

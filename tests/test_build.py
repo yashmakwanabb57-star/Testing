@@ -362,3 +362,143 @@ def test_center_disc_ignores_petals_and_far_pieces():
     (mx, my), r = _center_disc([petal, far, disc_])
     assert (round(mx, 3), round(my, 3), round(r, 3)) == (0.0, -0.1, 0.3)
     assert _center_disc([petal, far]) is None
+
+
+def _banded(from_r=None, star=False):
+    # head disc (r 120), an outer ring band 72-96 and an inner ring to 60, a center 40; a one-tail group
+    groups = [ColorGroup(1, (200, 30, 30), False, 0.1, 0.3, 1, 0.9),
+              ColorGroup(2, (30, 30, 200), False, 0.9, 0.3, 2, 0.9),
+              ColorGroup(3, (230, 200, 40), False, 0.9, 0.3, 3, 0.9)]
+    geo = {"cx": 300, "cy": 200}
+    parts = [Part("head", "head", dict(geo, r=120, pinked=0), 1, 10, 1.0),
+             Part("ring-0", "ring", dict(geo, r_inner=40, r_outer=96), 2, 30, 1.0),
+             Part("ring-1", "ring", dict(geo, r_inner=40, r_outer=60), 3, 31, 1.0),
+             Part("center", "center", dict(geo, r=40), 1, 50, 1.0)]
+    if star:
+        parts.append(Part("points-1", "points", dict(geo, kind="star", count=8, r_inner=70, r_outer=118,
+                                                      rotation_deg=0, width_ratio=0.5), 3, 20, 1.0))
+    for i in range(2):
+        q = {"tail_index": 0, "stripe_index": i, "tails_count": 1, "top_y": 300, "bottom_y": 800,
+             "top_width": 80, "bottom_width": 160, "spread_deg": 0, "stripes": "1,1"}
+        if from_r is not None:
+            q["from_r"] = from_r
+        parts.append(Part(f"t{i}", "tail_stripe", q, 3 if i == 0 else 2, 9, 1.0))
+    return RosetteModel(parts, groups)
+
+
+def test_r88_a_tail_read_over_the_head_runs_over_the_outer_bands_and_under_the_inner_ring():
+    # R88 (A10-15, the owner's check): the tail shows up over the head's outer bands and tucks under its
+    # inner ring; the bands are cut around it
+    from shapely import Point
+    from rosette.geometry.clip import to_geom
+    shapes = build(_banded(from_r=0.5))
+    tails = [to_geom(s) for s in shapes if s.kind == "color" and s.role == "tail_stripe"]
+    assert len(tails) == 2
+    top = min(g.bounds[1] for g in tails)
+    assert top < 200 + 0.55 * 120  # up to under the inner ring (r 60), past the outer band (72-96)
+    on_band = Point(300, 200 + 84)  # straight down, in the outer ring's band
+    assert any(g.buffer(0.5).contains(on_band) for g in tails)
+    inner = to_geom(next(s for s in shapes if s.kind == "color" and s.role == "ring" and to_geom(s).bounds[3] < 262))
+    assert all(g.intersection(inner).area < 1.0 for g in tails)
+    assert validate(write_svg(shapes)) == []
+
+
+def test_r88_without_the_reading_the_tail_stays_under_the_head():
+    shapes = build(_banded())
+    from rosette.geometry.clip import to_geom
+    tops = [to_geom(s).bounds[1] for s in shapes if s.kind == "color" and s.role == "tail_stripe"]
+    assert tops and min(tops) >= 300 - 1e-6  # under the head, as before
+
+
+def test_r88_a_star_head_keeps_its_tail_under_the_points():
+    # the tail shows between star points (the gaps), never over them
+    a = [s.attrs for s in build(_banded(from_r=0.5, star=True)) if s.kind == "color" and s.role == "tail_stripe"]
+    b = [s.attrs for s in build(_banded(star=True)) if s.kind == "color" and s.role == "tail_stripe"]
+    assert a == b
+
+
+def test_r88_the_tail_reading_from_photo_labels():
+    # synthetic photo: a head (label 0) with a ring band (label 1) and a tail of labels 2 and 1 running up
+    # over the head to 0.5 of its radius
+    import numpy as np
+    from types import SimpleNamespace
+    from rosette.vision.parts_common import Frame
+    from rosette.vision.parts_tails import tail_from
+    h, w = 900, 600
+    yy, xx = np.mgrid[0:h, 0:w]
+    rad = np.hypot(xx - 300, yy - 200) / 120
+    lab = np.full((h, w), -1, int)
+    lab[rad <= 1.0] = 0
+    lab[(rad > 0.6) & (rad <= 0.8)] = 1
+    lab[rad <= 0.3] = 3
+    fr = Frame(axis_x=300.0, top=25.0, scale=1.0)
+    stripes = [Part(f"t{i}", "tail_stripe", {"tail_index": 0, "stripe_index": i, "tails_count": 1, "top_y": 300.0,
+                                            "bottom_y": 800.0, "top_width": 60.0, "bottom_width": 60.0,
+                                            "spread_deg": 0.0, "stripes": "0.5,0.5"}, g, 9, 1.0)
+               for i, g in enumerate((2, 2))]
+    lab[(yy >= 200 + 0.5 * 120) & (np.abs(xx - 300) <= 30)] = 2
+    p = SimpleNamespace(head=(300.0, 200.0, 120.0))
+    assert abs(tail_from(p, lab, fr, stripes) - 0.5) <= 0.03
+    lab2 = lab.copy()
+    lab2[(rad <= 1.0) & (lab2 == 2)] = 0  # the tail stops at the rim: no reading
+    assert tail_from(p, lab2, fr, stripes) is None
+
+
+def test_a_loop_starting_inside_the_center_has_its_base_corners_under_it():
+    # S4-15 in the app, the owner's check: the light loops' straight base stuck out past the badge at its
+    # corners, a notch at each loop
+    import math
+    from rosette.build import LOOP_TUCK, _tucked_loop
+    from rosette.geometry.points import LOOP_PROFILE
+    q = {"kind": "bow", "r_inner": 50.954, "r_outer": 155.148, "width_ratio": 1.0345}
+    r_in, wr = _tucked_loop(q, 63.692)
+    w = wr * (q["r_outer"] - r_in)
+    assert abs(w - 1.0345 * (155.148 - 50.954)) < 1e-6  # the widest width kept
+    assert math.hypot(r_in, LOOP_PROFILE[0] * w / 2) <= LOOP_TUCK * 63.692 + 1e-6
+    assert _tucked_loop(q, None) == (50.954, 1.0345)  # no center: as read
+    assert _tucked_loop(dict(q, r_inner=70.0), 63.692) == (70.0, 1.0345)  # starting outside it: as read
+    assert _tucked_loop(dict(q, kind="star"), 63.692) == (50.954, 1.0345)
+
+
+def test_a_lens_leaf_starting_inside_the_center_keeps_its_shape_outside_it():
+    # S11-15 in the app, the owner's check: the leaves' straight bases stuck out round the rose
+    import math
+    from rosette.build import LOOP_TUCK, _tucked_loop
+    from rosette.geometry.points import LEAF_LENS_TAPER
+    q = {"kind": "diamond", "lens": 2, "r_inner": 53.423, "r_outer": 130.78, "width_ratio": 0.78}
+    rc = 55.275
+    r2, wr2 = _tucked_loop(q, rc)
+    assert r2 < q["r_inner"] and math.hypot(r2, wr2 * (q["r_outer"] - r2) / 2) <= LOOP_TUCK * rc + 1e-6
+    for r in (60.0, 90.0, 120.0):  # the same width outside the rose
+        old = 0.78 * (130.78 - 53.423) * ((130.78 - r) / (130.78 - 53.423)) ** LEAF_LENS_TAPER
+        new = wr2 * (130.78 - r2) * ((130.78 - r) / (130.78 - r2)) ** LEAF_LENS_TAPER
+        assert abs(old - new) < 1e-6
+
+
+def test_a_diamond_in_a_star_point_is_drawn_as_an_inset_inlay():
+    # S35-19 in the app, the owner's check: a band of the star's color shows round the white diamond
+    from rosette.build import INLAY_BORDER, _inlays
+    from rosette.geometry.clip import to_geom
+    from rosette.geometry import points_ring
+    geo = {"cx": 300.0, "cy": 200.0}
+    star = Part("star", "points", dict(geo, kind="star", count=6, r_inner=73.5, r_outer=154.5, rotation_deg=31.9,
+                                       width_ratio=0.387, tips=1), 0, 20, 1.0)
+    dia = Part("dia", "points", dict(geo, kind="diamond", count=6, r_inner=73.5, r_outer=139.5, rotation_deg=31.9,
+                                     width_ratio=0.379, tips=1), 2, 20, 1.0)
+    got = _inlays([star, dia])
+    assert set(got) == {id(dia)}
+    g = to_geom(got[id(dia)])
+    pts = to_geom(points_ring(300, 200, "star", 6, 73.5, 154.5, 31.9, 0.387)[0])
+    assert g.within(pts.buffer(1e-6))
+    assert g.distance(pts.exterior) >= INLAY_BORDER * 154.5 - 0.5  # an even band all round
+    assert _inlays([dict_part for dict_part in (star,)] + [Part("dia", "points", dict(dia.params, rotation_deg=0.0), 2, 20, 1.0)]) == {}
+
+
+def test_the_rose_off_outline_follows_a_center_that_is_not_a_circle():
+    # S56-17B in the app, the owner's check: a library head's hexagon badge had a circle sticking out past it
+    from rosette.build import _center_outline
+    from rosette.shapes import Shape
+    hexagon = Shape("polygon", {"points": "340,200 320,234.6 280,234.6 260,200 280,165.4 320,165.4"}, 2, role="center")
+    got = _center_outline([hexagon], 300, 200)
+    assert got is not None and got.tag == "polygon"
+    assert _center_outline([Shape("circle", {"cx": 300, "cy": 200, "r": 40}, 2, role="center")], 300, 200) is None

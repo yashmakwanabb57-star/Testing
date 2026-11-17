@@ -4,11 +4,11 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from shapely import LineString, Polygon, make_valid, set_precision, unary_union
+from shapely import LineString, Point, Polygon, make_valid, set_precision, unary_union
 from shapely.affinity import affine_transform
 
 from .geometry import disc, outlines, pinked_circle, pinked_ring, place_rose, points_ring, ring, tails
-from .geometry.points import chevrons, dots, lobes, side_folds, split_arms
+from .geometry.points import LEAF_LENS_TAPER, LENS_TAPER, LOOP_PROFILE, chevrons, dots, lobes, side_folds, split_arms
 from .geometry.common import polar
 from .geometry.clip import SIMPLIFY, clip_occluded, clip_visible, from_geom, to_geom, xor_all
 from .model import Part, RosetteModel
@@ -40,6 +40,12 @@ TEMPLATE_Z = 10
 
 # R26: step (canvas units) by which a tail whose top the head leaves open is raised.
 RAISE_STEP = 5.0
+# R88: a tail read running up over the head's outer bands (tail param from_r, head radii: where it tucks
+# under, A10-15's inner ring) is drawn over every head shape reaching past (from_r + TAIL_FROM_PAD) head radii
+# and under the shapes inside it, its top run up its side lines to the head's center (the designer files cut
+# the outer bands around such a tail; the owner's check).
+TAIL_FROM_PAD = 0.04
+TAIL_TUCK_SHARE = 0.5
 
 _TAIL_KEYS = ("tails_count", "top_y", "bottom_y", "top_width", "bottom_width",
               "spread_deg", "stripes", "stripes_bottom")
@@ -99,6 +105,122 @@ def _raised_stripe(key: tuple, ti: int, si: int, new_top: float) -> Shape | None
         return None
 
 
+def _tail_over_head(colors, head_parts, circle, from_r: float, key: tuple, idx, polys, bottom_y: float):
+    """R88: (cut stripes, tail z) for a one-tail group running over the head's outer bands, or None
+    when the head has no shapes on both sides of the tuck radius."""
+    cx, cy, r = circle
+    lim = (from_r + TAIL_FROM_PAD) * r
+    inner, outer_z = [], []
+    head = []
+    for s, hp in colors:
+        if id(hp) not in head_parts:
+            continue
+        g = to_geom(s)
+        pts = np.asarray(g.convex_hull.exterior.coords) if hasattr(g.convex_hull, "exterior") else np.zeros((1, 2))
+        head.append((s, g, float(np.hypot(pts[:, 0] - cx, pts[:, 1] - cy).max())))
+    for s, g, reach in head:
+        # the band a ring shows: out from the largest smaller shape stacked above it (rings are drawn as
+        # discs out from the center, the inner ones on top) or from its own hole
+        hole = max([float(g.distance(Point(cx, cy)))] + [rr for t, _, rr in head if t.z > s.z and rr < reach])
+        # a ring whose band's outer part (TAIL_TUCK_SHARE of its width) holds the tuck radius covers the tail's
+        # top: a tail tucks under a whole band (A2-15: its white tail read a little into the white ruffle round
+        # the badge, the designer's tucked under it; A10-15's runs most of the way over its white band)
+        straddled = s.role == "ring" and reach - TAIL_TUCK_SHARE * (reach - hole) < from_r * r < reach
+        if reach <= lim or straddled or s.role == "center":  # the center (a badge, the rose) is always on top
+            inner.append((s, g))
+        elif s.role in ("head", "ring"):
+            outer_z.append(s.z)
+        else:  # a points layer outside: the tail shows between its points (gaps), never over them
+            return None
+    if not inner or not outer_z:
+        return None
+    zi = min(s.z for s, _ in inner)
+    tail_z = (max(outer_z) + zi) / 2 if max(outer_z) < zi else zi - 0.5
+    inner_geom = unary_union([g for _, g in inner])
+    # the top runs up the side lines as far as every stripe lasts (to the center at most); it must reach in
+    # under the inner shapes, past the tuck radius, or the tail is left as it is
+    y, raised = cy, None
+    while y < cy + from_r * r:
+        raised = [_raised_stripe(key, ti, si, y) for ti, si in idx]
+        if all(x is not None for x in raised):
+            break
+        raised, y = None, y + RAISE_STEP
+    if raised is None:
+        return None
+    cut = [(from_geom(to_geom(x).difference(inner_geom).simplify(SIMPLIFY), x), True) for x in raised]
+    return cut, tail_z
+
+
+# A loop (or a lens leaf, S11-15) starting at or inside the center disc has its straight base's corners under the disc: its base
+# moves in until they lie at LOOP_TUCK of the disc's radius, its widest width kept (S4-15 in the app, the
+# owner's check: the light loops' base corners stuck out 5 units past the badge, a notch at each loop).
+LOOP_TUCK = 0.9
+
+
+def _tucked_loop(q: dict, center_r: float | None) -> tuple[float, float]:
+    """(r_inner, width_ratio) to draw a points part with (see LOOP_TUCK)."""
+    r_in, r_out, wr = float(q["r_inner"]), float(q["r_outer"]), float(q["width_ratio"])
+    if q.get("kind") == "bow":
+        base = float(q.get("inner_ratio") or LOOP_PROFILE[0])
+    elif q.get("kind") == "diamond" and int(q.get("lens", 0)):  # a lens leaf is widest at its base (S11-15)
+        base = 1.0
+    else:
+        return r_in, wr
+    if q.get("edge_width") or center_r is None or r_in > center_r + 1e-6:
+        return r_in, wr
+    w = wr * (r_out - r_in)
+    if base == 1.0:  # a lens: width w * ((r_out - r) / (r_out - r_in)) ** k, so a lens run further in with its width
+        # scaled to match is the same shape outside: step in until its base corners lie under the disc
+        k = LEAF_LENS_TAPER if int(q.get("lens", 0)) == 2 else LENS_TAPER
+        r2 = r_in
+        while r2 > 0:
+            w2 = w * ((r_out - r2) / (r_out - r_in)) ** k
+            if math.hypot(r2, w2 / 2) <= LOOP_TUCK * center_r:
+                return r2, w2 / (r_out - r2)
+            r2 -= 1.0
+        return r_in, wr
+    half_base = base * w / 2
+    if math.hypot(r_in, half_base) <= LOOP_TUCK * center_r or half_base >= LOOP_TUCK * center_r:
+        return r_in, wr
+    r2 = math.sqrt((LOOP_TUCK * center_r) ** 2 - half_base ** 2)
+    return r2, w / (r_out - r2)
+
+
+# A diamond inside a star of another color, on its points (same count and turn, reaching less far, drawn
+# over it), is an inlay: the star's points shrunk evenly by INLAY_BORDER of the star's reach, so a band of
+# the star's color shows down both sides and round the tip (S35-19: white diamonds in lilac points, the
+# owner's check; a kite's sides had run into the point's sides by the loops, no band there).
+INLAY_BORDER = 0.03
+INLAY_TURN = 2.0  # degrees
+
+
+def _inlays(parts: list) -> dict:
+    """{id(diamond part): its inlay shape} for diamonds lying in a star's points (see INLAY_BORDER)."""
+    out = {}
+    stars = [p for p in parts if p.role == "points" and p.params.get("kind") == "star"]
+    for d in parts:
+        q = d.params
+        if d.role != "points" or q.get("kind") != "diamond" or int(q.get("lens", 0)) or q.get("edge_width"):
+            continue
+        n = int(q["count"])
+        for st in stars:
+            sq = st.params
+            turn = (float(sq["rotation_deg"]) - float(q["rotation_deg"])) % (360.0 / n)
+            if (int(sq["count"]) != n or st.color_group == d.color_group or st.z > d.z
+                    or min(turn, 360.0 / n - turn) > INLAY_TURN or float(sq["r_outer"]) <= float(q["r_outer"])
+                    or abs(float(sq["cx"]) - float(q["cx"])) > 1 or abs(float(sq["cy"]) - float(q["cy"])) > 1):
+                continue
+            star = to_geom(points_ring(sq["cx"], sq["cy"], "star", n, sq["r_inner"], sq["r_outer"],
+                                       sq["rotation_deg"], sq["width_ratio"])[0])
+            inset = star.buffer(-INLAY_BORDER * float(sq["r_outer"]), join_style="mitre")
+            keep = inset.difference(Point(float(q["cx"]), float(q["cy"])).buffer(float(q["r_inner"]), quad_segs=32))
+            shape = from_geom(keep.simplify(SIMPLIFY), Shape("polygon", {"points": ""}, None))
+            if shape is not None:
+                out[id(d)] = shape
+            break
+    return out
+
+
 def _template(part: Part):
     t = template_by_id(str(part.params.get("template_id", "")))
     if t is None:
@@ -120,6 +242,40 @@ def template_groups(part: Part) -> dict[int, int]:
     return {c: int(q.get(f"group_{c}", part.color_group)) for c in range(1, 5)}
 
 
+# A library head's badge (its largest center piece) within BADGE_MAX head radii and no further than
+# BADGE_ROUND times its equal-area radius at its farthest corner (a hexagon: 1.10) is drawn as a circle out
+# to that corner, the rose inside it, as our own heads (S56-17B, the owner's check); S48-17's large
+# square middle (0.82, 1.23) stays as drawn.
+BADGE_MAX = 0.5
+BADGE_ROUND = 1.15
+
+
+def _round_badge(eq: float, reach: float) -> bool:
+    return eq <= BADGE_MAX and reach <= BADGE_ROUND * eq
+
+
+def _badge(pieces) -> tuple[int, float, float, float, float] | None:
+    """(index, x, y, equal-area radius, farthest-corner radius) of a library head's badge, head radii: its
+    largest center piece; with none, a round piece (_round_badge) with its middle within DISC_NEAR of the
+    head's (S80-22's hexagon badge is classed as points; the rose had fallen back to the photo's center,
+    below it)."""
+    def stats(pc):
+        poly = Polygon(pc.rings[0])
+        if not poly.is_valid or poly.area <= 0:
+            return None
+        pts = np.asarray(pc.rings[0], float)
+        c = poly.centroid
+        return poly.area, c.x, c.y, (poly.area / math.pi) ** 0.5, float(np.hypot(pts[:, 0] - c.x, pts[:, 1] - c.y).max())
+    found = [(st, i) for i, pc in enumerate(pieces) if pc.role == "center" and pc.rings and (st := stats(pc))]
+    if not found:
+        found = [(st, i) for i, pc in enumerate(pieces) if pc.role != "head" and pc.rings and (st := stats(pc))
+                 and _round_badge(st[3], st[4]) and math.hypot(st[1], st[2]) <= DISC_NEAR]
+    if not found:
+        return None
+    (_, x, y, eq, reach), i = max(found)
+    return i, x, y, eq, reach
+
+
 def template_pieces(part: Part) -> list[tuple[Shape, int]]:
     """(shape, color group) per reference piece of a template part, in paint order; the
     shapes carry role (the piece's), z and kind but no category yet."""
@@ -129,10 +285,21 @@ def template_pieces(part: Part) -> list[tuple[Shape, int]]:
     # a piece drawn again later with the same outline is wholly hidden (some reference
     # files repeat an element): only the last copy is drawn, so no duplicate is written
     keys = [tuple(tuple(r.reshape(-1).tolist()) for r in pc.rings) for pc in pieces]
+    # the badge (the largest center piece) is drawn as a circle on its middle, the rose inside it,
+    # as our own heads draw it (S56-17B in the app, the owner's check: a hexagon badge)
+    found = _badge(pieces)
+    badge = found[0] if found else None
     out = []
     for i, pc in enumerate(pieces):
         if keys[i] in keys[i + 1:]:
             continue
+        if i == badge:
+            at = template_center(part)
+            if at is not None and plain_disc(part) is None and _round_badge(found[3], found[4]):
+                c = disc(*at)  # out to the badge's farthest corner: it covers all it did (the loops' ends under it)
+                c.role, c.z = "center", TEMPLATE_Z + len(pieces)  # on top, as our own heads' centers (S80-22's petals)
+                out.append((c, groups[pc.category]))
+                continue
         geom = xor_all([Polygon(ring_).buffer(0) for ring_ in pc.rings])
         if geom is None:
             continue
@@ -170,17 +337,13 @@ def template_center(part: Part) -> tuple[float, float, float] | None:
     if plain is not None:  # R80: the badge on the disc's middle
         return float(q["cx"]), float(q["cy"]), plain[1]
     pieces = _template(part).pieces
-    discs = []
-    for pc in pieces:
-        if pc.role == "center":
-            for ring_ in pc.rings[:1]:
-                poly = Polygon(ring_)
-                if poly.is_valid and poly.area > 0:
-                    discs.append((poly.area, poly.centroid.x, poly.centroid.y))
-    if discs:
-        area, dx, dy = max(discs)
+    found = _badge(pieces)
+    if found is not None:
+        # a badge drawn as a circle out to its farthest corner (template_pieces, BADGE_*): the rose inside it
+        _, dx, dy, eq, reach = found
         r = float(q["r"])
-        return float(q["cx"]) + dx * r, float(q["cy"]) + dy * r, (area / math.pi) ** 0.5 * r
+        rr = reach if _round_badge(eq, reach) else eq
+        return float(q["cx"]) + dx * r, float(q["cy"]) + dy * r, rr * r
     disc_ = _center_disc(pieces)
     if disc_ is None:
         return None
@@ -236,6 +399,19 @@ def _rose_center(model: RosetteModel) -> tuple[float, float, float, int] | None:
     return (*at, TEMPLATE_Z + len(_template(tmpl).pieces))
 
 
+def _center_outline(colors: list[Shape], cx: float, cy: float) -> Shape | None:
+    """The center the rose sits on, drawn as the rose-off outline (st_circel) when it is not a circle: a
+    library head's hexagon badge (S56-17B in the app, the owner's check: the circle stuck out past it)."""
+    at = Point(cx, cy)
+    for s in reversed(colors):
+        if s.role != "center" or s.tag == "circle":
+            continue
+        g = to_geom(s)
+        if g.contains(at):
+            return from_geom(g, Shape("polygon", {"points": ""}, None))
+    return None
+
+
 def build(model: RosetteModel, pieces: bool = True) -> list[Shape]:
     """Shapes for the writer. pieces: every color shape cut to its visible piece (H14, the
     written files); False keeps overlapping shapes whole where the shop's layer order
@@ -257,7 +433,7 @@ def build(model: RosetteModel, pieces: bool = True) -> list[Shape]:
         cx, cy, r, z = center
         rose = place_rose(cx, cy, r)  # the drawing's corners touch the center's circle (designer A10-15B; the owner's check)
         result += rose
-        circel = disc(cx, cy, r)
+        circel = _center_outline(colors, cx, cy) or disc(cx, cy, r)
         circel.kind, circel.role, circel.z = "circel", "center", z
         result.append(circel)
     return result
@@ -288,6 +464,8 @@ def color_shapes(model: RosetteModel) -> list[tuple[Shape, Part]]:
             colors.append((s, part))
 
     head_parts: list[int] = []  # ids of the parts whose shapes make the head
+    center_r = next((float(p.params["r"]) for p in model.parts if p.role == "center" and "r" in p.params), None)
+    inlays = _inlays(model.parts)
 
     tail_groups: dict[tuple, list[Part]] = {}
     for p in model.parts:
@@ -326,10 +504,13 @@ def color_shapes(model: RosetteModel) -> list[tuple[Shape, Part]]:
                                q["fold_half"], q.get("fold_notch", 0.0), q["rotation_deg"]))
         elif p.role == "points" and q.get("kind") == "split_arm":  # R70
             finish(p, split_arms(q["cx"], q["cy"], int(q["count"]), q["r_outer"], q["axis_deg"], int(q["side"])))
+        elif p.role == "points" and id(p) in inlays:  # an inlay: its star's points inset (S35-19)
+            finish(p, [inlays[id(p)]])
         elif p.role == "points":
             ir, ew = q.get("inner_ratio"), q.get("edge_width")
-            finish(p, points_ring(q["cx"], q["cy"], q["kind"], int(q["count"]), q["r_inner"],
-                                  q["r_outer"], q["rotation_deg"], q["width_ratio"],
+            r_in, wr = _tucked_loop(q, center_r)
+            finish(p, points_ring(q["cx"], q["cy"], q["kind"], int(q["count"]), r_in,
+                                  q["r_outer"], q["rotation_deg"], wr,
                                   None if ir is None else float(ir), None if ew is None else float(ew),
                                   leaf=int(q.get("leaf", 0)), lens=int(q.get("lens", 0)),
                                   flower=int(q.get("flower", 0))))
@@ -348,6 +529,13 @@ def color_shapes(model: RosetteModel) -> list[tuple[Shape, Part]]:
     head_geom = set_precision(unary_union([make_valid(to_geom(s)) for s in head]), 1e-3) if head else None
     head_cy = next((float(p.params["cy"]) for p in model.parts if p.role in ("template", "head", "center")
                     and "cy" in p.params), None)
+    head_circle = next(((float(p.params["cx"]), float(p.params["cy"]), float(p.params["r"])) for p in model.parts
+                        if p.role in ("head", "template") and {"cx", "cy", "r"} <= set(p.params)), None)
+    if head_circle is None:  # a head of rings only (A2-15): the largest ring is the head circle
+        rings = [p for p in model.parts if p.role == "ring" and "r_outer" in p.params]
+        if rings:
+            big = max(rings, key=lambda p: float(p.params["r_outer"]))
+            head_circle = (float(big.params["cx"]), float(big.params["cy"]), float(big.params["r_outer"]))
     for key, parts in tail_groups.items():
         top_y, bottom_y, tw, bw, spread = key[1], key[2], key[3], key[4], key[5]
         polys = tails(top_y, bottom_y, int(key[0]), tw, bw, spread, _parse_stripes(key[6]),
@@ -378,6 +566,12 @@ def color_shapes(model: RosetteModel) -> list[tuple[Shape, Part]]:
                 if all(c for _, c in cut2):
                     cut = cut2
                     break
+        tail_z = None
+        from_r = max((float(p.params.get("from_r") or 0.0) for p in parts), default=0.0)
+        if from_r and head_circle is not None and int(key[0]) == 1:
+            over = _tail_over_head(colors, head_parts, head_circle, from_r, key, idx, polys, float(bottom_y))
+            if over is not None:
+                cut, tail_z = over
         for p, (shape, covered) in zip(parts, cut):
             if not covered and TAIL_UNCOVERED_WARNING not in model.warnings:
                 model.warnings.append(TAIL_UNCOVERED_WARNING)
@@ -387,6 +581,8 @@ def color_shapes(model: RosetteModel) -> list[tuple[Shape, Part]]:
                     model.warnings.append(msg)
                 continue
             finish(p, [shape])
+            if tail_z is not None:
+                shape.z = tail_z
 
     colors.sort(key=lambda t: t[0].z)
     return colors

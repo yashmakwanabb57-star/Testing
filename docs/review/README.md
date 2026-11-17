@@ -124,6 +124,15 @@ only give proportions for parts the photo cannot show, for example hidden star v
   are wavy; head shape scores dip 0.003-0.02 on the wave's edge).
   S65-18 in the app - a library head with a lone flap onto the tails is never turned (templates.lone_flap;
   only S65-18's), and every library head sits on the tails' axis (the pose's sideways shift is information only).
+  Tails over the head (R88, vision/parts_tails.tail_from + build._tail_over_head): a tail read running up over the
+  head's outer bands is drawn over them and tucked under the inner circle (A10-15, A10-15B, A2-15, A3-15, A7-15,
+  A9-15, A9-15B, A13-15B, S65-18; not on heads with points). R89: a one-color rosette's tail runs to the rose (A13-15).
+  Loop and lens-leaf bases starting inside the center are tucked under it (build._tucked_loop; S4-15, S11-15 and
+  12 more, scores equal or better). S4-15: light loops 0.68 wide so the dark shows from a point.
+  S8-15: R58 adds the satin star only on points of another hue; the glitter star alone is smaller (SATIN_PLAIN).
+  S35-19: a diamond on a star's point is drawn as the point inset (build._inlays). S45-15: no small star round the
+  rose (R67). Library heads: a round badge is drawn as a circle on top, the rose inside it, the rose-off outline
+  matching (S56-17B, S80-22). R90: a lone small center grows to 0.36 of the head (A13-15B).
 - Next (owner, at the office): verify Claude's work from line 56 (S51-19) one photo at a time with the
   normal loop below (show photo | ours | designer, wait for "works next" or a fix request). Then the open
   list above, worst first (S8-15, s44-15, S48-17, S68-19, S4-15).
@@ -139,7 +148,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
 4. Owner says "works next" -> commit, then the next photo. "not works fix" or a specific
    remark -> fix, re-render, show again.
 5. Fix as a narrow, numbered rule (R-number in a comment, constants named, designer
-   proportions cited). Latest rule: R87 (`rosette/pipeline.py` `_pleated_head_rim`).
+   proportions cited). Latest rule: R90 (`rosette/pipeline.py` `_grow_small_rose`).
 6. Before showing a fix: check which of the 76 photos the rule fires on
    (`.venv/Scripts/python.exe tools/review_fire.py <rule function>` or `--part <part id>`), and compare scores
    before/after (`git stash` baseline) for those photos. Narrow the rule until no other photo
