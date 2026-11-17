@@ -66,6 +66,9 @@ LEAF_COVER = (1.0, 0.91, 0.76, 0.62, 0.51, 0.40, 0.30, 0.21, 0.13, 0.05, 0.0)
 # A petal flower (R36, S10-19's designer flower between the loops): fuller petals, measured the
 # same way on that file (valleys 0.63, tips 1.0 of its radius).
 ROUND_COVER = (1.0, 0.97, 0.91, 0.83, 0.73, 0.62, 0.50, 0.38, 0.25, 0.12, 0.0)
+# A diamond point (R81, S2-15's designer points, rays from the rose: 15 degrees either side at 0.65 of the tips'
+# reach, 10 at 0.75, 5 at 0.84): inward-curved sides to a sharp tip (the owner's check).
+DIAMOND_COVER = (0.87, 0.735, 0.609, 0.492, 0.384, 0.287, 0.201, 0.127, 0.066, 0.022, 0.0)  # 0.87 (1 - t)^1.6: sides curving in to the tip, wide below (under the loops)
 
 
 def _to_world(cx, cy, theta_deg, radial, lateral) -> Pt:
@@ -252,7 +255,7 @@ def points_ring(cx: float, cy: float, kind: Literal["star", "diamond", "bow", "p
     the two edge strips along each point's sides instead (two-tone loops)."""
     if kind == "star" and leaf:
         return [_leaf_star(cx, cy, count, r_inner, r_outer, rotation_deg,
-                           ROUND_COVER if int(leaf) == 2 else LEAF_COVER)]
+                           {2: ROUND_COVER, 3: DIAMOND_COVER}.get(int(leaf), LEAF_COVER))]
     if kind == "star":
         pts = []
         for k in range(count):

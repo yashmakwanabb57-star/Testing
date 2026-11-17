@@ -101,6 +101,9 @@ only give proportions for parts the photo cannot show, for example hidden star v
   scored photos move by 0.01 at most), and the rose fills its circle with thin lines (geometry rose.py).
   A12-15 (line 4) - a blob of a second color at the badge is a pleated ring round it (R79; only A12-15).
   0.922 -> 1.000.
+  S2-15 (line 27) - four edged loops between diamond points of the head's color, built whole so the app keeps
+  it (its library head traced squashed): measured diamond points (geometry DIAMOND_COVER), wide edged loops
+  meeting them in a corner (R81; only S2-15). Head 0.807 -> 0.889.
 - Next (owner, at the office): verify Claude's work from line 56 (S51-19) one photo at a time with the
   normal loop below (show photo | ours | designer, wait for "works next" or a fix request). Then the open
   list above, worst first (S8-15, s44-15, S48-17, S68-19, S4-15).
@@ -116,7 +119,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
 4. Owner says "works next" -> commit, then the next photo. "not works fix" or a specific
    remark -> fix, re-render, show again.
 5. Fix as a narrow, numbered rule (R-number in a comment, constants named, designer
-   proportions cited). Latest rule: R79 (`rosette/pipeline.py` `_ring_round_badge`).
+   proportions cited). Latest rule: R81 (`rosette/pipeline.py` `_loops_between_leaf_points`).
 6. Before showing a fix: check which of the 76 photos the rule fires on
    (`.venv/Scripts/python.exe tools/review_fire.py <rule function>` or `--part <part id>`), and compare scores
    before/after (`git stash` baseline) for those photos. Narrow the rule until no other photo

@@ -741,3 +741,36 @@ def test_r79_a_blob_away_from_the_middle_stays():
     parts = _a12_parts()
     parts[1].params.update(cx=400.0, cy=250.0)
     assert not _ring_round_badge(parts)
+
+
+def _s2_parts():
+    geo = {"cx": 300.0, "cy": 168.5}
+    return [Part("points-0", "points", dict(geo, kind="bow", count=4, r_inner=26.6, r_outer=143.5, rotation_deg=42.6,
+                                            width_ratio=0.6), 1, 21, 0.9),
+            Part("points-1", "points", dict(geo, kind="star", count=4, r_inner=53.2, r_outer=143.5, rotation_deg=88.7), 0, 20, 0.9),
+            Part("edge-points-0", "points", dict(geo, kind="bow", count=4, r_inner=26.6, r_outer=143.5, rotation_deg=42.6,
+                                                 width_ratio=0.6, edge_width=6.0), 0, 22, 0.9),
+            Part("center", "center", dict(geo, r=53.2), 0, 50, 0.9)]
+
+
+def test_r81_four_edged_loops_between_leaf_points_of_the_head_color():
+    # S2-15, the owner's check: pink loops edged wine, wine leaf points between, a wine rose; built whole (no library head)
+    from rosette.pipeline import _loops_between_leaf_points
+    parts = _s2_parts()
+    assert _loops_between_leaf_points(parts)
+    ids = {q.id: q for q in parts}
+    T = 143.5 / 0.88
+    star, loops, edge, c = ids["points-1"], ids["points-0"], ids["edge-points-0"], ids["center"]
+    assert star.params["leaf"] == 3 and star.params["rotation_deg"] == 0.0 and abs(star.params["r_outer"] - T) < 0.01
+    assert loops.params["rotation_deg"] == 45.0 and abs(loops.params["r_outer"] / T - 0.90) < 0.01
+    assert abs(loops.params["width_ratio"] * (loops.params["r_outer"] - loops.params["r_inner"]) / T - 0.54) < 0.01
+    assert abs(c.params["r"] / T - 0.35) < 0.01 and star.z < loops.z < edge.z < c.z
+    assert all(q.params.get("tips") == 1 for q in (star, loops, edge))
+
+
+def test_r81_needs_four_loops():
+    from rosette.pipeline import _loops_between_leaf_points
+    parts = _s2_parts()
+    for q in parts[:3]:
+        q.params["count"] = 6
+    assert not _loops_between_leaf_points(parts)

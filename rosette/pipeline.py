@@ -2661,6 +2661,51 @@ def _ring_round_badge(parts: list) -> bool:
     return True
 
 
+# R81: four loops of a second color edged in the head's color, a four-point star of the head's color
+# half a step off them and a center of the head's color (S2-15: pink loops edged wine, wine points, a
+# wine rose; the points read as plain thin triangles, and the app's library head traced squashed). Built
+# whole so the app keeps it (tips). Designer S2-15 (shares of the points' reach T, rays from the rose):
+# leaf points (half-width 15 degrees at 0.65, 5 at 0.84), loops from under the rose to 0.90, 0.35 wide,
+# straight ends, edges 0.04, the rose 0.35; upright as R62 (the owner's check).
+LEAF_LOOPS = (0.90, 0.54)  # reach, pink width (designer S2-15: the loops' wine edges meet the points at 0.62 of the reach, in a corner; the owner's check)
+LEAF_LOOP_EDGE = 0.08
+LEAF_ROSE = 0.35
+LEAF_VALLEY = 0.36
+LEAF_READ = 0.88  # the read reach / the tips' (thin satin tips read short, as R58's; the photo's head as wide as its tails)
+
+
+def _loops_between_leaf_points(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    c = next((q for q in parts if q.role == "center"), None)
+    pts = [q for q in parts if q.role == "points"]
+    bows = [q for q in pts if q.params.get("kind") == "bow" and not q.params.get("edge_width")]
+    edges = [q for q in pts if q.params.get("edge_width")]
+    stars = [q for q in pts if q.params.get("kind") == "star"]
+    if c is None or len(bows) != 1 or len(edges) != 1 or len(stars) != 1 or len(pts) != 3:
+        return False
+    bow, edge, star = bows[0], edges[0], stars[0]
+    if any(int(q.params["count"]) != 4 or q.params.get(KEEP_PARAM) for q in pts):
+        return False
+    if star.color_group != c.color_group or edge.color_group != c.color_group or bow.color_group == c.color_group:
+        return False
+    off = (float(star.params["rotation_deg"]) - float(bow.params["rotation_deg"])) % 90.0
+    if abs(off - 45.0) > NESTED_AXIS_DEG:
+        return False
+    T = float(star.params["r_outer"]) / LEAF_READ
+    rot = round(float(star.params["rotation_deg"]) / 45.0) * 45.0 % 90.0
+    rr = LEAF_ROSE * T
+    star.params.update({"r_outer": round(T, 3), "r_inner": round(LEAF_VALLEY * T, 3), "rotation_deg": rot,
+                        "leaf": 3, "tips": 1, KEEP_PARAM: 1})  # diamond points (geometry DIAMOND_COVER)
+    ri, ro = FLOWER_START * rr, LEAF_LOOPS[0] * T
+    for q in (bow, edge):
+        q.params.update({"r_inner": round(ri, 3), "r_outer": round(ro, 3), "rotation_deg": (rot + 45.0) % 90.0,
+                         "width_ratio": round(LEAF_LOOPS[1] * T / (ro - ri), 4), "tips": 1, KEEP_PARAM: 1})
+    edge.params["edge_width"] = round(LEAF_LOOP_EDGE * T, 3)
+    star.z, bow.z, edge.z = 20, 21, 22
+    c.params["r"] = round(rr, 3)
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -2893,6 +2938,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     _taper_edged_bows(out.parts)  # R45: loops edged by a wider loop narrow toward the center
     _petals_between_loops(out.parts)  # R36: petals on top of loops (final stacking known here)
     _points_under_edged_star(out.parts)  # R55: points half a step off an edged star go under it
+    _loops_between_leaf_points(out.parts)  # R81: edged loops between leaf points of the head's color
     _badge_under_loops(out.parts, p, labels)  # R39: a badge inside loops, read as print
     if _loops_on_rim(out.parts, p, labels, out.groups):  # R41: loops on a dark rim, star between
         out.rose = True
