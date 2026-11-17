@@ -171,6 +171,9 @@ def stacked_stars(p, labels: np.ndarray, parts: list) -> list | None:
                                                            rotation_deg=round(rot % 90.0, 3)),
                         int(top), 23, 0.5))
     out.append(Part("center", "center", {"cx": ccx, "cy": ccy, "r": round(rc, 3)}, g, 50, c.confidence))
+    for q in out:  # built whole here: the app's layer classifier keeps their kind and count (S17-15)
+        if q.role == "points" and q.id.startswith("points-"):
+            q.params[KEEP_PARAM] = 1
     return out
 
 

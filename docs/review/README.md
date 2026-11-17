@@ -111,6 +111,8 @@ only give proportions for parts the photo cannot show, for example hidden star v
   centered (R80, rosette/build.py plain_disc).
   S11-15 (line 17) - kites between star points of their color are leaves on a twelve-point star, the leaves'
   sides bowing out (R83, geometry LEAF_LENS_TAPER; only S11-15). S11a-15 (line 20) approved as is.
+  S17-15 (line 7) - R43's stacked stars are kept from the app's layer classifier (its top star had become
+  six-pointed in the app; only S17-15).
 - Next (owner, at the office): verify Claude's work from line 56 (S51-19) one photo at a time with the
   normal loop below (show photo | ours | designer, wait for "works next" or a fix request). Then the open
   list above, worst first (S8-15, s44-15, S48-17, S68-19, S4-15).
