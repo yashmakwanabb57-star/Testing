@@ -796,3 +796,34 @@ def test_r82_a_ring_inside_a_ring_of_its_color_is_dropped():
     assert _drop_nested_rings(parts)
     assert [q.id for q in parts] == ["ring-0", "ring-2"]
     assert not _drop_nested_rings(parts)
+
+
+def _s11_parts(hr=142.5):
+    geo = {"cx": 300.0, "cy": 166.6}
+    return [Part("head", "head", dict(geo, r=hr), 0, 10, 0.9),
+            Part("points-1", "points", dict(geo, kind="star", count=6, r_inner=62.1, r_outer=108.5, rotation_deg=32.5), 1, 20, 0.9),
+            Part("points-2", "points", dict(geo, kind="diamond", count=6, r_inner=40.8, r_outer=108.5, rotation_deg=2.5,
+                                            width_ratio=0.6), 1, 21, 0.9),
+            Part("center", "center", dict(geo, r=48.5), 0, 50, 0.9)]
+
+
+def test_r83_kites_between_star_points_of_their_color_are_leaves_on_a_twelve_point_star():
+    # S11-15, the owner's check: a twelve-point star with a narrow leaf on every other point
+    from rosette.pipeline import _leaves_on_twelve_star
+    parts = _s11_parts()
+    assert _leaves_on_twelve_star(parts)
+    ids = {q.id: q for q in parts}
+    hr = 142.5
+    star, leaves, c = ids["points-1"], ids["points-2"], ids["center"]
+    assert star.params["count"] == 12 and abs(star.params["r_outer"] / hr - 0.916) < 0.01
+    assert abs(star.params["r_inner"] / hr - 0.586) < 0.01 and star.params["rotation_deg"] == 0.0
+    assert leaves.params["lens"] == 2 and leaves.params["rotation_deg"] == 0.0
+    assert abs(leaves.params["r_inner"] / hr - 0.375) < 0.01 and abs(leaves.params["r_outer"] / hr - 0.918) < 0.01
+    assert star.z < leaves.z < c.z and abs(c.params["r"] / hr - 0.388) < 0.01
+
+
+def test_r83_needs_one_color():
+    from rosette.pipeline import _leaves_on_twelve_star
+    parts = _s11_parts()
+    parts[2].color_group = 2
+    assert not _leaves_on_twelve_star(parts)

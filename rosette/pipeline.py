@@ -2731,6 +2731,44 @@ def _drop_nested_rings(parts: list) -> bool:
     return bool(drop)
 
 
+# R83: six kites half a step off a six-point star of their own color, on a head disc round a center of
+# the head's color (S11-15: pink satin leaves between pink points on wine pleats; the twelve points
+# read as a star and kites). Designer S11-15 (head radii): a twelve-point star, tips 0.916, valleys
+# 0.586; on every other point a narrow leaf of the same color (a lens, geometry LENS_PROFILE) from
+# 0.375 under the rose to 0.918, 0.39 wide at its base; the rose 0.388; upright (the owner's check).
+TWELVE_STAR = (0.916, 0.586)
+TWELVE_LEAF = (0.375, 0.918, 0.78)  # start, tip, width_ratio of the lens
+TWELVE_ROSE = 0.388
+
+
+def _leaves_on_twelve_star(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    head = next((q for q in parts if q.role == "head"), None)
+    c = next((q for q in parts if q.role == "center"), None)
+    pts = [q for q in parts if q.role == "points"]
+    if head is None or c is None or len(pts) != 2 or any(q.params.get(KEEP_PARAM) for q in pts):
+        return False
+    star = next((q for q in pts if q.params.get("kind") == "star"), None)
+    kites = next((q for q in pts if q.params.get("kind") == "diamond"), None)
+    if star is None or kites is None or star.color_group != kites.color_group or star.color_group == head.color_group:
+        return False
+    if int(star.params["count"]) != 6 or int(kites.params["count"]) != 6 or c.color_group != head.color_group:
+        return False
+    off = (float(star.params["rotation_deg"]) - float(kites.params["rotation_deg"])) % 60.0
+    if abs(off - 30.0) > NESTED_AXIS_DEG:
+        return False
+    hr = float(head.params["r"])
+    rot = float(kites.params["rotation_deg"])
+    rot = (round(rot / 30.0) * 30.0 if abs(rot - round(rot / 30.0) * 30.0) <= NESTED_SNAP_DEG else rot) % 60.0
+    star.params.update({"count": 12, "r_outer": round(TWELVE_STAR[0] * hr, 3), "r_inner": round(TWELVE_STAR[1] * hr, 3),
+                        "rotation_deg": round(rot % 30.0, 3), "tips": 1, KEEP_PARAM: 1})
+    kites.params.update({"r_inner": round(TWELVE_LEAF[0] * hr, 3), "r_outer": round(TWELVE_LEAF[1] * hr, 3),
+                         "rotation_deg": round(rot, 3), "width_ratio": TWELVE_LEAF[2], "lens": 2, "tips": 1, KEEP_PARAM: 1})
+    star.z, kites.z = 20, 21
+    c.params["r"] = round(TWELVE_ROSE * hr, 3)
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -2922,6 +2960,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
         tidy.parts = folded
     _three_color_rings(tidy.parts)  # R78: pleated rings of three colors round a rose
     _ring_round_badge(tidy.parts)  # R79: a blob of a second color at the badge is a pleated ring round it
+    _leaves_on_twelve_star(tidy.parts)  # R83: kites between star points of their color, leaves on a twelve-point star
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower

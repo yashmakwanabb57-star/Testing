@@ -30,6 +30,7 @@ KITE_PROFILE = tuple(round(t / KITE_PEAK if t <= KITE_PEAK else (1 - t) / (1 - K
 # A lens kite (R37, S11-15's designer leaves over the 12-point star): a triangle standing on the
 # center, widest at its base, tapering almost straight to its tip.
 LENS_TAPER = 0.9  # S11-15's designer leaves: width 0.40 at the base to 0 at the tip, nearly straight
+LEAF_LENS_TAPER = 0.75  # R83, S11-15's designer leaves on the 12-point star: sides bowing out (widths at 0.45, 0.6, 0.75, 0.9 of the tip)
 LENS_PROFILE = tuple(round(math.sin(math.pi * t) ** 0.75, 4) for t in tuple(i / 10 for i in range(11)))
 PETAL_PROFILE = (0.75, 0.75, 0.86, 0.96, 0.98, 1.0, 0.83, 0.60, 0.41, 0.23, 0.0)
 # A satin petal flower (R56, S36-15's designer petals, median of its six, widths measured across
@@ -78,7 +79,7 @@ def _to_world(cx, cy, theta_deg, radial, lateral) -> Pt:
     return (cx + radial * ca - lateral * sa, cy + radial * sa + lateral * ca)
 
 
-def _profile(kind: str, inner_ratio: float | None, lens: bool = False) -> tuple[float, ...]:
+def _profile(kind: str, inner_ratio: float | None, lens: int = 0) -> tuple[float, ...]:
     if kind == "bow":
         if inner_ratio is None:
             return LOOP_PROFILE
@@ -103,7 +104,7 @@ def _profile(kind: str, inner_ratio: float | None, lens: bool = False) -> tuple[
 
 
 def _side(kind: str, r_in: float, r_out: float, h: float, inner_ratio: float | None,
-          offset: float = 0.0, lens: bool = False) -> list[tuple[float, float]]:
+          offset: float = 0.0, lens: int = 0) -> list[tuple[float, float]]:
     """(radial, lateral) points of one side (lateral >= 0) from the inner to the outer
     end, the profile's half-width plus `offset`. A bow's side stops at the corner of
     its convex outer end (`_end_radial`, END_SAG)."""
@@ -111,8 +112,8 @@ def _side(kind: str, r_in: float, r_out: float, h: float, inner_ratio: float | N
     ts = _T if not lens else tuple(i / 30 for i in range(31))
     if not lens and len(prof) != len(ts):  # a finer measured profile (SATIN_FRONT_PROFILE: 21 points)
         ts = tuple(i / (len(prof) - 1) for i in range(len(prof)))
-    if lens:  # a triangle on the center: widest at its base, tapering straight to its tip
-        prof = tuple((1 - t) ** LENS_TAPER for t in ts)
+    if lens:  # a triangle on the center: widest at its base, tapering to its tip (2: convex sides, R83)
+        prof = tuple((1 - t) ** (LEAF_LENS_TAPER if int(lens) == 2 else LENS_TAPER) for t in ts)
     pts = [(r_in + (r_out - r_in) * t, max(0.0, h * p + offset)) for t, p in zip(ts, prof)]
     if kind != "bow":
         return pts
@@ -130,7 +131,7 @@ def _end_radial(r_out: float, h: float, l: float) -> float:
 
 
 def _outline(kind: str, r_in: float, r_out: float, w: float,
-             inner_ratio: float | None = None, lens: bool = False) -> list[tuple[float, float]]:
+             inner_ratio: float | None = None, lens: int = 0) -> list[tuple[float, float]]:
     """(radial, lateral) vertices, symmetric about the axis: out along one side, back
     along the other (a bow crosses its outer end on an arc around the head center)."""
     side = _side(kind, r_in, r_out, w / 2, inner_ratio, lens=lens)
@@ -245,7 +246,7 @@ def chevrons(cx: float, cy: float, count: int, r_tip: float, length: float, half
 def points_ring(cx: float, cy: float, kind: Literal["star", "diamond", "bow", "petal"],
                 count: int, r_inner: float, r_outer: float,
                 rotation_deg: float, width_ratio: float, inner_ratio: float | None = None,
-                edge_width: float | None = None, leaf: int = 0, lens: bool = False,
+                edge_width: float | None = None, leaf: int = 0, lens: int = 0,
                 flower: int = 0) -> list[Shape]:
     """Angles run clockwise on screen from +x; point k is centered on
     rotation_deg + k*360/count. Width = width_ratio * (r_outer - r_inner) is the widest
