@@ -167,6 +167,33 @@ def split_arms(cx: float, cy: float, count: int, r_tip: float, axis_deg: float, 
     return out
 
 
+# A side fold (R76, designer S63-17's banded arms, traced from its outlines about the arms' own center): a fold
+# whose tip leans 20 degrees off the axis, one arm running in to the axis, the other out; the notch is the next
+# band's tip (0.897 of this one's). Each band is drawn whole (filled in under its notch, where the next band lies
+# on it) and runs on in under the corners and the flower, so no step between the arm ends and the corners
+# shows the head through (the owner's check: no gaps). Vertices as
+# (radius / the tip's, degrees off the axis toward the tip's side). The innermost band is whole.
+SIDE_FOLD = ((1.0, 20.0), (0.708, 31.0), (0.58, 33.0), (0.56, 14.0), (0.625, 8.4), (0.648, 5.4))
+SIDE_FOLD_LAST = ((1.0, 20.0), (0.677, 32.9), (0.58, 33.0), (0.56, 14.0), (0.629, 9.2), (0.71, 9.2))
+
+
+def side_folds(cx: float, cy: float, count: int, r_tip: float, axis_deg: float, side: int, last: bool) -> list[Shape]:
+    """One SIDE_FOLD (SIDE_FOLD_LAST) per axis (axis_deg + k * 360 / count), its tip on the `side` of the axis."""
+    shape = SIDE_FOLD_LAST if last else SIDE_FOLD
+    return [Shape("polygon", {"points": points_attr([polar(cx, cy, r * r_tip, axis_deg + 360.0 * k / count + side * d)
+                                                     for r, d in shape])}, None) for k in range(count)]
+
+
+def dots(cx: float, cy: float, count: int, r_mid: float, r_dot: float, rotation_deg: float) -> list[Shape]:
+    """Small hexagons (R76: designer S63-17's small roses, a corner on the axis) centered r_mid out on each axis."""
+    out = []
+    for k in range(count):
+        th = rotation_deg + 360.0 * k / count
+        x, y = polar(cx, cy, r_mid, th)
+        out.append(Shape("polygon", {"points": points_attr([polar(x, y, r_dot, th + 60.0 * j) for j in range(6)])}, None))
+    return out
+
+
 def chevrons(cx: float, cy: float, count: int, r_tip: float, length: float, half: float, r_notch: float,
              rotation_deg: float) -> list[Shape]:
     """One folded point per axis (rotation_deg + k * 360 / count), as designer S68-19 draws its folds (R74):

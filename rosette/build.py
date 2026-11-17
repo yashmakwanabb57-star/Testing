@@ -8,7 +8,8 @@ from shapely import LineString, Polygon, make_valid, set_precision, unary_union
 from shapely.affinity import affine_transform
 
 from .geometry import disc, outlines, pinked_circle, pinked_ring, place_rose, points_ring, ring, tails
-from .geometry.points import chevrons, split_arms
+from .geometry.points import chevrons, dots, side_folds, split_arms
+from .geometry.common import polar
 from .geometry.clip import SIMPLIFY, clip_occluded, clip_visible, from_geom, to_geom, xor_all
 from .model import Part, RosetteModel
 from .shapes import Shape
@@ -214,6 +215,12 @@ def build(model: RosetteModel, pieces: bool = True) -> list[Shape]:
     result = list(colors)
     result += outlines(colors)
 
+    for p in model.parts:  # R76: the small roses carry the rose drawing too
+        q = p.params
+        if p.role == "points" and q.get("kind") == "dot" and int(q.get("rose", 0)):
+            for k in range(int(q["count"])):
+                x, y = polar(q["cx"], q["cy"], q["r_mid"], q["rotation_deg"] + 360.0 * k / int(q["count"]))
+                result += place_rose(x, y, 0.8 * q["r_dot"])
     center = _rose_center(model)
     if model.rose and center is not None:
         cx, cy, r, z = center
@@ -267,6 +274,11 @@ def color_shapes(model: RosetteModel) -> list[tuple[Shape, Part]]:
         elif p.role == "ring":
             ring_of = pinked_ring if int(q.get("pinked", 0)) else ring
             finish(p, [ring_of(q["cx"], q["cy"], q["r_outer"], q["r_inner"])])
+        elif p.role == "points" and q.get("kind") == "side_fold":  # R76
+            finish(p, side_folds(q["cx"], q["cy"], int(q["count"]), q["r_outer"], q["axis_deg"], int(q["side"]),
+                                 bool(int(q.get("last", 0)))))
+        elif p.role == "points" and q.get("kind") == "dot":  # R76
+            finish(p, dots(q["cx"], q["cy"], int(q["count"]), q["r_mid"], q["r_dot"], q["rotation_deg"]))
         elif p.role == "points" and q.get("kind") == "chevron":  # R74
             finish(p, chevrons(q["cx"], q["cy"], int(q["count"]), q["r_outer"], q["r_outer"] - q["r_inner"],
                                q["fold_half"], q.get("fold_notch", 0.0), q["rotation_deg"]))

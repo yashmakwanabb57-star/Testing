@@ -2457,6 +2457,85 @@ def _star_on_triangles(parts: list) -> bool:
     return True
 
 
+# R76: four points of a second color about 20 degrees off the axes over an eight-point layer of a third color, on a
+# head round a center of the head's color (S63-17: light blue folded arms and blue ones pairing up round each axis,
+# white folded square corners on the diagonals, a white flower, small white roses on the axes, a blue rose; read
+# as eight white petals and four light blue blobs). Designer S63-17 traced from its pieces about the arms' own
+# center (head radii), in its paint order: the head color's arms leaning back from each axis, then the second
+# color's leaning forward (geometry SIDE_FOLD, tips 20 degrees off the axis), four bands each that touch (tips
+# 0.994, 0.888, 0.793, 0.698, the innermost whole); the third color's square corners on the diagonals
+# (right-angle chevrons, tips 0.855, 0.742, 0.646, arms 0.239 of the tip down the diagonal, 0.227 out, the notch
+# on the next corner's tip, 0.871 of this one's); its eight-petal flower (0.224 to 0.56, widest 0.178 a third
+# out: the leaf petal); its small roses on the axes (hexagons at 0.59 and 0.76, 0.082 and 0.075 across to a
+# corner, each with the rose drawing); the rose 0.22.
+SIDE_BANDS = (0.994, 0.888, 0.793, 0.698)
+SIDE_LEAN_DEG = 20.0
+SIDE_LEAN_TOL = 8.0
+SIDE_CORNERS = (0.855, 0.742, 0.646)
+SIDE_CORNER_ARM = (0.239, 0.227)  # down the diagonal, out from it (shares of the corner's tip)
+SIDE_CORNER_NOTCH = 0.86  # the notch / the tip: just under the next corner's tip (0.868), so they meet (no gap)
+SIDE_PETALS = (0.19, 0.56, 0.96)  # inner (under the rose, so no gap round it), outer, width / length (the satin flower petal:
+# a broad base, widest a third out, a pointed tip; designer base 0.79 of the widest)
+SIDE_DOTS = ((0.59, 0.082), (0.745, 0.075))  # the outer one's corner on the inner one's (no gap)
+SIDE_ROSE = 0.22
+
+
+def _side_folds_flower(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    head = next((q for q in parts if q.role == "head"), None)
+    c = next((q for q in parts if q.role == "center"), None)
+    pts = [q for q in parts if q.role == "points"]
+    if head is None or c is None or len(pts) != 2 or any(q.role == "ring" for q in parts):
+        return False
+    if any(q.params.get(KEEP_PARAM) for q in pts):
+        return False
+    g = head.color_group
+    eight = next((q for q in pts if int(q.params["count"]) == 8), None)
+    four = next((q for q in pts if int(q.params["count"]) == 4), None)
+    if eight is None or four is None or c.color_group != g or len({g, eight.color_group, four.color_group}) != 3:
+        return False
+    lean = (float(four.params["rotation_deg"]) + 45.0) % 90.0 - 45.0  # off the nearest axis, clockwise +
+    if abs(abs(lean) - SIDE_LEAN_DEG) > SIDE_LEAN_TOL:
+        return False
+    side = 1 if lean > 0 else -1  # the read color's arms lean this way; the head color's the other
+    hr = float(head.params["r"])
+    geo = {"cx": head.params["cx"], "cy": head.params["cy"], "tips": 1, KEEP_PARAM: 1}
+    y = eight.color_group
+    out = [q for q in parts if q.role not in ("points", "unknown")]
+    z = 20
+    for col, sd in ((g, -side), (four.color_group, side)):
+        for k, b in enumerate(SIDE_BANDS):
+            last = k == len(SIDE_BANDS) - 1
+            out.append(Part(f"points-side-{col}-{k}", "points",
+                            dict(geo, kind="side_fold", count=4, r_outer=round(b * hr, 3), r_inner=round(0.6 * b * hr, 3),
+                                 axis_deg=0.0, side=sd, last=int(last), rotation_deg=round(sd * SIDE_LEAN_DEG, 3),
+                                 width_ratio=0.5), col, z, 0.5))
+            z += 1
+    for k, tip in enumerate(SIDE_CORNERS):
+        nxt = SIDE_CORNER_NOTCH * tip
+        out.append(Part(f"points-corner-{k}", "points",
+                        dict(geo, kind="chevron", count=4, r_outer=round(tip * hr, 3),
+                             r_inner=round((1 - SIDE_CORNER_ARM[0]) * tip * hr, 3),
+                             fold_half=round(SIDE_CORNER_ARM[1] * tip * hr, 3), fold_notch=round(nxt * hr, 3),
+                             rotation_deg=45.0, width_ratio=0.5), y, z, 0.5))
+        z += 1
+    ri, ro, wr = SIDE_PETALS
+    for k, rot in enumerate((45.0, 0.0)):
+        out.append(Part(f"points-petal-{k}", "points",
+                        dict(geo, kind="petal", flower=1, count=4, r_inner=round(ri * hr, 3), r_outer=round(ro * hr, 3),
+                             rotation_deg=rot, width_ratio=wr), y, z, 0.5))
+        z += 1
+    for k, (rm, rd) in enumerate(SIDE_DOTS):
+        out.append(Part(f"points-dot-{k}", "points",
+                        dict(geo, kind="dot", rose=1, count=4, r_mid=round(rm * hr, 3), r_dot=round(rd * hr, 3),
+                             r_inner=round((rm - rd) * hr, 3), r_outer=round((rm + rd) * hr, 3), rotation_deg=0.0,
+                             width_ratio=1.0), y, z, 0.5))
+        z += 1
+    c.params["r"] = round(SIDE_ROSE * hr, 3)
+    parts[:] = out
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -2640,6 +2719,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     _star_on_pleated_ring(tidy.parts)  # R71: a twelve-point star on a pleated ring, its tips at the rim
     _loops_in_chevron_stars(tidy.parts)  # R72: edged loops between chevron stars round a pleated ring
     _loops_under_top_star(tidy.parts)  # R73: edged loops between chevron stars and a top star, no head disc
+    _side_folds_flower(tidy.parts)  # R76: arms pairing round the axes, corners, a flower, small roses
     _star_on_triangles(tidy.parts)  # R75: a six-point star over two edged triangles
     folded = folded_points(p, labels, tidy.parts)  # R74: a head of folded points in four colors
     if folded is not None:
