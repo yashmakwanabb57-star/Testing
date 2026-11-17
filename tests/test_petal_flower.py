@@ -761,7 +761,7 @@ def test_r81_four_edged_loops_between_leaf_points_of_the_head_color():
     ids = {q.id: q for q in parts}
     T = 143.5 / 0.88
     star, loops, edge, c = ids["points-1"], ids["points-0"], ids["edge-points-0"], ids["center"]
-    assert star.params["leaf"] == 3 and star.params["rotation_deg"] == 0.0 and abs(star.params["r_outer"] - T) < 0.01
+    assert "leaf" not in star.params and star.params["rotation_deg"] == 0.0 and abs(star.params["r_outer"] - T) < 0.01
     assert loops.params["rotation_deg"] == 45.0 and abs(loops.params["r_outer"] / T - 0.90) < 0.01
     assert abs(loops.params["width_ratio"] * (loops.params["r_outer"] - loops.params["r_inner"]) / T - 0.54) < 0.01
     assert abs(c.params["r"] / T - 0.35) < 0.01 and star.z < loops.z < edge.z < c.z
@@ -774,3 +774,25 @@ def test_r81_needs_four_loops():
     for q in parts[:3]:
         q.params["count"] = 6
     assert not _loops_between_leaf_points(parts)
+
+
+def test_r81_edges_read_as_a_loop_layer_behind():
+    # S2-15B: the loops' white edges read as a second, wider loop layer behind the loops
+    from rosette.pipeline import _loops_between_leaf_points
+    parts = _s2_parts()
+    edge = parts[2]
+    edge.params.pop("edge_width"); edge.color_group = 2; edge.z = 19
+    assert _loops_between_leaf_points(parts)
+    assert edge.params["edge_width"] > 1 and edge.color_group == 2 and parts[0].z < edge.z
+
+
+def test_r82_a_ring_inside_a_ring_of_its_color_is_dropped():
+    # S53-19, the owner's check: the white ring read twice drew an extra wavy border and circle line
+    from rosette.pipeline import _drop_nested_rings
+    geo = {"cx": 300.0, "cy": 150.0}
+    parts = [Part("ring-0", "ring", dict(geo, r_inner=75.5, r_outer=98.5, pinked=1), 1, 30, 0.9),
+             Part("ring-1", "ring", dict(geo, r_inner=83.5, r_outer=95.5, pinked=1), 1, 31, 0.9),
+             Part("ring-2", "ring", dict(geo, r_inner=50.5, r_outer=81.5, pinked=1), 2, 32, 0.9)]
+    assert _drop_nested_rings(parts)
+    assert [q.id for q in parts] == ["ring-0", "ring-2"]
+    assert not _drop_nested_rings(parts)

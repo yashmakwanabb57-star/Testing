@@ -2661,11 +2661,11 @@ def _ring_round_badge(parts: list) -> bool:
     return True
 
 
-# R81: four loops of a second color edged in the head's color, a four-point star of the head's color
+# R81: four loops of a second color edged in the head's color or a third (S2-15B: white, read as a loop layer), a four-point star of the head's color
 # half a step off them and a center of the head's color (S2-15: pink loops edged wine, wine points, a
 # wine rose; the points read as plain thin triangles, and the app's library head traced squashed). Built
 # whole so the app keeps it (tips). Designer S2-15 (shares of the points' reach T, rays from the rose):
-# leaf points (half-width 15 degrees at 0.65, 5 at 0.84), loops from under the rose to 0.90, 0.35 wide,
+# points with straight sides (the owner's choice, as S2-15B's), loops from under the rose to 0.90, 0.35 wide,
 # straight ends, edges 0.04, the rose 0.35; upright as R62 (the owner's check).
 LEAF_LOOPS = (0.90, 0.54)  # reach, pink width (designer S2-15: the loops' wine edges meet the points at 0.62 of the reach, in a corner; the owner's check)
 LEAF_LOOP_EDGE = 0.08
@@ -2681,12 +2681,19 @@ def _loops_between_leaf_points(parts: list) -> bool:
     bows = [q for q in pts if q.params.get("kind") == "bow" and not q.params.get("edge_width")]
     edges = [q for q in pts if q.params.get("edge_width")]
     stars = [q for q in pts if q.params.get("kind") == "star"]
-    if c is None or len(bows) != 1 or len(edges) != 1 or len(stars) != 1 or len(pts) != 3:
+    if c is None or len(stars) != 1 or len(pts) != 3:
         return False
-    bow, edge, star = bows[0], edges[0], stars[0]
+    if len(bows) == 2 and not edges:  # S2-15B: the edges read as a second loop layer behind (a third color)
+        edge, bow = sorted(bows, key=lambda q: q.z)
+        edge.params["edge_width"] = 1.0
+    elif len(bows) == 1 and len(edges) == 1:
+        bow, edge = bows[0], edges[0]
+    else:
+        return False
+    star = stars[0]
     if any(int(q.params["count"]) != 4 or q.params.get(KEEP_PARAM) for q in pts):
         return False
-    if star.color_group != c.color_group or edge.color_group != c.color_group or bow.color_group == c.color_group:
+    if star.color_group != c.color_group or bow.color_group in (c.color_group, edge.color_group):
         return False
     off = (float(star.params["rotation_deg"]) - float(bow.params["rotation_deg"])) % 90.0
     if abs(off - 45.0) > NESTED_AXIS_DEG:
@@ -2695,7 +2702,7 @@ def _loops_between_leaf_points(parts: list) -> bool:
     rot = round(float(star.params["rotation_deg"]) / 45.0) * 45.0 % 90.0
     rr = LEAF_ROSE * T
     star.params.update({"r_outer": round(T, 3), "r_inner": round(LEAF_VALLEY * T, 3), "rotation_deg": rot,
-                        "leaf": 3, "tips": 1, KEEP_PARAM: 1})  # diamond points (geometry DIAMOND_COVER)
+                        "tips": 1, KEEP_PARAM: 1})  # straight-sided points, as S2-15B's (the owner's check)
     ri, ro = FLOWER_START * rr, LEAF_LOOPS[0] * T
     for q in (bow, edge):
         q.params.update({"r_inner": round(ri, 3), "r_outer": round(ro, 3), "rotation_deg": (rot + 45.0) % 90.0,
@@ -2704,6 +2711,24 @@ def _loops_between_leaf_points(parts: list) -> bool:
     star.z, bow.z, edge.z = 20, 21, 22
     c.params["r"] = round(rr, 3)
     return True
+
+
+# R82: a ring lying wholly inside another ring of its color (same middle) is that ring read twice: it
+# drew a second pleated edge and a circle line inside it (S53-19's white ring, the owner's check). Dropped.
+def _drop_nested_rings(parts: list) -> bool:
+    rings = [q for q in parts if q.role == "ring"]
+    drop = []
+    for a in rings:
+        for b in rings:
+            if a is b or a.color_group != b.color_group or b in drop:
+                continue
+            if abs(float(a.params["cx"]) - float(b.params["cx"])) > 1 or abs(float(a.params["cy"]) - float(b.params["cy"])) > 1:
+                continue
+            if float(b.params["r_inner"]) <= float(a.params["r_inner"]) and float(a.params["r_outer"]) <= float(b.params["r_outer"]):
+                drop.append(a)
+                break
+    parts[:] = [q for q in parts if q not in drop]
+    return bool(drop)
 
 
 def _tuck_rings(parts: list) -> None:
@@ -2944,6 +2969,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
         out.rose = True
     if _twin_points(out.parts, p, labels):  # R40: two sets of points around the center
         out.rose = True
+    _drop_nested_rings(out.parts)  # R82: a ring inside a ring of its color is that ring read twice
     if close_seams(out.parts):
         out.info.append(SEAM_INFO)
     hue = shaded_rings(p, out.parts, out.groups)
