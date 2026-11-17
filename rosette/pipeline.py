@@ -2536,6 +2536,71 @@ def _side_folds_flower(parts: list) -> bool:
     return True
 
 
+# R77: two six-point bow layers half a step apart and a six-point star in phase with one of them, no head disc,
+# three colors, one ring (S58-17: beige loops edged in cream between black points, black roses on the points,
+# a cream ruffle round a black badge; read as two bow layers, a star and a ring of the badge's color). The
+# designer's star of the in-phase bow's color, tip up, its loops of the other bow's color between the points,
+# edged in the third color, the ruffle of the third color, the center of the points'
+# color with the rose, a small hexagon rose on each point. Designer S58-17 measured along rays (the star's tip
+# = 1): the star 1.0 with its valleys at 0.57, the loops straight-sided to 0.886 (STRAIGHT_LOOP) on a wider
+# edge copy (STRAIGHT_LOOP_EDGE), the ruffle 0.283-0.474, the center 0.28, the roses 0.582 out, hexagons 0.116 to a
+# corner with a flat side on the axis.
+LOOPSTAR_STAR = (1.0, 0.57)
+LOOPSTAR_RUFFLE = (0.283, 0.474)
+LOOPSTAR_DOTS = (0.582, 0.116)  # out, corner radius; flat side on the axis (0.10 across it)
+LOOPSTAR_PHASE_TOL = 10.0
+
+
+def _loops_between_star_points(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    if any(q.role in ("head", "center") for q in parts):
+        return False
+    pts = [q for q in parts if q.role == "points"]
+    rings = [q for q in parts if q.role == "ring"]
+    if len(pts) != 3 or len(rings) != 1 or any(q.params.get(KEEP_PARAM) for q in pts):
+        return False
+    if any(int(q.params["count"]) != 6 for q in pts):
+        return False
+    bows = [q for q in pts if q.params.get("kind") == "bow"]
+    stars = [q for q in pts if q.params.get("kind") == "star"]
+    if len(bows) != 2 or len(stars) != 1 or len({q.color_group for q in pts}) != 3:
+        return False
+    star = stars[0]
+
+    def off(a, b):
+        d = (float(a.params["rotation_deg"]) - float(b.params["rotation_deg"])) % 60.0
+        return min(d, 60.0 - d)
+    tip = next((b for b in bows if off(b, star) <= LOOPSTAR_PHASE_TOL), None)
+    loop = next((b for b in bows if abs(off(b, star) - 30.0) <= LOOPSTAR_PHASE_TOL), None)
+    if tip is None or loop is None or tip is loop:
+        return False
+    b, a, e = tip.color_group, loop.color_group, star.color_group
+    t = float(tip.params["r_outer"])
+    geo = {"cx": tip.params["cx"], "cy": tip.params["cy"], "tips": 1, KEEP_PARAM: 1}
+    lp = dict(geo, kind="lobe", count=6, r_tip=round(t, 3), r_inner=round(0.44 * t, 3), r_outer=round(0.886 * t, 3),
+              rotation_deg=0.0, width_ratio=1.0)
+    rm, rd = LOOPSTAR_DOTS
+    out = [q for q in parts if q.role not in ("points", "unknown", "ring")]
+    out += [
+        Part("points-star", "points", dict(geo, kind="star", count=6, r_outer=round(LOOPSTAR_STAR[0] * t, 3),
+                                           r_inner=round(LOOPSTAR_STAR[1] * t, 3), rotation_deg=-90.0,
+                                           width_ratio=1.0), b, 20, 0.5),
+        Part("edge-points-loops", "points", dict(lp, profile="straight_loop_edge"), e, 21, 0.5),
+        Part("points-loops", "points", dict(lp, profile="straight_loop"), a, 22, 0.5),
+        Part("ring-ruffle", "ring", dict(geo, r_inner=round(LOOPSTAR_RUFFLE[0] * t, 3),
+                                         r_outer=round(LOOPSTAR_RUFFLE[1] * t, 3), pinked=1), e, 30, 0.5),
+        Part("points-dot", "points", dict(geo, kind="dot", rose=1, count=6, r_mid=round(rm * t, 3),
+                                          r_dot=round(rd * t, 3), r_inner=round((rm - rd) * t, 3),
+                                          r_outer=round((rm + rd) * t, 3), rotation_deg=-90.0, width_ratio=1.0,
+                                          flat=1),
+             b, 31, 0.5),
+        Part("center", "center", {"cx": geo["cx"], "cy": geo["cy"], "r": round(LOOPSTAR_RUFFLE[0] * t, 3)},
+             b, 40, 0.5),
+    ]
+    parts[:] = out
+    return True
+
+
 def _tuck_rings(parts: list) -> None:
     head = next((q for q in parts if q.role == "head"), None)
     rings = sorted((q for q in parts if q.role == "ring"), key=lambda q: float(q.params["r_outer"]))
@@ -2719,6 +2784,7 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     _star_on_pleated_ring(tidy.parts)  # R71: a twelve-point star on a pleated ring, its tips at the rim
     _loops_in_chevron_stars(tidy.parts)  # R72: edged loops between chevron stars round a pleated ring
     _loops_under_top_star(tidy.parts)  # R73: edged loops between chevron stars and a top star, no head disc
+    _loops_between_star_points(tidy.parts)  # R77: loops between star points, edged, small roses
     _side_folds_flower(tidy.parts)  # R76: arms pairing round the axes, corners, a flower, small roses
     _star_on_triangles(tidy.parts)  # R75: a six-point star over two edged triangles
     folded = folded_points(p, labels, tidy.parts)  # R74: a head of folded points in four colors

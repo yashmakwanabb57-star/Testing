@@ -88,6 +88,10 @@ only give proportions for parts the photo cannot show, for example hidden star v
     the axes, three colors, are the designer's side folds: whole bands of the head's color and the second color,
     chevron corners on the diagonals with no gaps, a flower of petals, hexagon dots with a rose inside each, the
     center (R76; only S63-17). Color 1.000.
+  - 72 S58-17 - owner-approved after a fix: two six-point bow layers half a step apart and a star in phase
+    with one, no head disc, are the designer's loops between star points: the star tip up, straight-sided
+    loops on a wider edge of the third color, the ruffle of that color, flat-sided hexagon roses on the points,
+    the center with the rose (R77; only S58-17). Color 1.000.
   - Open (need new reading, not done):
     57 S5-15 (cross loops), 58 S52-19 (layered loops), 63 S57-17 (0.857),
     65 S59-17 (0.876), 75 S8-15 (star around the rose read as
@@ -107,7 +111,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
 4. Owner says "works next" -> commit, then the next photo. "not works fix" or a specific
    remark -> fix, re-render, show again.
 5. Fix as a narrow, numbered rule (R-number in a comment, constants named, designer
-   proportions cited). Latest rule: R76 (`rosette/pipeline.py` `_side_folds_flower`).
+   proportions cited). Latest rule: R77 (`rosette/pipeline.py` `_loops_between_star_points`).
 6. Before showing a fix: check which of the 76 photos the rule fires on
    (`.venv/Scripts/python.exe tools/review_fire.py <rule function>` or `--part <part id>`), and compare scores
    before/after (`git stash` baseline) for those photos. Narrow the rule until no other photo

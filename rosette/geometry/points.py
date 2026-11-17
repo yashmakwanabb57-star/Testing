@@ -184,13 +184,36 @@ def side_folds(cx: float, cy: float, count: int, r_tip: float, axis_deg: float, 
                                                      for r, d in shape])}, None) for k in range(count)]
 
 
-def dots(cx: float, cy: float, count: int, r_mid: float, r_dot: float, rotation_deg: float) -> list[Shape]:
-    """Small hexagons (R76: designer S63-17's small roses, a corner on the axis) centered r_mid out on each axis."""
+# A straight loop (R77, designer S58-17's loops, traced across the loop at right angles to its axis): the
+# sides run nearly parallel from the ruffle to a round end; its edge strip is a wider copy under it that stops
+# short of the end. (distance along the axis, half-width), both / the star's tip.
+STRAIGHT_LOOP = ((0.44, 0.146), (0.486, 0.144), (0.519, 0.162), (0.551, 0.179), (0.584, 0.181), (0.65, 0.182),
+                 (0.85, 0.185), (0.863, 0.184), (0.875, 0.124), (0.882, 0.058), (0.886, 0.0))
+STRAIGHT_LOOP_EDGE = ((0.44, 0.146), (0.551, 0.179), (0.584, 0.2), (0.616, 0.223), (0.853, 0.227), (0.853, 0.0))
+LOBES = {"straight_loop": STRAIGHT_LOOP, "straight_loop_edge": STRAIGHT_LOOP_EDGE}
+
+
+def lobes(cx: float, cy: float, count: int, r_tip: float, rotation_deg: float, profile: str) -> list[Shape]:
+    """One symmetric lobe per axis (rotation_deg + k * 360 / count) from a LOBES (along, half-width) table."""
+    half = LOBES[profile]
+    side = [(a * r_tip, h * r_tip) for a, h in half]
+    outline = side + [(a, -h) for a, h in reversed(side) if h]
+    out = []
+    for k in range(count):
+        th = rotation_deg + 360.0 * k / count
+        out.append(Shape("polygon", {"points": points_attr([_to_world(cx, cy, th, a, h) for a, h in outline])}, None))
+    return out
+
+
+def dots(cx: float, cy: float, count: int, r_mid: float, r_dot: float, rotation_deg: float,
+         flat: bool = False) -> list[Shape]:
+    """Small hexagons (R76: designer S63-17's small roses, a corner on the axis; R77, flat: S58-17's, a flat side
+    on the axis) centered r_mid out on each axis."""
     out = []
     for k in range(count):
         th = rotation_deg + 360.0 * k / count
         x, y = polar(cx, cy, r_mid, th)
-        out.append(Shape("polygon", {"points": points_attr([polar(x, y, r_dot, th + 60.0 * j) for j in range(6)])}, None))
+        out.append(Shape("polygon", {"points": points_attr([polar(x, y, r_dot, th + 30.0 * flat + 60.0 * j) for j in range(6)])}, None))
     return out
 
 

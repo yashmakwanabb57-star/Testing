@@ -8,7 +8,7 @@ from shapely import LineString, Polygon, make_valid, set_precision, unary_union
 from shapely.affinity import affine_transform
 
 from .geometry import disc, outlines, pinked_circle, pinked_ring, place_rose, points_ring, ring, tails
-from .geometry.points import chevrons, dots, side_folds, split_arms
+from .geometry.points import chevrons, dots, lobes, side_folds, split_arms
 from .geometry.common import polar
 from .geometry.clip import SIMPLIFY, clip_occluded, clip_visible, from_geom, to_geom, xor_all
 from .model import Part, RosetteModel
@@ -220,7 +220,7 @@ def build(model: RosetteModel, pieces: bool = True) -> list[Shape]:
         if p.role == "points" and q.get("kind") == "dot" and int(q.get("rose", 0)):
             for k in range(int(q["count"])):
                 x, y = polar(q["cx"], q["cy"], q["r_mid"], q["rotation_deg"] + 360.0 * k / int(q["count"]))
-                result += place_rose(x, y, 0.8 * q["r_dot"])
+                result += place_rose(x, y, (1.0 if int(q.get("flat", 0)) else 0.8) * q["r_dot"])  # R77: S58-17's fill the hexagon
     center = _rose_center(model)
     if model.rose and center is not None:
         cx, cy, r, z = center
@@ -277,8 +277,11 @@ def color_shapes(model: RosetteModel) -> list[tuple[Shape, Part]]:
         elif p.role == "points" and q.get("kind") == "side_fold":  # R76
             finish(p, side_folds(q["cx"], q["cy"], int(q["count"]), q["r_outer"], q["axis_deg"], int(q["side"]),
                                  bool(int(q.get("last", 0)))))
+        elif p.role == "points" and q.get("kind") == "lobe":  # R77
+            finish(p, lobes(q["cx"], q["cy"], int(q["count"]), q["r_tip"], q["rotation_deg"], str(q["profile"])))
         elif p.role == "points" and q.get("kind") == "dot":  # R76
-            finish(p, dots(q["cx"], q["cy"], int(q["count"]), q["r_mid"], q["r_dot"], q["rotation_deg"]))
+            finish(p, dots(q["cx"], q["cy"], int(q["count"]), q["r_mid"], q["r_dot"], q["rotation_deg"],
+                           bool(int(q.get("flat", 0)))))
         elif p.role == "points" and q.get("kind") == "chevron":  # R74
             finish(p, chevrons(q["cx"], q["cy"], int(q["count"]), q["r_outer"], q["r_outer"] - q["r_inner"],
                                q["fold_half"], q.get("fold_notch", 0.0), q["rotation_deg"]))
