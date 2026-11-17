@@ -544,7 +544,7 @@ def test_a_library_head_outside_the_candidates_is_placed_and_checked_on_demand(f
     assert drawn.id == "library_T9-15" and drawn.params["rank"] > 3 and drawn.params["description"]
     # placed at its own pose on the photo circle (canvas (300, 125, 100)), not at the edited head
     p = drawn.params
-    assert p["cx"] == pytest.approx(300 + p["pose_dx"] * 100, abs=0.01)
+    assert p["cx"] == pytest.approx(300, abs=0.01)  # on the tails' axis, whatever the pose's sideways shift
     assert p["cy"] == pytest.approx(125 + p["pose_dy"] * 100, abs=0.01)
     assert p["r"] == pytest.approx(100 * p["pose_scale"], abs=0.01)
     assert "T9-15" in picked.head_states and picked.head_states["T9-15"]["fit"] is not None
@@ -737,3 +737,12 @@ def test_choose_head_keeps_the_rules_head_when_the_outline_winner_loses_layers(t
     assert _template_warnings(m) == []  # no colors warning: the library head does not fit better
     assert sorted(q.params["template_id"] for q in m.alternatives if q.role == "template") == [
         "T1-15", "T7-15", "T8-15"]
+
+
+def test_a_head_with_a_lone_flap_onto_the_tails_is_never_turned():
+    # S65-18 in the app, the owner's check: its own library head (the middle ribbon drawn up over the
+    # head to the badge) was turned 25.7 degrees by its rim's symmetry, swinging the ribbon to the side
+    from rosette.vision import templates as T
+    lib = {t.sid: t for t in T.load_library()}
+    assert T.lone_flap(lib["S65-18"])
+    assert not any(T.lone_flap(lib[s]) for s in ("S15-15", "S30-15", "S46-15", "A1-15"))  # star points come in sets

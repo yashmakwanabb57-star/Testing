@@ -430,6 +430,31 @@ def symmetry(t: Template) -> int:
     return _SYMMETRY[key]
 
 
+FLAP_REACH, FLAP_TOP, FLAP_AXIS = 0.95, 0.2, 0.15  # head radii: the flap's bottom, top and center line
+FLAP_SIBLING_AREA = 0.25  # a copy of the flap elsewhere: same category, area within this share
+
+
+def lone_flap(t: Template) -> bool:
+    """A piece of the head that runs down onto the tails on the center line with no copy at another
+    angle (S65-18: the middle ribbon drawn up over the head to the badge). Such a head is tied to the
+    tails, so it is never turned: a turn by its rim's symmetry swings the flap to the side (the
+    owner's check, S65-18 in the app). Star points come in sets and do not count."""
+    from shapely.geometry import Polygon
+    for pc in t.pieces:
+        if pc.role == "head":
+            continue
+        p = Polygon(pc.rings[0])
+        x0, y0, x1, y1 = p.bounds
+        if y1 < FLAP_REACH or y0 < FLAP_TOP or abs((x0 + x1) / 2) >= FLAP_AXIS or p.area <= 0:
+            continue
+        copies = [q for q in t.pieces if q is not pc and q.role != "head" and q.category == pc.category
+                  and abs(Polygon(q.rings[0]).area - p.area) / p.area < FLAP_SIBLING_AREA
+                  and Polygon(q.rings[0]).centroid.distance(p.centroid) > 0.1]
+        if not copies:
+            return True
+    return False
+
+
 def best_pose(labels: np.ndarray, t: Template) -> Pose:
     """The pose whose silhouette fits the photo best, coarse to fine: center offset and
     scale unturned, then the turns within the template's symmetry period, then offset
@@ -445,7 +470,7 @@ def best_pose(labels: np.ndarray, t: Template) -> Pose:
 
     pose = place(0.0)
     k = symmetry(t)
-    if k >= 3:
+    if k >= 3 and not lone_flap(t):
         period = 360.0 / k
         turns = [Pose(pose.dx, pose.dy, pose.scale, round(period * j / POSE_TURNS, 3)) for j in range(POSE_TURNS)]
         tk = [(_iou(fg, pose_grid(t, q)), -q.rotation) for q in turns]

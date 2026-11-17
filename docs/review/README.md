@@ -122,6 +122,8 @@ only give proportions for parts the photo cannot show, for example hidden star v
   bottom (R86; A1-15, A13-15).
   A9-15 - a head read smooth round pleated rings is pleated too (R87; A9-15, A10-15, A16-17, whose designer rims
   are wavy; head shape scores dip 0.003-0.02 on the wave's edge).
+  S65-18 in the app - a library head with a lone flap onto the tails is never turned (templates.lone_flap;
+  only S65-18's), and every library head sits on the tails' axis (the pose's sideways shift is information only).
 - Next (owner, at the office): verify Claude's work from line 56 (S51-19) one photo at a time with the
   normal loop below (show photo | ours | designer, wait for "works next" or a fix request). Then the open
   list above, worst first (S8-15, s44-15, S48-17, S68-19, S4-15).

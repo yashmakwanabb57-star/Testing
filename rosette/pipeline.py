@@ -401,7 +401,9 @@ def _template_part(t, f: dict, have: set[int], circle: tuple[float, float, float
         return None
     first = next(pc.category for pc in t.pieces if pc.category in mapping)
     pose = f.get("pose") or Pose()
-    params: dict = {"template_id": t.sid, "cx": round(circle[0] + pose.dx * circle[2], 3),
+    # the head sits on the tails' axis: the pose's sideways shift is kept as information only (S65-18 in
+    # the app, the owner's check: the disc had moved 15 units right of the tail)
+    params: dict = {"template_id": t.sid, "cx": round(circle[0], 3),
                     "cy": round(circle[1] + pose.dy * circle[2], 3), "r": round(circle[2] * pose.scale, 3),
                     "rotation_deg": float(pose.rotation), "pose_dx": pose.dx, "pose_dy": pose.dy,
                     "pose_scale": pose.scale,
