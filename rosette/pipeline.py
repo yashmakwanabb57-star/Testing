@@ -52,6 +52,7 @@ from .vision import groups as vgroups
 from .vision import judge as vjudge
 from .vision.colors import badge_print_unsure, mixed_texture_groups, pixel_groups
 from .vision.one_color import ONE_COLOR_INFO, badge_in_pleats, rose_center
+from .vision.folded_points import folded_points
 from .vision.stacked_stars import edged_star_between_bows, stacked_stars, star_on_square
 from .vision.shaded_rings import HUE_INFO, dark_loop_edges, shaded_rings
 from .vision.parts_head import _badge_under_loops, _loops_on_rim, _petals_between_loops, _twin_points
@@ -2290,7 +2291,314 @@ def _star_on_pleated_ring(parts: list) -> bool:
     return True
 
 
-# R72: no points, a head disc with rings of its color and the center's color round a center of a second
+# R72: six loops between three six-point stars of two colors, the longest and the shortest of one color
+# (not the head's) and the middle one of the head's, round a pleated ring of the head's color (S70-19: white
+# and red chevron points behind blue glitter loops, a white star over them, a red ruffle round the white rose).
+# Designer S70-19 measured along rays (head radii), bottom to top: the outer star 0.94, the head-color star
+# 0.78, the loops 0.38-0.78 (0.35 wide, edged 0.04 in the head's color), the inner star 0.65, the ruffle
+# 0.24-0.375, the rose 0.24. The owner's check: the loops' red border, the wide outer star, the center as the designer.
+CHEVRON_TIPS = (0.94, 0.78, 0.65)  # outer, head-color, inner star
+CHEVRON_LOOPS = (0.38, 0.78, 0.35, 0.04)  # inner, outer, width, edge (head radii)
+CHEVRON_RUFFLE = (0.24, 0.375)
+CHEVRON_VALLEYS = (0.52, 0.47)  # the outer and head-color stars' valleys, hidden under the loops: half-widths
+# at 0.72 of 9.5 and 3 degrees as the designer (the inner star's valleys under the ruffle)
+CHEVRON_PHASE_TOL = 10.0  # degrees off half a step from the loops
+CHEVRON_UPRIGHT_TOL = 5.0  # a star tip this close to straight up is upright (the photo's tilt), the loops half a step off
+
+
+def _loops_in_chevron_stars(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    head = next((q for q in parts if q.role == "head"), None)
+    c = next((q for q in parts if q.role == "center"), None)
+    pts = [q for q in parts if q.role == "points"]
+    rings = [q for q in parts if q.role == "ring"]
+    if head is None or c is None or len(pts) != 4 or len(rings) != 1 or any(q.params.get(KEEP_PARAM) for q in pts):
+        return False
+    g = head.color_group
+    bows = [q for q in pts if q.params.get("kind") == "bow"]
+    stars = sorted((q for q in pts if q.params.get("kind") == "star"), key=lambda q: -float(q.params["r_outer"]))
+    if len(bows) != 1 or len(stars) != 3 or any(int(q.params["count"]) != 6 for q in pts):
+        return False
+    bow = bows[0]
+    y = stars[0].color_group
+    if [q.color_group for q in stars] != [y, g, y] or y == g or bow.color_group in (g, y):
+        return False
+    if rings[0].color_group != g or c.color_group != y:
+        return False
+    off = (float(stars[0].params["rotation_deg"]) - float(bow.params["rotation_deg"])) % 60.0
+    if abs(off - 30.0) > CHEVRON_PHASE_TOL:
+        return False
+    hr = float(head.params["r"])
+    up = (float(stars[0].params["rotation_deg"]) + 90.0 + 30.0) % 60.0 - 30.0  # 0 when a tip points straight up
+    if abs(up) <= CHEVRON_UPRIGHT_TOL:
+        for q in stars:
+            q.params["rotation_deg"] = 30.0
+        bow.params["rotation_deg"] = 0.0
+    ring_out = round(CHEVRON_RUFFLE[1] * hr, 3)
+    for q, tip in zip(stars, CHEVRON_TIPS):
+        q.params.update(r_outer=round(tip * hr, 3), r_inner=ring_out, tips=1, **{KEEP_PARAM: 1})
+    for q, v in zip(stars, CHEVRON_VALLEYS):
+        q.params["r_inner"] = round(v * hr, 3)
+    ri, ro = CHEVRON_LOOPS[0] * hr, CHEVRON_LOOPS[1] * hr
+    bow.params.update(r_inner=round(ri, 3), r_outer=round(ro, 3), tips=1, **{KEEP_PARAM: 1},
+                      width_ratio=round(CHEVRON_LOOPS[2] * hr / (ro - ri), 4))
+    parts.append(Part(f"edge-{bow.id}", "points", dict(bow.params, edge_width=round(CHEVRON_LOOPS[3] * hr, 3)),
+                      g, bow.z, 0.5))
+    rings[0].params.update(r_inner=round(CHEVRON_RUFFLE[0] * hr, 3), r_outer=ring_out, pinked=1)
+    c.params["r"] = round(CHEVRON_RUFFLE[0] * hr, 3)
+    return True
+
+
+# R73: six loops round three six-point layers and no head disc, the outer and the top layer of one color, the
+# middle one of another, round a ring of that other color on a center of the first (S69-19: navy chevron stars
+# edged in white, horse-print loops edged in white, a navy star on top, a white ruffle round the badge; read
+# as diamonds with the loops on top). Designer S69-19 measured along rays (the back star's tip = 1), bottom
+# to top: the back star 1.0, the middle star 0.90, the loops 0.48-0.90 edged in the middle color (0.1 of
+# their width), the top star 0.815 over the loops, the ruffle 0.29-0.44, the center 0.29. The valleys are
+# hidden (under the loops or the ruffle): half-widths as the designer (back 6.5 deg at 0.85, middle 8.5 deg
+# at 0.73, top 26 deg at 0.5).
+TRI_TIPS = (1.0, 0.90, 0.815)  # back, middle, top star
+TRI_VALLEYS = (0.60, 0.55, 0.48)
+TRI_LOOPS = (0.48, 0.90, 0.1)  # inner, outer, edge share of the width
+TRI_RUFFLE = (0.29, 0.44)
+
+
+def _loops_under_top_star(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    if any(q.role == "head" for q in parts):
+        return False
+    c = next((q for q in parts if q.role == "center"), None)
+    pts = [q for q in parts if q.role == "points"]
+    rings = [q for q in parts if q.role == "ring"]
+    if c is None or len(pts) != 4 or len(rings) != 1 or any(q.params.get(KEEP_PARAM) for q in pts):
+        return False
+    bows = [q for q in pts if q.params.get("kind") == "bow"]
+    stars = sorted((q for q in pts if q.params.get("kind") in ("star", "diamond")),
+                   key=lambda q: -float(q.params["r_outer"]))
+    if len(bows) != 1 or len(stars) != 3 or any(int(q.params["count"]) != 6 for q in pts):
+        return False
+    bow = bows[0]
+    a, b = stars[0].color_group, stars[1].color_group
+    if [q.color_group for q in stars] != [a, b, a] or a == b or bow.color_group in (a, b):
+        return False
+    if rings[0].color_group != b or c.color_group != a:
+        return False
+    off = (float(stars[0].params["rotation_deg"]) - float(bow.params["rotation_deg"])) % 60.0
+    if abs(off - 30.0) > CHEVRON_PHASE_TOL:
+        return False
+    u = float(stars[0].params["r_outer"])
+    up = (float(stars[0].params["rotation_deg"]) + 90.0 + 30.0) % 60.0 - 30.0
+    srot = 30.0 if abs(up) <= CHEVRON_UPRIGHT_TOL else float(stars[0].params["rotation_deg"])
+    for q, tip, v, z in zip(stars, TRI_TIPS, TRI_VALLEYS, (20, 21, 23)):
+        q.params.update(kind="star", r_outer=round(tip * u, 3), r_inner=round(v * u, 3), rotation_deg=srot,
+                        width_ratio=0.5, tips=1, **{KEEP_PARAM: 1})
+        q.z = z
+    ri, ro = TRI_LOOPS[0] * u, TRI_LOOPS[1] * u
+    w = float(bow.params["width_ratio"]) * (float(bow.params["r_outer"]) - float(bow.params["r_inner"]))
+    bow.params.update(r_inner=round(ri, 3), r_outer=round(ro, 3), rotation_deg=round((srot + 30.0) % 60.0, 3),
+                      width_ratio=round(w / (ro - ri), 4), tips=1, **{KEEP_PARAM: 1})
+    bow.z = 22
+    parts.append(Part(f"edge-{bow.id}", "points", dict(bow.params, edge_width=round(TRI_LOOPS[2] * w, 3)), b, 22, 0.5))
+    rings[0].params.update(r_inner=round(TRI_RUFFLE[0] * u, 3), r_outer=round(TRI_RUFFLE[1] * u, 3))
+    c.params["r"] = round(TRI_RUFFLE[0] * u, 3)
+    return True
+
+
+# R75: a six-point star of one color over three points of another, half a step off its tips, on a head round a
+# center of the head's color (S67-19: a glitter star over a light teal triangle and a navy triangle on navy
+# pleats; read as the star and three teal blobs). Designer S67-19 measured along rays (head radii), bottom to
+# top: a six-point star split in two, three points of the three points' color (one straight down where the
+# photo's is) and three of the head's color between them, tips 0.90 with an inner line at 0.71 (edged), sides
+# 24 degrees off the axis at the tip (valleys 0.41 of the tip, under the star: the points do not overlap, the
+# owner's check of the order); the star 0.74 (valleys 0.31) with an inner line at 0.57 (0.27); the center 0.27.
+TRIANGLE_TIPS = (0.90, 0.71)  # outer, inner line
+TRIANGLE_STAR = ((0.74, 0.31), (0.57, 0.27))  # (tip, valley): outer, inner line
+TRIANGLE_ROSE = 0.27
+TRIANGLE_VALLEY = 0.41  # valley / tip of each three-point half
+TRIANGLE_PHASE_TOL = 10.0  # degrees off half a step from the star's tips; a tip this close to straight down is down
+
+
+def _star_on_triangles(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    head = next((q for q in parts if q.role == "head"), None)
+    c = next((q for q in parts if q.role == "center"), None)
+    pts = [q for q in parts if q.role == "points"]
+    if head is None or c is None or len(pts) != 2 or any(q.role == "ring" for q in parts):
+        return False
+    if any(q.params.get(KEEP_PARAM) for q in pts):
+        return False
+    star = next((q for q in pts if q.params.get("kind") == "star" and int(q.params["count"]) == 6), None)
+    tri = next((q for q in pts if q is not star and int(q.params["count"]) == 3), None)
+    g = head.color_group
+    if star is None or tri is None or c.color_group != g or len({g, star.color_group, tri.color_group}) != 3:
+        return False
+    off = (float(tri.params["rotation_deg"]) - float(star.params["rotation_deg"])) % 60.0
+    if abs(off - 30.0) > TRIANGLE_PHASE_TOL:
+        return False
+    rot = float(tri.params["rotation_deg"]) % 120.0
+    if abs(rot - 90.0) <= TRIANGLE_PHASE_TOL:  # a tip straight down
+        rot = 90.0
+    hr = float(head.params["r"])
+    geo = {"cx": head.params["cx"], "cy": head.params["cy"], "kind": "star", "width_ratio": 0.5, "tips": 1, KEEP_PARAM: 1}
+    out = [q for q in parts if q.role != "points"]
+    # the owner's order (S67-19): the outer layers red (head color), yellow, blue, then the inner lines in that order
+    for k, (col, r0) in enumerate(((g, (rot + 60.0) % 120.0), (tri.color_group, rot))):
+        for j, tip in enumerate(TRIANGLE_TIPS):
+            out.append(Part(f"points-triangle-{k}-{j}", "points",
+                            dict(geo, count=3, r_outer=round(tip * hr, 3), r_inner=round(TRIANGLE_VALLEY * tip * hr, 3),
+                                 rotation_deg=round(r0, 3)), col, 20 + k + 3 * j, 0.5))
+    srot = round((rot + 30.0) % 60.0, 3)
+    for j, (tip, val) in enumerate(TRIANGLE_STAR):
+        out.append(Part(f"points-star-{j}", "points",
+                        dict(geo, count=6, r_outer=round(tip * hr, 3), r_inner=round(val * hr, 3), rotation_deg=srot),
+                        star.color_group, 22 + 3 * j, 0.5))
+    c.params["r"] = round(TRIANGLE_ROSE * hr, 3)
+    parts[:] = [q for q in out if q.role != "unknown"]
+    return True
+
+
+# R76: four points of a second color about 20 degrees off the axes over an eight-point layer of a third color, on a
+# head round a center of the head's color (S63-17: light blue folded arms and blue ones pairing up round each axis,
+# white folded square corners on the diagonals, a white flower, small white roses on the axes, a blue rose; read
+# as eight white petals and four light blue blobs). Designer S63-17 traced from its pieces about the arms' own
+# center (head radii), in its paint order: the head color's arms leaning back from each axis, then the second
+# color's leaning forward (geometry SIDE_FOLD, tips 20 degrees off the axis), four bands each that touch (tips
+# 0.994, 0.888, 0.793, 0.698, the innermost whole); the third color's square corners on the diagonals
+# (right-angle chevrons, tips 0.855, 0.742, 0.646, arms 0.239 of the tip down the diagonal, 0.227 out, the notch
+# on the next corner's tip, 0.871 of this one's); its eight-petal flower (0.224 to 0.56, widest 0.178 a third
+# out: the leaf petal); its small roses on the axes (hexagons at 0.59 and 0.76, 0.082 and 0.075 across to a
+# corner, each with the rose drawing); the rose 0.22.
+SIDE_BANDS = (0.994, 0.888, 0.793, 0.698)
+SIDE_LEAN_DEG = 20.0
+SIDE_LEAN_TOL = 8.0
+SIDE_CORNERS = (0.855, 0.742, 0.646)
+SIDE_CORNER_ARM = (0.239, 0.227)  # down the diagonal, out from it (shares of the corner's tip)
+SIDE_CORNER_NOTCH = 0.86  # the notch / the tip: just under the next corner's tip (0.868), so they meet (no gap)
+SIDE_PETALS = (0.19, 0.56, 0.96)  # inner (under the rose, so no gap round it), outer, width / length (the satin flower petal:
+# a broad base, widest a third out, a pointed tip; designer base 0.79 of the widest)
+SIDE_DOTS = ((0.59, 0.082), (0.745, 0.075))  # the outer one's corner on the inner one's (no gap)
+SIDE_ROSE = 0.22
+
+
+def _side_folds_flower(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    head = next((q for q in parts if q.role == "head"), None)
+    c = next((q for q in parts if q.role == "center"), None)
+    pts = [q for q in parts if q.role == "points"]
+    if head is None or c is None or len(pts) != 2 or any(q.role == "ring" for q in parts):
+        return False
+    if any(q.params.get(KEEP_PARAM) for q in pts):
+        return False
+    g = head.color_group
+    eight = next((q for q in pts if int(q.params["count"]) == 8), None)
+    four = next((q for q in pts if int(q.params["count"]) == 4), None)
+    if eight is None or four is None or c.color_group != g or len({g, eight.color_group, four.color_group}) != 3:
+        return False
+    lean = (float(four.params["rotation_deg"]) + 45.0) % 90.0 - 45.0  # off the nearest axis, clockwise +
+    if abs(abs(lean) - SIDE_LEAN_DEG) > SIDE_LEAN_TOL:
+        return False
+    side = 1 if lean > 0 else -1  # the read color's arms lean this way; the head color's the other
+    hr = float(head.params["r"])
+    geo = {"cx": head.params["cx"], "cy": head.params["cy"], "tips": 1, KEEP_PARAM: 1}
+    y = eight.color_group
+    out = [q for q in parts if q.role not in ("points", "unknown")]
+    z = 20
+    for col, sd in ((g, -side), (four.color_group, side)):
+        for k, b in enumerate(SIDE_BANDS):
+            last = k == len(SIDE_BANDS) - 1
+            out.append(Part(f"points-side-{col}-{k}", "points",
+                            dict(geo, kind="side_fold", count=4, r_outer=round(b * hr, 3), r_inner=round(0.6 * b * hr, 3),
+                                 axis_deg=0.0, side=sd, last=int(last), rotation_deg=round(sd * SIDE_LEAN_DEG, 3),
+                                 width_ratio=0.5), col, z, 0.5))
+            z += 1
+    for k, tip in enumerate(SIDE_CORNERS):
+        nxt = SIDE_CORNER_NOTCH * tip
+        out.append(Part(f"points-corner-{k}", "points",
+                        dict(geo, kind="chevron", count=4, r_outer=round(tip * hr, 3),
+                             r_inner=round((1 - SIDE_CORNER_ARM[0]) * tip * hr, 3),
+                             fold_half=round(SIDE_CORNER_ARM[1] * tip * hr, 3), fold_notch=round(nxt * hr, 3),
+                             rotation_deg=45.0, width_ratio=0.5), y, z, 0.5))
+        z += 1
+    ri, ro, wr = SIDE_PETALS
+    for k, rot in enumerate((45.0, 0.0)):
+        out.append(Part(f"points-petal-{k}", "points",
+                        dict(geo, kind="petal", flower=1, count=4, r_inner=round(ri * hr, 3), r_outer=round(ro * hr, 3),
+                             rotation_deg=rot, width_ratio=wr), y, z, 0.5))
+        z += 1
+    for k, (rm, rd) in enumerate(SIDE_DOTS):
+        out.append(Part(f"points-dot-{k}", "points",
+                        dict(geo, kind="dot", rose=1, count=4, r_mid=round(rm * hr, 3), r_dot=round(rd * hr, 3),
+                             r_inner=round((rm - rd) * hr, 3), r_outer=round((rm + rd) * hr, 3), rotation_deg=0.0,
+                             width_ratio=1.0), y, z, 0.5))
+        z += 1
+    c.params["r"] = round(SIDE_ROSE * hr, 3)
+    parts[:] = out
+    return True
+
+
+# R77: two six-point bow layers half a step apart and a six-point star in phase with one of them, no head disc,
+# three colors, one ring (S58-17: beige loops edged in cream between black points, black roses on the points,
+# a cream ruffle round a black badge; read as two bow layers, a star and a ring of the badge's color). The
+# designer's star of the in-phase bow's color, tip up, its loops of the other bow's color between the points,
+# edged in the third color, the ruffle of the third color, the center of the points'
+# color with the rose, a small hexagon rose on each point. Designer S58-17 measured along rays (the star's tip
+# = 1): the star 1.0 with its valleys at 0.57, the loops straight-sided to 0.886 (STRAIGHT_LOOP) on a wider
+# edge copy (STRAIGHT_LOOP_EDGE), the ruffle 0.283-0.474, the center 0.28, the roses 0.582 out, hexagons 0.116 to a
+# corner with a flat side on the axis.
+LOOPSTAR_STAR = (1.0, 0.57)
+LOOPSTAR_RUFFLE = (0.283, 0.474)
+LOOPSTAR_DOTS = (0.582, 0.116)  # out, corner radius; flat side on the axis (0.10 across it)
+LOOPSTAR_PHASE_TOL = 10.0
+
+
+def _loops_between_star_points(parts: list) -> bool:
+    from .vision.layer_classify import KEEP_PARAM
+    if any(q.role in ("head", "center") for q in parts):
+        return False
+    pts = [q for q in parts if q.role == "points"]
+    rings = [q for q in parts if q.role == "ring"]
+    if len(pts) != 3 or len(rings) != 1 or any(q.params.get(KEEP_PARAM) for q in pts):
+        return False
+    if any(int(q.params["count"]) != 6 for q in pts):
+        return False
+    bows = [q for q in pts if q.params.get("kind") == "bow"]
+    stars = [q for q in pts if q.params.get("kind") == "star"]
+    if len(bows) != 2 or len(stars) != 1 or len({q.color_group for q in pts}) != 3:
+        return False
+    star = stars[0]
+
+    def off(a, b):
+        d = (float(a.params["rotation_deg"]) - float(b.params["rotation_deg"])) % 60.0
+        return min(d, 60.0 - d)
+    tip = next((b for b in bows if off(b, star) <= LOOPSTAR_PHASE_TOL), None)
+    loop = next((b for b in bows if abs(off(b, star) - 30.0) <= LOOPSTAR_PHASE_TOL), None)
+    if tip is None or loop is None or tip is loop:
+        return False
+    b, a, e = tip.color_group, loop.color_group, star.color_group
+    t = float(tip.params["r_outer"])
+    geo = {"cx": tip.params["cx"], "cy": tip.params["cy"], "tips": 1, KEEP_PARAM: 1}
+    lp = dict(geo, kind="lobe", count=6, r_tip=round(t, 3), r_inner=round(0.44 * t, 3), r_outer=round(0.886 * t, 3),
+              rotation_deg=0.0, width_ratio=1.0)
+    rm, rd = LOOPSTAR_DOTS
+    out = [q for q in parts if q.role not in ("points", "unknown", "ring")]
+    out += [
+        Part("points-star", "points", dict(geo, kind="star", count=6, r_outer=round(LOOPSTAR_STAR[0] * t, 3),
+                                           r_inner=round(LOOPSTAR_STAR[1] * t, 3), rotation_deg=-90.0,
+                                           width_ratio=1.0), b, 20, 0.5),
+        Part("edge-points-loops", "points", dict(lp, profile="straight_loop_edge"), e, 21, 0.5),
+        Part("points-loops", "points", dict(lp, profile="straight_loop"), a, 22, 0.5),
+        Part("ring-ruffle", "ring", dict(geo, r_inner=round(LOOPSTAR_RUFFLE[0] * t, 3),
+                                         r_outer=round(LOOPSTAR_RUFFLE[1] * t, 3), pinked=1), e, 30, 0.5),
+        Part("points-dot", "points", dict(geo, kind="dot", rose=1, count=6, r_mid=round(rm * t, 3),
+                                          r_dot=round(rd * t, 3), r_inner=round((rm - rd) * t, 3),
+                                          r_outer=round((rm + rd) * t, 3), rotation_deg=-90.0, width_ratio=1.0,
+                                          flat=1),
+             b, 31, 0.5),
+        Part("center", "center", {"cx": geo["cx"], "cy": geo["cy"], "r": round(LOOPSTAR_RUFFLE[0] * t, 3)},
+             b, 40, 0.5),
+    ]
+    parts[:] = out
+# R78: no points, a head disc with rings of its color and the center's color round a center of a second
 # color, and a blob of a third color (A10-15B: pink pleats, a glitter pink ring, white pleats, a pink ring
 # and a white rose; the glitter ring read as a stray blob, the rings misread). Designer A10-15B (head radii),
 # all pinked, bottom to top: the third color's ring to 0.87, the center color's to 0.70, the head color's
@@ -2326,7 +2634,7 @@ def _three_color_rings(parts: list) -> bool:
     return True
 
 
-# R73: only a head disc and a badge of its color, and a blob of a second color over the badge (A12-15:
+# R79: only a head disc and a badge of its color, and a blob of a second color over the badge (A12-15:
 # a peach pleated ring round a wine badge on wine pleats; the ring read as a blob). A pleated ring of the
 # blob's color round the badge. Designer A12-15 (head radii): the ring 0.38-0.60, the badge 0.38.
 BADGE_RING = (0.38, 0.60)
@@ -2534,8 +2842,16 @@ def detect(data: bytes, classify: bool = True, exclude_key: str | None = None) -
     _pointed_loops_as_petals(tidy.parts, p, labels)  # R69: loops narrowing to points round a rose are leaf petals
     _split_star_flower(tidy.parts)  # R70: two banded stars 30 degrees apart under squares and a star
     _star_on_pleated_ring(tidy.parts)  # R71: a twelve-point star on a pleated ring, its tips at the rim
-    _three_color_rings(tidy.parts)  # R72: pleated rings of three colors round a rose
-    _ring_round_badge(tidy.parts)  # R73: a blob of a second color at the badge is a pleated ring round it
+    _loops_in_chevron_stars(tidy.parts)  # R72: edged loops between chevron stars round a pleated ring
+    _loops_under_top_star(tidy.parts)  # R73: edged loops between chevron stars and a top star, no head disc
+    _loops_between_star_points(tidy.parts)  # R77: loops between star points, edged, small roses
+    _side_folds_flower(tidy.parts)  # R76: arms pairing round the axes, corners, a flower, small roses
+    _star_on_triangles(tidy.parts)  # R75: a six-point star over two edged triangles
+    folded = folded_points(p, labels, tidy.parts)  # R74: a head of folded points in four colors
+    if folded is not None:
+        tidy.parts = folded
+    _three_color_rings(tidy.parts)  # R78: pleated rings of three colors round a rose
+    _ring_round_badge(tidy.parts)  # R79: a blob of a second color at the badge is a pleated ring round it
     flower = _petal_flower(p, labels, tidy.parts)  # R56: a one-color lobed head round a rose
     if flower is not None:
         tidy.parts = flower

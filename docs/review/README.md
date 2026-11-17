@@ -70,14 +70,36 @@ only give proportions for parts the photo cannot show, for example hidden star v
   - 52 S46-15 - owner-approved after a fix: a star with loops half a step off round a rose of the head's color is
     the designer's outer star, loops edged in the head's color, inner star, rose (R68, five or more points;
     only S46-15). Head as the designer; 0.725 -> 0.715.
+  - 73 S70-19 - owner-approved after a fix: six loops between chevron stars (outer and inner of one color, the
+    head's color between) round a pleated ring are the designer's stack: stars upright, loops edged in the head's
+    color, the designer's radii (R72; only S70-19). 0.980 -> 0.993.
+  - 72 S69-19 - owner-approved after a fix: six loops round chevron stars and a top star, no head disc, are the
+    designer's stack: back and middle star, loops edged in the middle color, the top star over the loops, upright
+    (R73; only S69-19). 0.972 -> 0.982, head 0.780 -> 0.790.
+  - 71 S68-19 - owner-approved after a fix: a head read as a plain disc whose colors swing four times (the head's,
+    the diagonals), twice (one axis), eight times (glitter pairs) is the designer's folded points: each point one V
+    fold moved along the axis (new `chevron` kind), glitter pairs under the diagonals, the axes on top, a badge;
+    R40 skips parts built whole (R74; only S68-19). Color 0.966 -> 1.000.
+  - 70 S67-19 - owner-approved after a fix: a six-point star over three points half a step off, on a head round a
+    center of its color, is the designer's split star (three points of that color, three of the head's) under
+    the star, each edged; the owner's order: red, yellow, blue, then the inner lines red, yellow, blue (R75;
+    only S67-19). 0.964 -> 0.960.
+  - 71 S63-17 - owner-approved after a fix: an eight-point layer and a four-point layer leaning 20 degrees off
+    the axes, three colors, are the designer's side folds: whole bands of the head's color and the second color,
+    chevron corners on the diagonals with no gaps, a flower of petals, hexagon dots with a rose inside each, the
+    center (R76; only S63-17). Color 1.000.
+  - 72 S58-17 - owner-approved after a fix: two six-point bow layers half a step apart and a star in phase
+    with one, no head disc, are the designer's loops between star points: the star tip up, straight-sided
+    loops on a wider edge of the third color, the ruffle of that color, flat-sided hexagon roses on the points,
+    the center with the rose (R77; only S58-17). Color 1.000.
   - Open (need new reading, not done):
     57 S5-15 (cross loops), 58 S52-19 (layered loops), 63 S57-17 (0.857),
-    65 S59-17 (0.876), 71 S68-19 (head drawn as a plain disc), 75 S8-15 (star around the rose read as
+    65 S59-17 (0.876), 75 S8-15 (star around the rose read as
     loops, 0.640).
-- Owner rework of approved photos: A10-15B (line 2) - pleated rings of three colors round a rose (R72; only
+- Owner rework of approved photos: A10-15B (line 2) - pleated rings of three colors round a rose (R78; only
   A10-15B). All pleated edges are now a smooth wave (geometry SCALLOP_*, as the designer draws them; the 34
   scored photos move by 0.01 at most), and the rose fills its circle with thin lines (geometry rose.py).
-  A12-15 (line 4) - a blob of a second color at the badge is a pleated ring round it (R73; only A12-15).
+  A12-15 (line 4) - a blob of a second color at the badge is a pleated ring round it (R79; only A12-15).
   0.922 -> 1.000.
 - Next (owner, at the office): verify Claude's work from line 56 (S51-19) one photo at a time with the
   normal loop below (show photo | ours | designer, wait for "works next" or a fix request). Then the open
@@ -94,7 +116,7 @@ only give proportions for parts the photo cannot show, for example hidden star v
 4. Owner says "works next" -> commit, then the next photo. "not works fix" or a specific
    remark -> fix, re-render, show again.
 5. Fix as a narrow, numbered rule (R-number in a comment, constants named, designer
-   proportions cited). Latest rule: R73 (`rosette/pipeline.py` `_ring_round_badge`).
+   proportions cited). Latest rule: R79 (`rosette/pipeline.py` `_ring_round_badge`).
 6. Before showing a fix: check which of the 76 photos the rule fires on
    (`.venv/Scripts/python.exe tools/review_fire.py <rule function>` or `--part <part id>`), and compare scores
    before/after (`git stash` baseline) for those photos. Narrow the rule until no other photo

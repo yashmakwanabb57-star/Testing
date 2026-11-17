@@ -695,7 +695,7 @@ def _a10b_parts(hr=154.4):
             Part("ring-1", "ring", dict(geo, r_inner=43.5, r_outer=80.5), 0, 31, 0.9)]
 
 
-def test_r72_pleated_rings_of_three_colors_round_a_rose():
+def test_r78_pleated_rings_of_three_colors_round_a_rose():
     # A10-15B, the owner's check: pink pleats, a glitter ring, a white ring, a pink ring, a white rose
     from rosette.pipeline import _three_color_rings
     parts = _a10b_parts()
@@ -710,7 +710,7 @@ def test_r72_pleated_rings_of_three_colors_round_a_rose():
     assert not any(q.role == "unknown" for q in parts)
 
 
-def test_r72_needs_a_third_color():
+def test_r78_needs_a_third_color():
     from rosette.pipeline import _three_color_rings
     parts = [q for q in _a10b_parts() if q.role != "unknown"]
     assert not _three_color_rings(parts)
@@ -723,7 +723,7 @@ def _a12_parts(hr=166.2):
             Part("center", "center", dict(geo, r=58.5), 0, 50, 0.9)]
 
 
-def test_r73_a_blob_of_a_second_color_at_the_badge_is_a_pleated_ring_round_it():
+def test_r79_a_blob_of_a_second_color_at_the_badge_is_a_pleated_ring_round_it():
     # A12-15, the owner's check: wine pleats, a peach pleated ring, a wine badge
     from rosette.pipeline import _ring_round_badge
     parts = _a12_parts()
@@ -736,7 +736,7 @@ def test_r73_a_blob_of_a_second_color_at_the_badge_is_a_pleated_ring_round_it():
     assert ring.params["r_inner"] == c.params["r"] and "unknown-1" not in ids
 
 
-def test_r73_a_blob_away_from_the_middle_stays():
+def test_r79_a_blob_away_from_the_middle_stays():
     from rosette.pipeline import _ring_round_badge
     parts = _a12_parts()
     parts[1].params.update(cx=400.0, cy=250.0)

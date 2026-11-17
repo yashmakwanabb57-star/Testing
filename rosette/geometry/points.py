@@ -167,6 +167,78 @@ def split_arms(cx: float, cy: float, count: int, r_tip: float, axis_deg: float, 
     return out
 
 
+# A side fold (R76, designer S63-17's banded arms, traced from its outlines about the arms' own center): a fold
+# whose tip leans 20 degrees off the axis, one arm running in to the axis, the other out; the notch is the next
+# band's tip (0.897 of this one's). Each band is drawn whole (filled in under its notch, where the next band lies
+# on it) and runs on in under the corners and the flower, so no step between the arm ends and the corners
+# shows the head through (the owner's check: no gaps). Vertices as
+# (radius / the tip's, degrees off the axis toward the tip's side). The innermost band is whole.
+SIDE_FOLD = ((1.0, 20.0), (0.708, 31.0), (0.58, 33.0), (0.56, 14.0), (0.625, 8.4), (0.648, 5.4))
+SIDE_FOLD_LAST = ((1.0, 20.0), (0.677, 32.9), (0.58, 33.0), (0.56, 14.0), (0.629, 9.2), (0.71, 9.2))
+
+
+def side_folds(cx: float, cy: float, count: int, r_tip: float, axis_deg: float, side: int, last: bool) -> list[Shape]:
+    """One SIDE_FOLD (SIDE_FOLD_LAST) per axis (axis_deg + k * 360 / count), its tip on the `side` of the axis."""
+    shape = SIDE_FOLD_LAST if last else SIDE_FOLD
+    return [Shape("polygon", {"points": points_attr([polar(cx, cy, r * r_tip, axis_deg + 360.0 * k / count + side * d)
+                                                     for r, d in shape])}, None) for k in range(count)]
+
+
+# A straight loop (R77, designer S58-17's loops, traced across the loop at right angles to its axis): the
+# sides run nearly parallel from the ruffle to a round end; its edge strip is a wider copy under it that stops
+# short of the end. (distance along the axis, half-width), both / the star's tip.
+STRAIGHT_LOOP = ((0.44, 0.146), (0.486, 0.144), (0.519, 0.162), (0.551, 0.179), (0.584, 0.181), (0.65, 0.182),
+                 (0.85, 0.185), (0.863, 0.184), (0.875, 0.124), (0.882, 0.058), (0.886, 0.0))
+STRAIGHT_LOOP_EDGE = ((0.44, 0.146), (0.551, 0.179), (0.584, 0.2), (0.616, 0.223), (0.853, 0.227), (0.853, 0.0))
+LOBES = {"straight_loop": STRAIGHT_LOOP, "straight_loop_edge": STRAIGHT_LOOP_EDGE}
+
+
+def lobes(cx: float, cy: float, count: int, r_tip: float, rotation_deg: float, profile: str) -> list[Shape]:
+    """One symmetric lobe per axis (rotation_deg + k * 360 / count) from a LOBES (along, half-width) table."""
+    half = LOBES[profile]
+    side = [(a * r_tip, h * r_tip) for a, h in half]
+    outline = side + [(a, -h) for a, h in reversed(side) if h]
+    out = []
+    for k in range(count):
+        th = rotation_deg + 360.0 * k / count
+        out.append(Shape("polygon", {"points": points_attr([_to_world(cx, cy, th, a, h) for a, h in outline])}, None))
+    return out
+
+
+def dots(cx: float, cy: float, count: int, r_mid: float, r_dot: float, rotation_deg: float,
+         flat: bool = False) -> list[Shape]:
+    """Small hexagons (R76: designer S63-17's small roses, a corner on the axis; R77, flat: S58-17's, a flat side
+    on the axis) centered r_mid out on each axis."""
+    out = []
+    for k in range(count):
+        th = rotation_deg + 360.0 * k / count
+        x, y = polar(cx, cy, r_mid, th)
+        out.append(Shape("polygon", {"points": points_attr([polar(x, y, r_dot, th + 30.0 * flat + 60.0 * j) for j in range(6)])}, None))
+    return out
+
+
+def chevrons(cx: float, cy: float, count: int, r_tip: float, length: float, half: float, r_notch: float,
+             rotation_deg: float) -> list[Shape]:
+    """One folded point per axis (rotation_deg + k * 360 / count), as designer S68-19 draws its folds (R74):
+    a V from the tip, its arms ending `length` down the axis `half` off it and cut square to the arm, its
+    inner edge parallel to the outer one from the notch on the axis at r_notch, where the next fold's tip
+    sits (the folds of a point are one V moved along the axis). r_notch 0: the innermost fold, a triangle."""
+    T, A = (r_tip, 0.0), (r_tip - length, half)
+    if r_notch > 0:
+        n = math.hypot(length, half)
+        ux, uy = -length / n, half / n  # along the arm, tip to end
+        w = (r_tip - r_notch) * uy  # the strip between the outer edge and its parallel through the notch
+        I = (A[0] - uy * w, A[1] + ux * w)  # square across the arm, toward the axis
+        side = [T, A, I, (r_notch, 0.0), (I[0], -I[1]), (A[0], -A[1])]
+    else:
+        side = [T, A, (A[0], -A[1])]
+    out = []
+    for k in range(count):
+        th = rotation_deg + 360.0 * k / count
+        out.append(Shape("polygon", {"points": points_attr([_to_world(cx, cy, th, r, l) for r, l in side])}, None))
+    return out
+
+
 def points_ring(cx: float, cy: float, kind: Literal["star", "diamond", "bow", "petal"],
                 count: int, r_inner: float, r_outer: float,
                 rotation_deg: float, width_ratio: float, inner_ratio: float | None = None,
